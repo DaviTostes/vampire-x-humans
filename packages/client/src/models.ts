@@ -1,0 +1,496 @@
+import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { BUILDING_SIZE, COMPOUNDS, compoundEntrance, type BuildingKind } from '@vampire/shared';
+
+export const PLAYER_COLORS = ['#456a9b', '#934a45', '#537554', '#77608d'];
+const P = {
+  wood: '#49392f', woodLight: '#786047', woodDark: '#2a2928', iron: '#414d5a', edge: '#82909c',
+  stone: '#626b70', stoneDark: '#424b51', mortar: '#353e43', plaster: '#a59c81',
+  slate: ['#2a3c49', '#31434f', '#384a55', '#3d4d56'], gold: '#c6a05a', light: '#ffc26b',
+  cloth: '#182330', red: '#742339', skin: '#c09b7b', pale: '#b5beca', leaf: '#354f43',
+};
+const materials = new Map<string, THREE.Material>();
+function material(color: string, glow = false, doubleSide = false) {
+  const key = `${color}:${glow}:${doubleSide}`;
+  if (!materials.has(key)) materials.set(key, glow
+    ? new THREE.MeshBasicMaterial({ color, toneMapped: false, side: doubleSide ? THREE.DoubleSide : THREE.FrontSide })
+    : new THREE.MeshStandardMaterial({ color, roughness: color === P.iron || color === P.edge ? 0.58 : 0.94,
+      metalness: color === P.iron || color === P.edge ? 0.45 : 0, flatShading: true,
+      side: doubleSide ? THREE.DoubleSide : THREE.FrontSide }));
+  return materials.get(key)!;
+}
+function mesh(g: THREE.Object3D, geometry: THREE.BufferGeometry, color: string, x = 0, y = 0, z = 0, glow = false, doubleSide = false) {
+  const m = new THREE.Mesh(geometry, material(color, glow, doubleSide));
+  m.position.set(x, y, z); m.castShadow = !glow; m.receiveShadow = true; g.add(m); return m;
+}
+function box(g: THREE.Object3D, w: number, h: number, d: number, color: string, x = 0, y = h / 2, z = 0, glow = false) {
+  return mesh(g, new THREE.BoxGeometry(w, h, d), color, x, y, z, glow);
+}
+function ellipsoid(g: THREE.Object3D, rx: number, ry: number, rz: number, color: string, x: number, y: number, z: number) {
+  const m = mesh(g, new THREE.SphereGeometry(1, 10, 7), color, x, y, z); m.scale.set(rx, ry, rz); return m;
+}
+function cylinder(g: THREE.Object3D, top: number, bottom: number, h: number, color: string, x = 0, y = h / 2, z = 0, sides = 8) {
+  return mesh(g, new THREE.CylinderGeometry(top, bottom, h, sides), color, x, y, z);
+}
+function beam(g: THREE.Object3D, a: number[], b: number[], width: number, color: string, depth = width) {
+  const from = new THREE.Vector3(a[0]!, a[1]!, a[2]!), to = new THREE.Vector3(b[0]!, b[1]!, b[2]!);
+  const m = box(g, width, from.distanceTo(to), depth, color, ...from.clone().add(to).multiplyScalar(0.5).toArray() as [number, number, number]);
+  m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), to.sub(from).normalize()); return m;
+}
+function polygon(g: THREE.Object3D, points: number[][], thickness: number, color: string, x = 0, y = 0, z = 0) {
+  const shape = new THREE.Shape(points.map(p => new THREE.Vector2(p[0]!, p[1]!)));
+  const geometry = new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: false, steps: 1 });
+  geometry.translate(0, 0, -thickness / 2);
+  return mesh(g, geometry, color, x, y, z);
+}
+function pivot(g: THREE.Object3D, name: string, x: number, y: number, z = 0) {
+  const p = new THREE.Group(); p.name = name; p.position.set(x, y, z); g.add(p); return p;
+}
+
+/** Junta detalhes estáticos por material. Articulações e ferramentas continuam independentes. */
+function bake(g: THREE.Group) {
+  for (const child of [...g.children]) if (child instanceof THREE.Group) bake(child);
+  const buckets = new Map<THREE.Material, THREE.Mesh[]>();
+  for (const child of g.children) {
+    if (!(child instanceof THREE.Mesh) || child.name || Array.isArray(child.material)) continue;
+    const list = buckets.get(child.material) ?? []; list.push(child); buckets.set(child.material, list);
+  }
+  for (const [mat, meshes] of buckets) {
+    if (meshes.length < 2) continue;
+    const geometries = meshes.map(m => {
+      m.updateMatrix();
+      const geometry = m.geometry.index ? m.geometry.toNonIndexed() : m.geometry.clone();
+      geometry.deleteAttribute('uv'); geometry.applyMatrix4(m.matrix); return geometry;
+    });
+    const merged = mergeGeometries(geometries);
+    for (const geometry of geometries) geometry.dispose();
+    if (!merged) continue;
+    const combined = new THREE.Mesh(merged, mat);
+    combined.castShadow = meshes.some(m => m.castShadow); combined.receiveShadow = true;
+    for (const m of meshes) { g.remove(m); m.geometry.dispose(); }
+    g.add(combined);
+  }
+}
+
+function banner(g: THREE.Object3D, color: string, width: number, height: number, x: number, y: number, z: number) {
+  polygon(g, [[-width / 2, 0], [width / 2, 0], [width / 2, -height * 0.85], [0, -height], [-width / 2, -height * 0.85]], 0.035, color, x, y, z);
+  beam(g, [x - width * 0.65, y + 0.06, z], [x + width * 0.65, y + 0.06, z], 0.07, P.iron);
+  polygon(g, [[0, 0.3], [0.18, 0], [0, -0.3], [-0.18, 0]], 0.025, '#c3c7c4', x, y - height * 0.42, z + 0.04);
+}
+export function createLanternModel(red = false): THREE.Group {
+  const g = new THREE.Group();
+  box(g, 0.3, 0.43, 0.3, red ? '#d23b42' : P.light, 0, 0.33, 0, true);
+  for (const x of [-0.18, 0.18]) for (const z of [-0.18, 0.18]) beam(g, [x, 0.06, z], [x, 0.6, z], 0.045, P.iron);
+  box(g, 0.44, 0.09, 0.44, P.iron, 0, 0.07);
+  const cap = mesh(g, new THREE.ConeGeometry(0.34, 0.25, 4), P.iron, 0, 0.66); cap.rotation.y = Math.PI / 4;
+  mesh(g, new THREE.TorusGeometry(0.095, 0.025, 5, 10), P.iron, 0, 0.86);
+  bake(g); return g;
+}
+function lantern(g: THREE.Object3D, x: number, y: number, z: number, red = false) {
+  const lamp = createLanternModel(red); lamp.position.set(x, y, z); g.add(lamp);
+  beam(g, [x, y + 0.92, z], [x, y + 0.92, z - 0.4], 0.055, P.iron);
+}
+function barrel(g: THREE.Object3D, x: number, y: number, z: number, r = 0.35) {
+  const profile = [new THREE.Vector2(r * 0.82, 0), new THREE.Vector2(r, r * 0.5), new THREE.Vector2(r, r * 1.2), new THREE.Vector2(r * 0.82, r * 1.8)];
+  mesh(g, new THREE.LatheGeometry(profile, 10), P.woodLight, x, y, z);
+  for (const h of [0.13, 0.5]) cylinder(g, r + 0.018, r + 0.018, 0.055, P.iron, x, y + h * r / 0.35, z, 10);
+  cylinder(g, r * 0.82, r * 0.82, 0.04, P.wood, x, y + r * 1.8, z, 10);
+}
+function crate(g: THREE.Object3D, x: number, y: number, z: number, size = 0.65) {
+  box(g, size, size, size, P.woodLight, x, y + size / 2, z);
+  for (const side of [-1, 1]) {
+    const face = z + side * (size / 2 + 0.015);
+    beam(g, [x - size / 2, y + 0.05, face], [x + size / 2, y + size - 0.05, face], 0.08, P.wood);
+    for (const h of [0.06, size - 0.06]) box(g, size, 0.09, 0.06, P.wood, x, y + h, face);
+  }
+}
+
+function makeCape(g: THREE.Object3D) {
+  const cloak = pivot(g, 'cloak', 0, 2.55, -0.12);
+  for (let strip = 0; strip < 8; strip++) {
+    const vertices: number[] = [];
+    const rows = 5;
+    for (let row = 0; row < rows; row++) {
+      const t = row / (rows - 1);
+      for (let side = 0; side < 2; side++) {
+        const u = (strip + side) / 8 * 2 - 1;
+        const hem = row === rows - 1 ? ((strip + side) % 3) * 0.13 : 0;
+        vertices.push(u * (0.55 + t * 0.56), -t * 2.38 + hem, -0.18 - t * 0.75 - Math.cos(u * Math.PI * 5) * t * 0.09);
+      }
+    }
+    const indices: number[] = [];
+    for (let row = 0; row < rows - 1; row++) { const a = row * 2; indices.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
+    const geometry = new THREE.BufferGeometry(); geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3)); geometry.setIndex(indices); geometry.computeVertexNormals();
+    mesh(cloak, geometry, strip % 3 === 0 ? '#263343' : P.cloth, 0, 0, 0, false, true);
+    const lining = geometry.clone(); lining.translate(0, 0, 0.025);
+    mesh(cloak, lining, strip % 2 ? '#4b1f30' : P.red, 0, 0, 0, false, true);
+  }
+}
+
+function toolModel(arm: THREE.Group) {
+  const tool = pivot(arm, 'tool', 0, -0.79, 0.1); tool.rotation.z = -2.25;
+  cylinder(tool, 0.045, 0.055, 0.9, P.woodLight, 0, 0.2);
+  for (const y of [-0.08, -0.02, 0.04]) cylinder(tool, 0.062, 0.062, 0.04, P.woodDark, 0, y);
+  const axe = pivot(tool, 'axe', 0, 0.58);
+  polygon(axe, [[-0.08, 0.12], [0.14, 0.19], [0.4, 0.28], [0.42, -0.13], [0.16, -0.05], [-0.08, -0.06]], 0.09, P.iron);
+  polygon(axe, [[0.33, 0.25], [0.4, 0.28], [0.42, -0.13], [0.34, -0.1]], 0.095, P.edge);
+  const pick = pivot(tool, 'pickaxe', 0, 0.55); pick.visible = false;
+  const curve = new THREE.CatmullRomCurve3([new THREE.Vector3(-0.53, -0.18, 0), new THREE.Vector3(-0.28, 0.01, 0), new THREE.Vector3(0, 0.05, 0), new THREE.Vector3(0.28, 0.01, 0), new THREE.Vector3(0.53, -0.18, 0)]);
+  mesh(pick, new THREE.TubeGeometry(curve, 10, 0.055, 5, false), P.edge);
+  box(pick, 0.14, 0.18, 0.14, P.iron, 0, 0.04);
+  for (const side of [-1, 1]) {
+    const tip = mesh(pick, new THREE.ConeGeometry(0.054, 0.2, 5), '#b5bec6', side * 0.57, -0.23);
+    tip.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(side, -1, 0).normalize());
+  }
+  const hammer = pivot(tool, 'hammer', 0, 0.57); hammer.visible = false;
+  box(hammer, 0.4, 0.24, 0.24, P.iron, 0, 0); for (const x of [-0.2, 0.2]) box(hammer, 0.06, 0.26, 0.26, P.edge, x, 0);
+}
+
+export function createUnitModel(kind: string, owner: number, hero = true): THREE.Group {
+  const g = new THREE.Group(); const vampire = kind === 'vampire';
+  const team = PLAYER_COLORS[owner % PLAYER_COLORS.length] ?? PLAYER_COLORS[0]!;
+  const cloth = vampire ? P.cloth : hero ? team : '#6c7154';
+  const skin = vampire ? P.pale : P.skin;
+  const hip = vampire ? 1.24 : 1.02, shoulder = vampire ? 2.37 : 1.88, armLength = vampire ? 0.91 : 0.77;
+  for (const [name, side] of [['leftLeg', -1], ['rightLeg', 1]] as const) {
+    const leg = pivot(g, name, side * 0.21, hip);
+    ellipsoid(leg, 0.18, hip * 0.28, 0.2, '#323b40', 0, -hip * 0.25, 0);
+    cylinder(leg, 0.14, 0.12, hip * 0.47, P.woodDark, 0, -hip * 0.64);
+    box(leg, 0.28, 0.12, 0.45, '#252b31', 0, -hip + 0.13, 0.12);
+    box(leg, 0.3, 0.07, 0.49, '#141a20', 0, -hip + 0.045, 0.12);
+    box(leg, 0.27, 0.08, 0.27, P.woodLight, 0, -hip * 0.54);
+  }
+  const body = new THREE.LatheGeometry([new THREE.Vector2(0.34, 0), new THREE.Vector2(0.3, 0.19), new THREE.Vector2(0.36, 0.55), new THREE.Vector2(0.43, shoulder - hip - 0.04), new THREE.Vector2(0.21, shoulder - hip + 0.06)], 10);
+  mesh(g, body, cloth, 0, hip - 0.05).scale.z = 0.75;
+  box(g, 0.68, 0.11, 0.54, '#3f3027', 0, hip + 0.09);
+  box(g, 0.15, 0.14, 0.055, P.gold, 0, hip + 0.09, 0.29);
+  for (const side of [-1, 1]) {
+    const arm = pivot(g, side < 0 ? 'leftArm' : 'rightArm', side * 0.43, shoulder - 0.06);
+    ellipsoid(arm, 0.16, 0.23, 0.18, cloth, side * 0.035, -0.13, 0);
+    cylinder(arm, 0.115, 0.095, armLength * 0.47, vampire ? P.iron : cloth, 0, -armLength * 0.57);
+    ellipsoid(arm, 0.115, 0.12, 0.11, vampire ? P.iron : P.woodLight, 0, -armLength * 0.39, 0.015);
+    cylinder(arm, 0.12, 0.12, 0.09, vampire ? P.red : P.woodDark, 0, -armLength * 0.78);
+    ellipsoid(arm, 0.1, 0.13, 0.1, skin, 0, -armLength, 0.02);
+    if (vampire) {
+      for (let finger = 0; finger < 3; finger++) {
+        const x = (finger - 1) * 0.08;
+        const curve = new THREE.CatmullRomCurve3([new THREE.Vector3(x, -armLength, 0.07), new THREE.Vector3(x, -armLength - 0.22, 0.12), new THREE.Vector3(x, -armLength - 0.38, 0.27)]);
+        mesh(arm, new THREE.TubeGeometry(curve, 5, 0.022, 4, false), finger === 1 ? '#a95865' : '#b4bac6');
+      }
+    } else if (side > 0) toolModel(arm);
+  }
+  const headY = vampire ? 2.87 : 2.31;
+  cylinder(g, 0.115, 0.13, 0.22, skin, 0, shoulder + 0.1);
+  ellipsoid(g, 0.25, vampire ? 0.34 : 0.29, 0.23, skin, 0, headY, 0);
+  polygon(g, [[-0.18, 0.07], [0.18, 0.07], [0.12, -0.16], [0, -0.22], [-0.12, -0.16]], 0.16, skin, 0, headY - 0.07, 0.1);
+  mesh(g, new THREE.ConeGeometry(0.075, 0.19, 4), skin, 0, headY - 0.03, 0.25).rotation.x = Math.PI / 2;
+  for (const side of [-1, 1]) {
+    ellipsoid(g, 0.045, 0.09, 0.06, skin, side * 0.25, headY, 0);
+    box(g, 0.095, 0.028, 0.025, vampire ? '#ec3346' : '#222e32', side * 0.1, headY + 0.055, 0.219, vampire);
+    box(g, 0.12, 0.04, 0.04, vampire ? '#333a47' : '#5b4636', side * 0.1, headY + 0.11, 0.2).rotation.z = -side * 0.18;
+  }
+  if (vampire) {
+    makeCape(g);
+    for (const side of [-1, 1]) {
+      polygon(g, [[0, -0.2], [side * 0.45, 0.12], [side * 0.51, 0.56], [side * 0.1, 0.31]], 0.09, P.red, side * 0.06, 2.4, -0.03);
+      for (let tier = 0; tier < 3; tier++) {
+        polygon(g, [[-0.22, 0.12], [0.14, 0.22], [0.4, 0.02], [0.27, -0.11], [-0.18, -0.02]], 0.15, tier % 2 ? '#4a586a' : P.iron,
+          side * (0.4 + tier * 0.055), 2.42 - tier * 0.12, 0).rotation.y = side < 0 ? Math.PI : 0;
+      }
+      polygon(g, [[0, 0], [side * 0.28, 0.04], [side * 0.11, -0.62]], 0.04, '#672437', side * 0.04, 2.31, 0.3);
+    }
+    ellipsoid(g, 0.255, 0.18, 0.24, '#111c27', 0, headY + 0.19, -0.07);
+    for (let i = 0; i < 7; i++) {
+      const x = (i - 3) * 0.063;
+      const spike = mesh(g, new THREE.ConeGeometry(0.085, 0.42, 4), '#17222d', x, headY + 0.32 + (3 - Math.abs(i - 3)) * 0.025, -0.18);
+      spike.rotation.x = -0.7;
+    }
+    for (const x of [-0.06, 0.06]) mesh(g, new THREE.ConeGeometry(0.025, 0.085, 3), '#e5e4df', x, headY - 0.16, 0.23).rotation.z = Math.PI;
+  } else if (hero) {
+    ellipsoid(g, 0.285, 0.23, 0.27, P.iron, 0, headY + 0.16, -0.025);
+    cylinder(g, 0.33, 0.35, 0.065, P.edge, 0, headY + 0.08, -0.015, 12);
+    beam(g, [0, headY + 0.4, -0.19], [0, headY + 0.4, 0.18], 0.07, '#a6adb0');
+    for (const side of [-1, 1]) {
+      ellipsoid(g, 0.24, 0.1, 0.27, P.iron, side * 0.42, shoulder, 0);
+      box(g, 0.065, 0.24, 0.16, P.iron, side * 0.24, headY - 0.025, -0.02);
+    }
+    banner(g, team, 0.46, 0.54, 0, hip + 0.13, 0.32);
+    beam(g, [-0.26, shoulder - 0.08, 0.31], [0.23, hip + 0.11, 0.31], 0.075, P.woodLight, 0.04);
+    const leftArm = g.getObjectByName('leftArm')!;
+    const shield = mesh(leftArm, new THREE.CylinderGeometry(0.25, 0.25, 0.065, 10), P.iron, -0.11, -0.35, 0.16); shield.rotation.x = Math.PI / 2;
+    ellipsoid(leftArm, 0.085, 0.085, 0.05, P.edge, -0.11, -0.35, 0.205);
+  } else {
+    cylinder(g, 0.24, 0.32, 0.23, '#9b8357', 0, headY + 0.27, 0, 12);
+    cylinder(g, 0.46, 0.49, 0.055, '#b29a64', 0, headY + 0.14, 0, 12);
+    cylinder(g, 0.31, 0.32, 0.055, '#534332', 0, headY + 0.19, 0, 12);
+    polygon(g, [[-0.27, 0], [0.27, 0], [0.3, -0.63], [-0.25, -0.58]], 0.065, '#72513b', 0, hip + 0.13, 0.32);
+    for (const x of [-0.2, 0.2]) beam(g, [x, shoulder - 0.12, 0.3], [x, hip + 0.1, 0.32], 0.055, '#a88c62');
+    ellipsoid(g, 0.21, 0.13, 0.14, '#5b4533', 0, headY - 0.19, 0.11);
+  }
+  if (!vampire) {
+    box(g, 0.43, 0.52, 0.23, '#5a4434', 0, shoulder - 0.37, -0.35);
+    cylinder(g, 0.13, 0.13, 0.5, '#85826c', 0, shoulder - 0.05, -0.39).rotation.z = Math.PI / 2;
+    for (const x of [-0.14, 0.14]) box(g, 0.045, 0.53, 0.25, '#342e29', x, shoulder - 0.37, -0.36);
+    ellipsoid(g, 0.13, 0.17, 0.11, '#7d6244', 0.36, hip - 0.05, 0);
+  }
+  g.userData.healthBarHeight = vampire ? 3.7 : 3.15;
+  bake(g); return g;
+}
+
+function roof(g: THREE.Object3D, width: number, depth: number, rise: number, y: number, x = 0, z = 0) {
+  const base = polygon(g, [[-width / 2, 0], [width / 2, 0], [0, rise]], depth, P.slate[0]!, x, y, z);
+  base.receiveShadow = true;
+  for (const face of [-1, 1]) {
+    const front = z + face * (depth / 2 + 0.015);
+    polygon(g, [[-width / 2 + 0.13, 0.03], [width / 2 - 0.13, 0.03], [0, rise - 0.13]], 0.035, '#6a6656', x, y, front);
+    beam(g, [x, y + 0.05, front + face * 0.03], [x, y + rise - 0.14, front + face * 0.03], 0.12, P.wood);
+  }
+  const slope = Math.hypot(width / 2, rise), angle = Math.atan2(rise, width / 2);
+  const rows = Math.max(3, Math.ceil(slope / 0.55)), columns = Math.max(3, Math.ceil(depth / 0.62));
+  for (const side of [-1, 1]) for (let row = 0; row < rows; row++) for (let col = 0; col < columns; col++) {
+    const t = (row + 0.5) / rows;
+    const tile = box(g, slope / rows + 0.065, 0.065, depth / columns - 0.025,
+      P.slate[(row * 13 + col * 17 + col * row + (side + 1)) % P.slate.length]!,
+      x + side * width / 2 * (1 - t), y + rise * t + 0.055,
+      z - depth / 2 + depth / columns * (col + 0.5));
+    tile.rotation.z = -side * angle;
+  }
+  for (const front of [-1, 1]) for (const side of [-1, 1]) beam(g,
+    [x + side * width / 2, y - 0.03, z + front * (depth / 2 + 0.04)], [x, y + rise + 0.09, z + front * (depth / 2 + 0.04)], 0.15, P.woodLight);
+  box(g, 0.2, 0.15, depth + 0.2, P.iron, x, y + rise + 0.08, z);
+}
+function masonry(g: THREE.Object3D, w: number, h: number, d: number, x = 0, y = 0, z = 0) {
+  box(g, w, h, d, P.mortar, x, y + h / 2, z);
+  const rows = Math.ceil(h / 0.45), cols = Math.ceil(w / 0.85);
+  for (let row = 0; row < rows; row++) for (let col = 0; col < cols; col++) {
+    const bw = w / cols;
+    const cx = x - w / 2 + (col + 0.5) * bw;
+    for (const face of [-1, 1]) box(g, bw - 0.025, h / rows - 0.03, 0.06,
+      (row + col) % 3 ? P.stone : '#757d7d', cx, y + (row + 0.5) * h / rows, z + face * d / 2);
+  }
+  const sideCols = Math.ceil(d / 0.85);
+  for (let row = 0; row < rows; row++) for (let col = 0; col < sideCols; col++) {
+    for (const face of [-1, 1]) box(g, 0.06, h / rows - 0.03, d / sideCols - 0.025,
+      (row + col) % 3 ? P.stone : '#757d7d', x + face * w / 2, y + (row + 0.5) * h / rows, z - d / 2 + (col + 0.5) * d / sideCols);
+  }
+}
+function archedWindow(g: THREE.Object3D, x: number, y: number, z: number, w = 0.75, h = 1.15, red = false) {
+  const profile = [[-w / 2, 0], [w / 2, 0], [w / 2, h * 0.7], [0, h], [-w / 2, h * 0.7]];
+  polygon(g, profile, 0.09, P.woodDark, x, y, z);
+  const window = polygon(g, profile.map(p => [p[0]! * 0.75, p[1]! * 0.82]), 0.04, red ? '#b62d3d' : P.light, x, y + 0.08, z + 0.06);
+  window.material = material(red ? '#b62d3d' : P.light, true);
+  box(g, 0.055, h * 0.8, 0.04, P.woodDark, x, y + h * 0.45, z + 0.1);
+  box(g, w * 0.82, 0.055, 0.04, P.woodDark, x, y + h * 0.46, z + 0.1);
+  box(g, w + 0.18, 0.1, 0.18, P.woodLight, x, y - 0.03, z + 0.03);
+}
+function door(g: THREE.Object3D, x: number, y: number, z: number, w: number, h: number, iron = false) {
+  polygon(g, [[-w / 2, 0], [w / 2, 0], [w / 2, h * 0.8], [0, h], [-w / 2, h * 0.8]], 0.16, P.woodDark, x, y, z);
+  for (let i = 0; i < 5; i++) box(g, w / 5 - 0.025, h * 0.8, 0.06, iron ? P.iron : P.woodLight, x + (i - 2) * w / 5, y + h * 0.4, z + 0.1);
+  for (const height of [h * 0.18, h * 0.62]) box(g, w * 0.95, 0.1, 0.07, iron ? '#788189' : P.iron, x, y + height, z + 0.14);
+  mesh(g, new THREE.TorusGeometry(w * 0.075, 0.025, 5, 10), P.gold, x + w * 0.22, y + h * 0.42, z + 0.19);
+}
+function timberHall(g: THREE.Object3D, w: number, h: number, d: number, x = 0, z = 0) {
+  masonry(g, w, 0.65, d, x, 0, z);
+  box(g, w - 0.1, h - 0.65, d - 0.1, P.plaster, x, (h + 0.65) / 2, z);
+  for (const side of [-1, 1]) {
+    for (const px of [-w / 2 + 0.07, 0, w / 2 - 0.07]) beam(g, [x + px, 0.6, z + side * d / 2], [x + px, h, z + side * d / 2], 0.18, P.wood);
+    for (const height of [0.75, h * 0.57, h]) box(g, w, 0.16, 0.15, P.wood, x, height, z + side * d / 2);
+    for (const sx of [-1, 1]) beam(g, [x + sx * w * 0.43, h * 0.6, z + side * (d / 2 + 0.02)], [x + sx * w * 0.1, h - 0.1, z + side * (d / 2 + 0.02)], 0.12, P.wood);
+  }
+  for (const sx of [-1, 1]) for (const zz of [-d / 2, 0, d / 2]) box(g, 0.15, h - 0.6, 0.16, P.wood, x + sx * w / 2, (h + 0.6) / 2, z + zz);
+  for (const sx of [-1, 1]) {
+    for (const height of [0.75, h * 0.57, h]) box(g, 0.18, 0.16, d, P.wood, x + sx * w / 2, height, z);
+    for (const side of [-1, 1]) beam(g, [x + sx * w / 2, h * 0.6, z + side * d * 0.43], [x + sx * w / 2, h - 0.1, z + side * d * 0.1], 0.12, P.wood);
+  }
+}
+
+export function createBuildingModel(kind: BuildingKind, owner: number, done: boolean, level = 1): THREE.Group {
+  const g = new THREE.Group(), size = BUILDING_SIZE[kind];
+  const baseSize = kind === 'crypt' ? 8 : kind === 'wall' ? 2 : kind === 'tower' ? 3 : kind === 'keep' ? 7 : 6;
+  const team = PLAYER_COLORS[owner % PLAYER_COLORS.length] ?? PLAYER_COLORS[0]!;
+  if (kind === 'wall') {
+    // Porteira de paliçada: mantém a abertura baixa por onde passam os Humanos.
+    for (const x of [-0.84, 0.84]) for (const z of [-0.64, 0.64]) {
+      cylinder(g, 0.16, 0.2, 3.2, P.woodLight, x, 1.6, z, 7);
+      mesh(g, new THREE.ConeGeometry(0.165, 0.55, 7), '#99816a', x, 3.46, z);
+      for (const y of [0.55, 2.55]) cylinder(g, 0.21, 0.21, 0.11, P.iron, x, y, z, 7);
+      if (level > 1) masonry(g, 0.34, 0.65, 0.34, x, 0, z);
+    }
+    for (const z of [-0.66, 0.66]) {
+      box(g, 2, 0.3, 0.26, P.wood, 0, 2.95, z);
+      if (level > 1) box(g, 2, 0.1, 0.29, P.iron, 0, 3.1, z);
+      for (let x = -0.6; x <= 0.61; x += 0.3) mesh(g, new THREE.ConeGeometry(0.11, 0.45, 4), level > 2 ? P.edge : P.woodLight, x, 3.33, z);
+    }
+    if (level > 2) polygon(g, [[-0.35, 0], [0.35, 0], [0, -0.45]], 0.07, P.iron, 0, 3.1, 0.83);
+    box(g, 0.18, 0.2, 0.06, P.gold, 0, 2.97, 0.83);
+  } else if (kind === 'tower') {
+    masonry(g, 2.8, 1.2, 2.8);
+    for (const x of [-1.13, 1.13]) for (const z of [-1.13, 1.13]) beam(g, [x, 0.7, z], [x, 8, z], 0.27, P.wood);
+    box(g, 2.3, 4.9, 2.3, '#414542', 0, 3.7);
+    for (const z of [-1.19, 1.19]) {
+      for (let x = -1; x <= 1.01; x += 0.25) box(g, 0.22, 4.9, 0.08, (Math.round(x * 4) % 2) ? P.wood : '#655643', x, 3.7, z);
+      for (const y of [1.3, 3.4, 5.8]) box(g, 2.7, 0.2, 0.18, P.woodDark, 0, y, z);
+      beam(g, [-1.1, 1.5, z + 0.04], [1.1, 3.3, z + 0.04], 0.13, P.woodLight);
+    }
+    box(g, 3, 0.28, 3, P.woodLight, 0, 6.05);
+    for (const x of [-1.3, 1.3]) for (const z of [-1.3, 1.3]) box(g, 0.18, 1.1, 0.18, P.woodLight, x, 6.65, z);
+    for (const z of [-1.34, 1.34]) box(g, 2.8, 0.16, 0.13, P.wood, 0, 7.13, z);
+    roof(g, 3.3, 3.3, 1.5, 8.05);
+    banner(g, team, 0.9, 2.7, 0, 5.7, 1.28);
+    lantern(g, -0.94, 4.5, 1.4);
+    const turret = pivot(g, 'turret', 0, 6.7);
+    cylinder(turret, 0.15, 0.25, 0.4, P.iron, 0, 0.2);
+    box(turret, 0.14, 0.13, 1.6, P.woodLight, 0, 0.5, 0.25);
+    beam(turret, [-0.68, 0.5, 0.4], [0, 0.5, 0.57], 0.09, P.iron);
+    beam(turret, [0.68, 0.5, 0.4], [0, 0.5, 0.57], 0.09, P.iron);
+    beam(turret, [-0.68, 0.5, 0.4], [0.68, 0.5, 0.4], 0.018, '#c7b99b');
+  } else if (kind === 'taverna') {
+    timberHall(g, 4.1, 3.55, 4.4, -0.8, -0.45);
+    roof(g, 4.55, 4.95, 2.4, 3.62, -0.8, -0.45);
+    timberHall(g, 1.65, 2.65, 3.9, 2.05, -0.35);
+    roof(g, 1.95, 4.2, 0.75, 2.68, 2.05, -0.35);
+    door(g, -0.7, 0.45, 1.82, 1.15, 2.05);
+    for (const x of [-2.02, 0.55]) archedWindow(g, x, 1.42, 1.81, 0.82, 1.25);
+    archedWindow(g, -0.8, 3.8, 2.05, 0.8, 1.25);
+    roof(g, 2.3, 1.05, 0.5, 2.5, -0.7, 2.35);
+    for (const x of [-1.72, 0.32]) beam(g, [x, 0.15, 2.72], [x, 2.6, 2.72], 0.13, P.wood);
+    masonry(g, 0.68, 2.6, 0.7, -1.9, 3.95, -1.0);
+    box(g, 0.83, 0.14, 0.86, P.iron, -1.9, 6.6, -1);
+    lantern(g, -1.65, 1.85, 2.1); lantern(g, 2.35, 1.3, 1.75);
+    const sideWindows = new THREE.Group(); sideWindows.position.set(2.9, 0, -0.35); sideWindows.rotation.y = Math.PI / 2; g.add(sideWindows);
+    for (const x of [-0.95, 0.95]) archedWindow(sideWindows, x, 1.2, 0.05, 0.72, 1.05);
+    barrel(g, 1.2, 0.05, 2.2); barrel(g, 2.2, 0.05, 2.1, 0.31);
+    crate(g, -2.5, 0, 2.12, 0.62);
+    const sign = pivot(g, 'tavernSign', 0.75, 3.55, 2.58);
+    for (const x of [-0.35, 0.35]) beam(sign, [x, 0, 0], [x, -0.26, 0], 0.025, P.iron);
+    box(sign, 1, 0.62, 0.13, P.woodLight, 0, -0.56);
+    box(sign, 0.29, 0.3, 0.05, P.gold, -0.05, -0.55, 0.085);
+    mesh(sign, new THREE.TorusGeometry(0.09, 0.025, 5, 10), P.gold, 0.15, -0.54, 0.1);
+    banner(g, team, 0.55, 0.95, 1.87, 2.5, 1.68);
+  } else if (kind === 'bank' || kind === 'keep') {
+    const w = kind === 'bank' ? 5.65 : 6.65;
+    masonry(g, w, 3.35, w);
+    timberHall(g, w - 0.2, 1.35, w - 0.2, 0, 0);
+    // Piso superior estreito e telhado íngreme da guilda/tesouraria.
+    box(g, w - 0.25, 1.7, w - 0.25, P.plaster, 0, 4.05);
+    for (const x of [-w / 2 + 0.1, 0, w / 2 - 0.1]) for (const z of [-w / 2, w / 2]) box(g, 0.2, 1.8, 0.16, P.wood, x, 4.08, z);
+    for (const side of [-1, 1]) {
+      for (const z of [-w / 2 + 0.1, 0, w / 2 - 0.1]) box(g, 0.16, 1.8, 0.2, P.wood, side * w / 2, 4.08, z);
+      const windows = new THREE.Group(); windows.position.x = side * (w / 2 + 0.03); windows.rotation.y = side * Math.PI / 2; g.add(windows);
+      for (const x of [-w / 4, w / 4]) archedWindow(windows, x, 3.53, 0, 0.7, 1.12);
+    }
+    box(g, w, 0.2, w, P.wood, 0, 4.95);
+    roof(g, w + 0.5, w + 0.5, 2.35, 5.04);
+    door(g, 0, 0.22, w / 2 + 0.06, 1.7, 2.65, true);
+    for (const x of [-1.04, 1.04]) { cylinder(g, 0.2, 0.26, 2.65, '#89908d', x, 1.55, w / 2 + 0.06); box(g, 0.57, 0.19, 0.42, P.stone, x, 2.98, w / 2); }
+    const wheel = mesh(g, new THREE.TorusGeometry(0.31, 0.045, 6, 12), P.gold, 0, 1.55, w / 2 + 0.23);
+    for (const angle of [0, Math.PI / 3, -Math.PI / 3]) box(g, 0.55, 0.04, 0.045, P.gold, 0, 1.55, wheel.position.z).rotation.z = angle;
+    for (const x of [-w * 0.32, w * 0.32]) archedWindow(g, x, 3.55, w / 2 + 0.03, 0.85, 1.2);
+    archedWindow(g, 0, 5.18, w / 2 + 0.27, 1, 1.3);
+    lantern(g, -1.65, 1.7, w / 2 + 0.17); lantern(g, 1.65, 1.7, w / 2 + 0.17);
+    banner(g, team, 0.64, 1.45, -w / 2 + 0.46, 2.85, w / 2 + 0.15);
+    const seal = cylinder(g, 0.37, 0.37, 0.09, P.gold, 0, 3.24, w / 2 + 0.18, 12); seal.rotation.x = Math.PI / 2;
+  } else if (kind === 'crypt') {
+    masonry(g, 7.7, 0.65, 7.6);
+    masonry(g, 6.55, 4.55, 6.6, 0, 0.6, -0.15);
+    roof(g, 7.2, 7.3, 3.5, 5.2, 0, -0.15);
+    door(g, 0, 0.55, 3.2, 2.15, 3.8, true);
+    for (const x of [-1.42, 1.42]) {
+      cylinder(g, 0.18, 0.26, 3.65, '#818b93', x, 2.55, 3.26);
+      beam(g, [x, 4.32, 3.26], [0, 5.3, 3.26], 0.24, P.stone);
+    }
+    for (const x of [-3.24, 3.24]) {
+      masonry(g, 1.22, 7.8, 1.3, x, 0.5, 2.6);
+      const spire = mesh(g, new THREE.ConeGeometry(1, 3.3, 4), P.slate[0]!, x, 9.8, 2.6); spire.rotation.y = Math.PI / 4;
+      archedWindow(g, x, 5.8, 3.3, 0.43, 1.3, true);
+      mesh(g, new THREE.ConeGeometry(0.12, 0.8, 5), P.iron, x, 11.85, 2.6);
+    }
+    const rose = cylinder(g, 0.72, 0.72, 0.09, '#a32940', 0, 6.05, 3.55, 12); rose.rotation.x = Math.PI / 2; rose.material = material('#a32940', true);
+    mesh(g, new THREE.TorusGeometry(0.75, 0.09, 6, 16), P.iron, 0, 6.05, 3.64);
+    for (let i = 0; i < 6; i++) box(g, 1.4, 0.045, 0.07, P.iron, 0, 6.05, 3.68).rotation.z = i * Math.PI / 6;
+    lantern(g, -1.95, 1.75, 3.5, true); lantern(g, 1.95, 1.75, 3.5, true);
+    for (const side of [-1, 1]) {
+      const windows = new THREE.Group(); windows.position.set(side * 3.32, 0, -0.6); windows.rotation.y = side * Math.PI / 2; g.add(windows);
+      for (const x of [-1.4, 1.4]) archedWindow(windows, x, 2.3, 0, 0.68, 1.85, true);
+    }
+    for (const x of [-2.9, 2.9]) for (const z of [-2.9, -0.6]) {
+      beam(g, [x, 0.6, z], [x * 0.9, 4.8, z], 0.45, P.stoneDark);
+      mesh(g, new THREE.ConeGeometry(0.35, 1.6, 4), P.iron, x, 5.2, z);
+    }
+  }
+  if (!done) g.traverse(o => { if (o instanceof THREE.Mesh) { o.material = material('#96836b'); o.castShadow = false; } });
+  g.scale.set(size / baseSize, 1, size / baseSize);
+  g.updateMatrixWorld(true);
+  g.userData.healthBarHeight = new THREE.Box3().setFromObject(g).max.y + 0.5;
+  bake(g); return g;
+}
+
+export function orientEntranceWall(g: THREE.Group, x: number, z: number) {
+  const compound = COMPOUNDS.find(c => { const p = compoundEntrance(c); return Math.hypot(x - p.x, z - p.z) < 3; });
+  if (compound?.facing === 'east' || compound?.facing === 'west') g.rotation.y = Math.PI / 2;
+}
+
+/** Copa irregular compartilhada por árvores de coleta e floresta instanciada. */
+export function createPineCanopyGeometry(): THREE.BufferGeometry {
+  const positions: number[] = [], colors: number[] = [];
+  for (let tier = 0; tier < 4; tier++) {
+    const radius = 2.3 - tier * 0.48, y = tier * 1.05;
+    for (let side = 0; side < 10; side++) {
+      const a = side * Math.PI / 5, b = (side + 1) * Math.PI / 5;
+      const r1 = radius * (0.86 + (side % 3) * 0.07), r2 = radius * (0.86 + ((side + 1) % 3) * 0.07);
+      positions.push(Math.sin(a) * r1, y + (side % 2) * 0.15, Math.cos(a) * r1,
+        0.1 * Math.sin(tier), y + 3.1 - tier * 0.12, -0.08 * tier,
+        Math.sin(b) * r2, y + ((side + 1) % 2) * 0.15, Math.cos(b) * r2);
+      const c = new THREE.Color(['#2b403a', '#354f43', '#415b48', '#4b614c'][(side + tier) % 4]!);
+      for (let i = 0; i < 3; i++) colors.push(c.r, c.g, c.b);
+    }
+  }
+  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  g.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3)); g.computeVertexNormals(); return g;
+}
+export function createRockGeometry(seed = 0): THREE.BufferGeometry {
+  const g = new THREE.IcosahedronGeometry(1, 1), p = g.getAttribute('position');
+  for (let i = 0; i < p.count; i++) {
+    const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+    const scale = 0.87 + Math.sin(x * 8 + y * 5 + z * 7 + seed) * 0.1;
+    p.setXYZ(i, x * scale, y * scale, z * scale);
+  }
+  g.computeVertexNormals(); return g;
+}
+export function createResourceModel(kind: string): THREE.Group {
+  const g = new THREE.Group();
+  if (kind === 'wood') {
+    cylinder(g, 0.19, 0.59, 5.6, P.wood, 0, 2.8, 0, 7);
+    for (let i = 0; i < 5; i++) {
+      const a = i * Math.PI * 0.4;
+      beam(g, [Math.sin(a) * 0.78, 0.08, Math.cos(a) * 0.78], [0, 0.72, 0], 0.19, P.wood);
+      beam(g, [0, 2.6 + i * 0.3, 0], [Math.sin(a) * 1.2, 3.1 + i * 0.3, Math.cos(a) * 1.2], 0.11, P.woodLight);
+    }
+    const canopy = new THREE.Mesh(createPineCanopyGeometry(), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, flatShading: true, side: THREE.DoubleSide }));
+    canopy.position.y = 2.55; canopy.castShadow = true; g.add(canopy);
+  } else {
+    const rocks = [[0, 1.0, -0.3, 1.8, 1.7, 1.5], [-1.15, 0.7, 0.25, 0.85, 1.15, 0.85], [1.13, 0.75, 0.1, 0.9, 1.2, 0.9]];
+    const rockMeshes: THREE.Mesh[] = [];
+    for (const [i, r] of rocks.entries()) {
+      const rock = mesh(g, createRockGeometry(i), i ? '#677077' : '#545f68', r[0]!, r[1]!, r[2]!);
+      rock.scale.set(r[3]!, r[4]!, r[5]!); rockMeshes.push(rock);
+    }
+    polygon(g, [[-0.65, 0], [0.65, 0], [0.7, 1.35], [0, 1.75], [-0.7, 1.35]], 0.08, '#101c25', 0, 0.05, 1.05);
+    for (const x of [-0.76, 0.76]) beam(g, [x, 0.06, 1.24], [x * 0.84, 1.65, 1.24], 0.18, P.woodLight);
+    beam(g, [-0.85, 1.63, 1.24], [0.85, 1.63, 1.24], 0.22, P.wood);
+    for (const x of [-0.36, 0.36]) box(g, 0.055, 0.055, 1.6, P.iron, x, 0.06, 0.75);
+    for (const z of [0.1, 0.55, 1, 1.45]) box(g, 1, 0.07, 0.14, P.woodDark, 0, 0.025, z);
+    g.updateMatrixWorld(true);
+    const ray = new THREE.Raycaster();
+    for (let i = 0; i < 7; i++) {
+      const a = i * 2.3, x = Math.sin(a) * 1.2, z = Math.cos(a) * 0.6;
+      ray.set(new THREE.Vector3(x, 5, z), new THREE.Vector3(0, -1, 0));
+      const hit = ray.intersectObjects(rockMeshes, false)[0];
+      if (!hit) continue;
+      const gold = mesh(g, new THREE.OctahedronGeometry(0.18), i % 2 ? '#b2934d' : '#e1bd66', x, hit.point.y - 0.06, z);
+      gold.scale.set(0.65, 1.3, 0.7); gold.rotation.z = a;
+    }
+    lantern(g, 1.14, 0.82, 0.96);
+  }
+  bake(g); return g;
+}

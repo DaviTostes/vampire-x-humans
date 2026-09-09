@@ -1,0 +1,21 @@
+{
+  "name": "vampire-x-humans",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace @vampire/server",
+    "dev:client": "npm run dev --workspace @vampire/client",
+    "build": "npm run build --workspace @vampire/client",
+    "start": "npm run start --workspace @vampire/server",
+    "test": "tsx --test packages/server/test/interaction.test.ts packages/server/test/lobby.test.ts packages/server/test/config.test.ts packages/server/test/vampire-items.test.ts",
+    "test:items": "tsx --test packages/server/test/vampire-items.test.ts",
+    "check": "npm run check --workspace @vampire/shared && npm run check --workspace @vampire/server && npm run check --workspace @vampire/client"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true,
+    "esbuild@0.21.5": true
+  }
+}
