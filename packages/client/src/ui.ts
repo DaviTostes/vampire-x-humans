@@ -45,7 +45,7 @@ const BUILDING_HELP: Record<BuildingKind, string> = {
 
 const CSS = `
 .vxh-hud { position: fixed; inset: 0; pointer-events: none; z-index: 20;
-  font-family: 'Segoe UI', system-ui, sans-serif; color: #e8e0d0; }
+  font-family: 'Palatino Linotype','Book Antiqua',Palatino,Georgia,'Times New Roman',serif; color: #e8e0d0; }
 .vxh-topbar { position: absolute; top: 0; left: 50%; transform: translateX(-50%);
   display: flex; gap: 24px; align-items: center; padding: 8px 24px;
   background: linear-gradient(180deg, rgba(10,10,18,.92), rgba(10,10,18,.75));
