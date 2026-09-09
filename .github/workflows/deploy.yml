@@ -1,0 +1,67 @@
+# Deploy no VPS: build do cliente, envio por SSH e reinício do serviço.
+# O acesso público fica por conta do Cloudflare Tunnel (Zero Trust) no VPS.
+#
+# Secrets necessários:
+#   SSH_HOST      — IP ou domínio do VPS
+#   SSH_USER      — usuário SSH (com sudo sem senha, ou root)
+#   SSH_KEY       — chave privada SSH (ed25519)
+#   SSH_PORT      — porta SSH (opcional; padrão 22)
+#   TUNNEL_TOKEN  — token do túnel do Cloudflare Zero Trust (opcional; só instala
+#                   o cloudflared na primeira vez em que for informado)
+#
+# No painel do Zero Trust (Networks → Tunnels → Public Hostname):
+#   vxh.mediumblue.space → HTTP → localhost:3000
+
+name: Deploy VPS
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-vps
+  cancel-in-progress: true
+
+env:
+  APP_DIR: /opt/vampire-x-humans
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Verificar tipos
+        run: npm run check
+
+      - name: Build do cliente
+        run: npm run build
+
+      - name: Configurar SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          SSH_PORT="${{ secrets.SSH_PORT }}"
+          echo "SSH_PORT=${SSH_PORT:-22}" >> "$GITHUB_ENV"
+          ssh-keyscan -p "${SSH_PORT:-22}" "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Enviar arquivos
+        run: |
+          rsync -az --delete -e "ssh -p $SSH_PORT" \
+            --exclude .git --exclude node_modules --exclude .github \
+            ./ "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:$APP_DIR/"
+
+      - name: Instalar e reiniciar serviço
+        run: |
+          ssh -p "$SSH_PORT" "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
+            "cd $APP_DIR && sudo -n ./deploy/install.sh '${{ secrets.TUNNEL_TOKEN }}'"
