@@ -65,7 +65,6 @@ export function joinRoom(room: Room, ws: WebSocket, name: string): Client | { er
     role: null,
     ready: false,
   };
-  for (const c of room.clients) c.ready = false;
   room.clients.push(client);
   room.hostId ??= client.id;
   return client;
@@ -118,7 +117,6 @@ export function startRoom(room: Room, requesterId: string): boolean {
 export function leaveRoom(room: Room, ws: WebSocket) {
   room.clients = room.clients.filter(c => c.ws !== ws);
   if (!room.clients.some(c => c.id === room.hostId)) room.hostId = room.clients[0]?.id ?? null;
-  if (room.status === 'lobby') for (const c of room.clients) c.ready = false;
   if (!room.clients.length) rooms.delete(room.code);
 }
 
@@ -135,7 +133,9 @@ export function stepRoom(room: Room): void {
   const snap = makeSnapshot(room.session.state);
   const payload = JSON.stringify({ type: 'snap', snap });
   for (const c of room.clients) {
-    if (c.ws.readyState === 1) c.ws.send(payload);
+    // Snapshots são completos: se a conexão está ocupada, espere o próximo
+    // estado em vez de acumular uma fila de posições antigas.
+    if (c.ws.readyState === 1 && c.ws.bufferedAmount === 0) c.ws.send(payload);
   }
   if (room.session.state.result) {
     room.status = 'ended';

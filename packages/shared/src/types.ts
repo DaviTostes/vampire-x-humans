@@ -117,6 +117,7 @@ export type Command =
   | { type: 'castVampireSkill'; skillId: VampireSkillId }
   | { type: 'market'; targetId: number; trade: 'woodToGold' | 'goldToWood'; amount: number }
   | { type: 'admin'; action: 'resources'; wood: number; gold: number }
+  | { type: 'admin'; action: 'blood'; amount: number }
   | { type: 'admin'; action: 'phase'; phase: 'day' | 'night' }
   | { type: 'admin'; action: 'heal' };
 

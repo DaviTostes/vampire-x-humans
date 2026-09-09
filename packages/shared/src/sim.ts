@@ -168,6 +168,10 @@ export function applyCommand(session: Session, playerId: number, cmd: Command): 
         if (![cmd.wood, cmd.gold].every(n => Number.isSafeInteger(n) && n >= 0 && n <= GAME_CONFIG.admin.maxResourceAmount)) return;
         player.wood += cmd.wood;
         player.gold += cmd.gold;
+      } else if (cmd.action === 'blood') {
+        if (playerId !== VAMPIRE_PLAYER_ID) return;
+        if (!Number.isSafeInteger(cmd.amount) || cmd.amount < 0 || cmd.amount > GAME_CONFIG.admin.maxResourceAmount) return;
+        s.vampire.blood += cmd.amount;
       } else if (cmd.action === 'phase' && (cmd.phase === 'day' || cmd.phase === 'night')) {
         s.phase = cmd.phase;
         s.phaseTime = cmd.phase === 'day' ? DAY_LENGTH : NIGHT_LENGTH;

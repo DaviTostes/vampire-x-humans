@@ -16,7 +16,7 @@ export class AdminPanel {
       .vxh-admin small { display:block; color:#899ba8; line-height:1.5; margin-bottom:10px; }
       .vxh-admin label { display:block; margin-bottom:5px; }
       .vxh-admin input { width:100%; padding:7px; margin-bottom:8px; background:#080f18; color:#fff; border:1px solid #475361; border-radius:3px; font:14px system-ui; }
-      .vxh-admin-actions { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+      .vxh-admin-actions { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; }
       .vxh-admin button { padding:8px 5px; border:1px solid #55606b; border-radius:3px; color:#e4d5b6; background:#26313e; cursor:pointer; font:13px system-ui; }
       .vxh-admin button:hover { background:#3a4a59; }.vxh-admin button[aria-pressed=true] { border-color:#c9aa6b; }
     `;
@@ -27,7 +27,7 @@ export class AdminPanel {
       <small>Ferramentas disponíveis apenas no teste solo.</small>
       <label for="admin-amount">Quantidade de recursos</label>
       <input id="admin-amount" type="number" min="1" max="${GAME_CONFIG.admin.maxResourceAmount}" step="1" value="${GAME_CONFIG.admin.defaultResourceAmount}" required>
-      <div class="vxh-admin-actions"><button data-admin="gold">+ Ouro</button><button data-admin="wood">+ Madeira</button>
+      <div class="vxh-admin-actions"><button data-admin="gold">+ Ouro</button><button data-admin="wood">+ Madeira</button><button data-admin="blood">+ Sangue</button>
       <button data-admin="day">Dia</button><button data-admin="night">Noite</button><button data-admin="heal">Curar unidades</button></div></div>`;
     this.amount = this.el.querySelector('input')!;
     this.el.addEventListener('click', event => {
@@ -37,6 +37,9 @@ export class AdminPanel {
         if (!this.amount.reportValidity()) return;
         const amount = this.amount.valueAsNumber;
         net.command({ type: 'admin', action: 'resources', wood: action === 'wood' ? amount : 0, gold: action === 'gold' ? amount : 0 });
+      } else if (action === 'blood') {
+        if (!this.amount.reportValidity()) return;
+        net.command({ type: 'admin', action: 'blood', amount: this.amount.valueAsNumber });
       } else if (action === 'day' || action === 'night') net.command({ type: 'admin', action: 'phase', phase: action });
       else if (action === 'heal') net.command({ type: 'admin', action: 'heal' });
     });

@@ -57,6 +57,10 @@ const wss = new WebSocketServer({ server });
 const clientRoom = new Map<WebSocket, Room>();
 
 wss.on('connection', (ws) => {
+  ws.on('error', (error) => {
+    console.warn('[vampire] erro na conexão WebSocket:', error.message);
+    ws.terminate();
+  });
   ws.on('message', (raw) => {
     let msg: any;
     try {

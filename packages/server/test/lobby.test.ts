@@ -72,7 +72,7 @@ test('entradas duplicadas são rejeitadas e a saída transfere o anfitrião', ()
   setReady(room, guest, true);
   leaveRoom(room, host.ws);
   assert.equal(room.hostId, guest.id);
-  assert.equal(guest.ready, false);
+  assert.equal(guest.ready, true);
   assert.equal(chooseRole(room, guest, 'vampire'), null);
   leaveRoom(room, guest.ws);
   assert.equal(rooms.has(room.code), false);

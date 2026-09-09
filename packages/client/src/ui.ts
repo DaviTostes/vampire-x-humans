@@ -30,6 +30,8 @@ import type { Net } from './net.js';
 import { portrait, peonPortrait } from './portraits.js';
 import { activityLabel, resourceLabel } from './activity.js';
 import { AdminPanel } from './admin.js';
+import hudTheme from './hud-theme.css?inline';
+import { commandArt, factionCrest } from './hud-icons.js';
 import { VAMPIRE_ITEMS, VAMPIRE_SKILLS, vampireEffectiveCooldown, vampireEffectiveSpeed, vampireItemBonuses, vampireItemCost, vampireShopAccess, vampireSkillMultiplier, type VampireItemId, type VampireSkillId } from '@vampire/shared';
 
 const BUILDING_NAMES: Record<BuildingKind, string> = {
@@ -81,53 +83,77 @@ const CSS = `
 .vxh-bar { height: 8px; border-radius: 4px; background: #221; overflow: hidden; }
 .vxh-bar > div { height: 100%; border-radius: 4px; }
 
-/* Faixa clássica de RTS: mapa, retrato, ficha e grade de ordens. */
-.vxh-hud { --steel: #455361; --rim: #74818b; --blood: #932b3b; --gold: #c9b07b; }
+/* Faixa clássica de RTS com talha medieval: ferro escuro, rebites dourados e luz de vela. */
+.vxh-hud { --iron:#1a1d22; --iron-lit:#3a3f47; --rim:#565d66; --blood:#8e2a35; --gold:#c9a86a; --gold-hi:#e9d3a0; --parch:#d9caa4; }
 .vxh-topbar { left: auto; right: 12px; transform: none; top: 10px; gap: 0; padding: 0;
-  border: 3px ridge var(--steel); border-radius: 0; box-shadow: 0 4px 18px #000a; }
-.vxh-topbar .res, .vxh-topbar .clock { padding: 9px 22px; border-right: 1px solid #39434c; min-width: 105px; }
-.vxh-topbar b { font-weight: 500; font-variant-numeric: tabular-nums; }
-.vxh-topbar .res-icon { color: var(--gold); font-size: 21px; }
+  border: 1px solid #08090c; border-radius: 4px;
+  background: linear-gradient(180deg,#262a31,#0c0e13 85%);
+  box-shadow: inset 0 0 0 2px var(--iron-lit), inset 0 0 0 3px #10131a, inset 0 1px 0 rgba(233,211,160,.08), 0 6px 18px #000a; }
+.vxh-topbar .res { padding: 9px 22px; border-right: 1px solid #0c0f13;
+  box-shadow: 1px 0 0 rgba(233,211,160,.06); min-width: 105px; }
+.vxh-clock { position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+  align-items: center; gap: 8px; padding: 9px 22px; font-weight: 600; font-size: 17px;
+  border: 1px solid #08090c; border-radius: 4px;
+  background: linear-gradient(180deg,#262a31,#0c0e13 85%);
+  box-shadow: inset 0 0 0 2px var(--iron-lit), inset 0 0 0 3px #10131a, inset 0 1px 0 rgba(233,211,160,.08), 0 6px 18px #000a; }
+.vxh-topbar b { font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: .5px; text-shadow: 0 1px 2px #000; }
+.vxh-topbar .res-icon { color: var(--gold-hi); font-size: 21px; filter: drop-shadow(0 0 4px rgba(201,168,106,.35)); }
 .vxh-hero { position: absolute; top: 10px; left: 14px; width: 68px; padding: 3px; cursor: pointer;
-  border: 3px ridge var(--rim); background: #090d14; box-shadow: 0 4px 12px #000b; pointer-events: auto; }
+  border: 1px solid #08090c; border-radius: 4px; background: linear-gradient(160deg,#23262d,#0b0d12 70%);
+  box-shadow: inset 0 0 0 2px var(--iron-lit), inset 0 0 0 3px #10131a, 0 4px 12px #000b; pointer-events: auto; }
 .vxh-hero svg { display: block; width: 100%; height: 65px; }
 .vxh-hero .vxh-bar { height: 5px; border-radius: 0; }
 .vxh-bottom { position: absolute; left: 10px; right: 10px; bottom: 8px; height: 230px;
   display: grid; grid-template-columns: 214px 148px minmax(180px,1fr) 360px; grid-template-rows: minmax(0,1fr); gap: 12px; align-items: stretch; }
-.vxh-frame { position: relative; min-height: 0; border: 6px ridge var(--steel); border-radius: 2px;
-  background: linear-gradient(140deg,#151b24,#070c13 65%); box-shadow: 0 0 0 1px #020406, inset 0 0 22px #000, 0 0 12px #0008; }
-.vxh-frame::before, .vxh-frame::after { content: ''; position: absolute; width: 10px; height: 10px;
-  transform: rotate(45deg); background: #52616e; border: 2px ridge #7d8993; z-index: 2; pointer-events: none; }
-.vxh-frame::before { left: -9px; top: -9px; } .vxh-frame::after { right: -9px; bottom: -9px; }
+.vxh-frame { position: relative; min-height: 0; border: 1px solid #08090c; border-radius: 4px;
+  background:
+    repeating-linear-gradient(115deg, rgba(255,255,255,.015) 0 2px, transparent 2px 6px),
+    linear-gradient(160deg,#23262d,#0b0d12 70%);
+  box-shadow: inset 0 0 0 2px var(--iron-lit), inset 0 0 0 4px #10131a, inset 0 2px 10px rgba(233,211,160,.06), inset 0 0 26px #000, 0 8px 20px #000c; }
+.vxh-frame::before, .vxh-frame::after { content: ''; position: absolute; width: 12px; height: 12px;
+  transform: rotate(45deg); border: 2px solid #08090c; z-index: 2; pointer-events: none;
+  background: radial-gradient(circle at 35% 35%, var(--gold-hi), #8a6d3a 60%, #4a3a1e);
+  box-shadow: 0 0 6px #000b; }
+.vxh-frame::before { left: -8px; top: -8px; } .vxh-frame::after { right: -8px; bottom: -8px; }
 .vxh-mapframe { margin-top: -14px; padding: 4px; }
 .vxh-mapframe::after { width: auto; height: auto; transform: none; right: 0; left: 0; bottom: 0;
-  content: 'VALE DA VIGÍLIA'; font: 9px Georgia,serif; letter-spacing: 2px; text-align: center; padding: 3px;
-  background: #070e18dd; color: #b6ab92; border: none; }
-.vxh-minimap { position: static; display: block; width: 100%; height: 100%; border: 1px solid #0b1820; border-radius: 0; }
+  content: 'VALE DA VIGÍLIA'; font: 10px Georgia,serif; letter-spacing: 3px; text-align: center; padding: 3px;
+  background: #0a0c10ee; color: var(--gold); border-top: 1px solid #10131a; text-shadow: 0 1px 1px #000; }
+.vxh-minimap { position: static; display: block; width: 100%; height: 100%; border: 1px solid #10131a; border-radius: 0; }
 .vxh-portrait { position: relative; top: auto; left: auto; width: auto; padding: 5px; gap: 3px;
-  display: flex; background: #0a1018; }
-.vxh-portrait-art { flex: 1; min-height: 0; overflow: hidden; border: 1px solid #2f3b49; background: #090c14; }
+  display: flex; background: linear-gradient(180deg,#1c1f25,#0b0d12); }
+.vxh-portrait-art { flex: 1; min-height: 0; overflow: hidden; border: 1px solid #2f353d; background: #090c14;
+  box-shadow: inset 0 0 14px #000; }
 .vxh-portrait-art svg { width: 100%; height: 100%; object-fit: cover; }
-.vxh-portrait .name { font-family: Georgia,serif; font-size: 12px; text-align: center; color: #d8c397; }
-.vxh-statbar { position: relative; height: 16px; background: #090d12; border: 1px solid #344150; }
-.vxh-statbar > i { position: absolute; inset: 0; right: auto; background: linear-gradient(#5b9b46,#244b27); }
+.vxh-portrait .name { font-size: 12px; text-align: center; color: var(--gold-hi);
+  font-variant: small-caps; letter-spacing: 1px; text-shadow: 0 1px 1px #000; }
+.vxh-statbar { position: relative; height: 16px; background: #0a0c10; border: 1px solid #3a3f47;
+  box-shadow: inset 0 0 0 1px #10131a, inset 0 2px 4px #000; }
+.vxh-statbar > i { position: absolute; inset: 0; right: auto; background: linear-gradient(#5b9b46,#244b27);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.18); }
 .vxh-statbar.bloodbar > i { background: linear-gradient(#3d6694,#192d49); }
 .vxh-statbar span { position: relative; display: block; text-align: center; line-height: 14px; font-size: 11px; text-shadow: 1px 1px #000; }
 .vxh-sheet { padding: 14px 16px; overflow: hidden; }
-.vxh-sheet-heading { font-family: Georgia,serif; font-size: 11px; color: #89959e; letter-spacing: 3px;
-  padding-bottom: 9px; border-bottom: 1px solid #303a43; margin-bottom: 10px; }
+.vxh-sheet-heading { font-size: 11px; color: var(--gold); letter-spacing: 3px; font-variant: small-caps;
+  padding-bottom: 9px; border-bottom: 1px solid #3a342a; box-shadow: 0 1px 0 rgba(233,211,160,.05);
+  margin-bottom: 10px; text-shadow: 0 1px 1px #000; }
 .vxh-selinfo { position: static; padding: 0; background: none; max-width: none; font-size: 13px; line-height: 1.7; }
-.vxh-selinfo b { font-family: Georgia,serif; font-size: 17px; color: #d4c3a2; }
+.vxh-selinfo b { font-size: 18px; color: var(--gold-hi); font-variant: small-caps; letter-spacing: .5px; text-shadow: 0 1px 2px #000; }
 .vxh-panel { position: relative; left: auto; right: auto; bottom: auto; padding: 8px;
-  display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); grid-template-rows: repeat(2,minmax(0,1fr)); gap: 6px;
-  border: 6px ridge var(--steel); border-radius: 2px; align-items: stretch; }
-.vxh-panel > span { grid-column: 1/-1; font-size: 12px; line-height: 1.6; color: #8a9aaa; align-self: center; text-align: center; }
-.vxh-btn { position: relative; min-width: 0; padding: 5px 3px; font-size: 14px; border-radius: 0;
-  border: 2px ridge #53606e; background: radial-gradient(ellipse at 50% 20%,#27384a,#0a101b 80%);
-  color: #d6c6a4; box-shadow: inset 0 0 0 2px #060b13; }
-.vxh-btn:hover:not(:disabled) { border-color: #b9a577; background: radial-gradient(ellipse at 50% 20%,#465267,#121b2b 80%); }
+  display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); grid-template-rows: repeat(2,minmax(min-content,1fr)); gap: 6px;
+  border-radius: 4px; align-items: stretch; overflow-y: auto; }
+.vxh-panel > span { grid-column: 1/-1; font-size: 12px; line-height: 1.6; color: #a89a78; font-style: italic;
+  align-self: center; text-align: center; letter-spacing: .4px; text-shadow: 0 1px 1px #000; }
+.vxh-btn { position: relative; min-width: 0; padding: 5px 3px; font-size: 14px; border-radius: 3px;
+  border: 1px solid #08090c;
+  background: radial-gradient(ellipse at 50% 18%, #2b2f37, #0b0d12 85%);
+  color: var(--parch);
+  box-shadow: inset 0 0 0 2px #454b54, inset 0 0 0 3px #14171c, inset 0 2px 6px rgba(233,211,160,.05), inset 0 -8px 14px rgba(0,0,0,.45); }
+.vxh-btn:hover:not(:disabled) {
+  box-shadow: inset 0 0 0 2px #8a7344, inset 0 0 0 3px #14171c, inset 0 0 16px rgba(201,168,106,.18), inset 0 -8px 14px rgba(0,0,0,.45);
+  color: var(--gold-hi); }
 .vxh-btn small { font-size: 15px; line-height: 1.25; opacity: 1; font-weight: 650; color: #f0d9a8; font-variant-numeric: tabular-nums; }
-.vxh-btn:disabled small { color: #b9c4cf; }
+.vxh-btn:disabled small { color: #9aa2ab; }
 .vxh-btn .vxh-resource-cost { color: #f0d9a8; }
 .vxh-btn .vxh-resource-cost.vxh-resource-missing { color: #ff9292; }
 .vxh-btn .vxh-cost { white-space: nowrap; }
@@ -136,25 +162,33 @@ const CSS = `
 .vxh-item-button .vxh-command-icon { font-size:20px; }
 .vxh-item-equipped { color:#a8d8b1; }
 .vxh-inventory { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
-.vxh-inventory > span { border:1px solid #58606a; background:#101824; padding:5px 8px; color:#d5c397; font-size:12px; }
+.vxh-inventory > span { border:1px solid #08090c; border-radius:3px; padding:5px 8px; color:#d5c397; font-size:12px;
+  background: radial-gradient(ellipse at 50% 20%,#262a31,#0d1015 85%);
+  box-shadow: inset 0 0 0 2px #33383f, inset 0 0 8px #000; }
 .vxh-command-icon { display: block; font-size: 23px; line-height: 1.1; margin-bottom: 2px; }
 .vxh-activity { color: #e4c579; margin-top: 6px; }
-.vxh-progress { height: 8px; background: #080b10; border: 1px solid #465260; margin: 6px 0; }
+.vxh-progress { height: 8px; background: #080b10; border: 1px solid #3a3f47; margin: 6px 0;
+  box-shadow: inset 0 1px 3px #000; }
 .vxh-progress > div { height: 100%; background: linear-gradient(90deg,#8a693b,#e9c47b); }
-.vxh-btn.active { box-shadow: inset 0 0 14px #a92137; border-color: #a26369; }
-.vxh-quit { pointer-events: auto; padding: 9px 16px; border: 2px ridge #8a4a52; border-radius: 0;
-  background: radial-gradient(ellipse at 50% 20%,#5a2530,#2a0f16 80%); color: #ffd9dc;
-  font: 650 13px 'Segoe UI',system-ui,sans-serif; cursor: pointer; }
-.vxh-quit:hover { border-color: #e08a92; background: radial-gradient(ellipse at 50% 20%,#7a3040,#3a141d 80%); }
+.vxh-btn.active { border-color: #08090c; color: #ffb9b9;
+  box-shadow: inset 0 0 0 2px #7c2a33, inset 0 0 0 3px #14171c, inset 0 0 18px #8e2a35, inset 0 -8px 14px rgba(0,0,0,.45); }
+.vxh-quit { pointer-events: auto; padding: 9px 16px; border: 1px solid #08090c; border-radius: 3px;
+  background: radial-gradient(ellipse at 50% 20%,#5a2530,#1c0b10 85%);
+  box-shadow: inset 0 0 0 2px #6e3a41, inset 0 0 0 3px #140b0d, inset 0 0 12px rgba(142,42,53,.35);
+  color: #ffd9dc; font: 650 13px 'Palatino Linotype','Book Antiqua',Palatino,Georgia,serif; cursor: pointer; }
+.vxh-quit:hover { color: #ffe9ec;
+  box-shadow: inset 0 0 0 2px #a2525b, inset 0 0 0 3px #140b0d, inset 0 0 16px rgba(224,138,146,.3); }
 @media(max-width: 1000px) {
   .vxh-bottom { height: 218px; grid-template-columns: 172px 120px minmax(120px,1fr) 324px; gap: 8px; }
-  .vxh-topbar .res, .vxh-topbar .clock { padding: 7px 12px; min-width: 75px; }
+  .vxh-topbar .res { padding: 7px 12px; min-width: 75px; }
+  .vxh-clock { padding: 7px 12px; font-size: 14px; }
   .vxh-sheet { padding: 9px; } .vxh-selinfo { font-size: 11px; }
 }
 @media(max-width: 720px) {
   .vxh-bottom { height: 218px; grid-template-columns: 132px 94px 1fr; }
   .vxh-sheet { display: none; } .vxh-topbar { font-size: 12px; }
-  .vxh-topbar .res, .vxh-topbar .clock { padding: 6px 8px; min-width: 50px; }
+  .vxh-topbar .res { padding: 6px 8px; min-width: 50px; }
+  .vxh-clock { padding: 6px 10px; font-size: 12px; }
 }
 `;
 
@@ -179,30 +213,32 @@ export class Hud {
     private getMyId: () => number,
   ) {
     const style = document.createElement('style');
-    style.textContent = CSS;
+    style.textContent = CSS + hudTheme;
     document.head.appendChild(style);
 
     this.el = document.createElement('div');
     this.el.className = 'vxh-hud';
+    this.el.dataset.faction = this.getMyId() === VAMPIRE_PLAYER_ID ? 'vampire' : 'human';
     this.el.innerHTML = `
-      <button class="vxh-hero" title="Selecionar e centralizar seu personagem">${portrait(this.getMyId() === VAMPIRE_PLAYER_ID)}<div class="vxh-bar"><div style="width:100%;background:#539541"></div></div></button>
+      <button class="vxh-hero" title="Selecionar e centralizar seu personagem">${portrait(this.getMyId() === VAMPIRE_PLAYER_ID)}<div class="vxh-bar"><div style="width:100%;background:#539541"></div></div><span class="vxh-hero-crest" aria-hidden="true">${factionCrest(this.getMyId() === VAMPIRE_PLAYER_ID)}</span></button>
       <div class="vxh-topbar">
-        <span class="res">🪵 <b class="wood">0</b></span>
-        <span class="res">🪙 <b class="gold">0</b></span>
+        <span class="res" data-wood>🪵 <b class="wood">0</b></span>
+        <span class="res" data-gold>🪙 <b class="gold">0</b></span>
         <span class="res" data-blood style="display:none">🩸 <b class="blood">0</b></span>
-        <div class="clock"><span class="icon">☀️</span><span class="time">--</span></div>
         <button class="vxh-quit" title="Sair da partida e voltar ao início">✕ Sair</button>
       </div>
+      <div class="vxh-clock"><span class="icon">☀️</span><span class="time">--</span></div>
       <div class="vxh-bottom">
-      <div class="vxh-frame vxh-mapframe"><canvas class="vxh-minimap" width="210" height="210"></canvas></div>
+      <div class="vxh-frame vxh-mapframe"><div class="vxh-compass" aria-hidden="true"><span>N</span></div><canvas class="vxh-minimap" width="210" height="210"></canvas><span class="vxh-map-caption">VALE DA VIGÍLIA</span></div>
       <div class="vxh-portrait vxh-frame">
+        <div class="vxh-crest" aria-hidden="true"><span>${factionCrest(this.getMyId() === VAMPIRE_PLAYER_ID)}</span></div>
         <div class="vxh-portrait-art">${portrait(this.getMyId() === VAMPIRE_PLAYER_ID)}</div>
         <span class="name">—</span>
         <div class="vxh-statbar healthbar"><i style="width:100%"></i><span>—</span></div>
         <div class="vxh-statbar bloodbar"><i style="width:100%"></i><span>—</span></div>
       </div>
-      <div class="vxh-frame vxh-sheet"><div class="vxh-sheet-heading">VAMPIRE × HUMANS</div><div class="vxh-selinfo"></div></div>
-      <div class="vxh-panel vxh-frame"></div>
+      <div class="vxh-frame vxh-sheet"><div class="vxh-sheet-heading">ATRIBUTOS</div><div class="vxh-selinfo"></div></div>
+      <div class="vxh-frame vxh-commands"><div class="vxh-commands-heading">VAMPIRE × HUMANS</div><div class="vxh-panel"></div></div>
       </div>
     `;
     document.body.appendChild(this.el);
@@ -211,7 +247,7 @@ export class Hud {
     this.gold = this.el.querySelector('.gold')!;
     this.wood = this.el.querySelector('.wood')!;
     this.blood = this.el.querySelector('.blood')!;
-    this.clock = this.el.querySelector('.clock')!;
+    this.clock = this.el.querySelector('.vxh-clock')!;
     this.selInfo = this.el.querySelector('.vxh-selinfo')!;
     this.cmdPanel = this.el.querySelector('.vxh-panel')!;
     this.minimap = this.el.querySelector('.vxh-minimap')!;
@@ -275,6 +311,8 @@ export class Hud {
     }
     const isVamp = myId === VAMPIRE_PLAYER_ID;
     this.el.querySelector<HTMLElement>('[data-blood]')!.style.display = isVamp ? 'flex' : 'none';
+    for (const res of this.el.querySelectorAll<HTMLElement>('.vxh-topbar .res[data-wood], .vxh-topbar .res[data-gold]'))
+      res.style.display = isVamp ? 'none' : 'flex';
     this.blood.textContent = String(snap.blood);
 
     // relógio
@@ -282,7 +320,7 @@ export class Hud {
     const rem = Math.max(0, Math.ceil(snap.phaseTime));
     const icon = snap.phase === 'day' ? '☀️' : '🌙';
     const label = `${snap.practice ? 'Teste solo · ' : ''}${snap.phase === 'day' ? 'Dia' : 'Noite'} ${snap.day}`;
-    this.clock.className = `clock ${snap.phase}`;
+    this.clock.className = `vxh-clock ${snap.phase}`;
     this.clock.innerHTML = `<span class="icon">${icon}</span><span class="time">${label} · ${Math.floor(rem / 60)}:${String(rem % 60).padStart(2, '0')}</span>`;
 
     // seleção
@@ -293,7 +331,6 @@ export class Hud {
     if (building) {
       this.selInfo.innerHTML = `<b>${BUILDING_NAMES[building.kind]} · nível ${building.level}</b>
         <div>${building.hp}/${building.maxHp} HP${building.done ? '' : ` · Obra: ${Math.floor(building.progress * 100)}%`}</div>
-        <div>${BUILDING_HELP[building.kind]}</div>
         ${building.kind === 'bank' && building.done ? `<div>Produção: ${bankProduction()} ouro / ${bankCycleSeconds(building.level)}s</div>` : ''}
         ${building.kind === 'wall' && building.done ? `<div>Vida máxima: ${building.maxHp}${building.level < WALL_MAX_LEVEL ? ` · Nível ${building.level + 1}: ${wallMaxHp(building.level + 1)} HP` : ' · Nível máximo'}</div>` : ''}
         ${building.kind === 'wall' && building.done && building.hp < building.maxHp ? `<div class="vxh-activity">Danificado — clique com o botão direito com um Humano/Peão para reparar</div>` : ''}`;
@@ -309,11 +346,14 @@ export class Hud {
       }
       if (building.kind === 'crypt') {
         const vampire = snap.units.find(u => u.kind === 'vampire');
-        this.selInfo.innerHTML += `<div class="vxh-activity">${isVamp ? vampireShopAccess(snap.phase, vampire, building) ?? 'Loja aberta — itens são equipados ao comprar' : 'Loja exclusiva do Vampiro'}</div>`;
-        if (isVamp) this.selInfo.innerHTML += `<div>Sangue disponível: ${snap.blood}</div>${this.inventoryMarkup(snap)}`;
+        if (isVamp) {
+          const shopAccess = vampireShopAccess(snap.phase, vampire, building);
+          if (shopAccess) this.selInfo.innerHTML += `<div class="vxh-activity">${shopAccess}</div>`;
+          this.selInfo.innerHTML += `<div>Sangue disponível: ${snap.blood}</div>${this.inventoryMarkup(snap)}`;
+        }
       }
     } else if (sel.length === 0) {
-      this.selInfo.innerHTML = '<b>Vale da Vigília</b><div>Colete recursos, escolha um recinto e feche sua entrada com um muro.</div><div>Humanos atravessam seus muros. O vampiro precisa destruí-los.</div>';
+      this.selInfo.innerHTML = '';
     } else {
       this.selInfo.innerHTML = sel
         .map(
@@ -425,7 +465,7 @@ export class Hud {
             item.cooldownFactor < 1 ? `ataque ${Math.round((1 - item.cooldownFactor) * 100)}% mais rápido` : ''].filter(Boolean).join(' · ');
           const level = item.maxCount === Infinity ? `<small>Nv ${count} → ${count + 1}</small>` : '';
           html += `<button class="vxh-btn vxh-item-button" data-vampire-item="${id}" data-crypt="${building.id}" title="${reason}" ${access || full || !afford ? 'disabled' : ''}>
-            <span class="vxh-command-icon">${item.icon}</span>${item.name}<small>${bonuses}</small>${level}
+            ${commandArt(id)}${item.name}<small>${bonuses}</small>${level}
             ${full ? '<small class="vxh-item-equipped">✓ Equipado</small>' : `<small class="vxh-item-price"><span class="vxh-resource-cost ${afford ? '' : 'vxh-resource-missing'}">${cost}🩸</span></small>`}</button>`;
         }
         for (const id of Object.keys(VAMPIRE_SKILLS) as VampireSkillId[]) {
@@ -434,10 +474,10 @@ export class Hud {
           const afford = snap.blood >= skill.unlockCost;
           const reason = access ?? (unlocked ? 'Skill desbloqueada — use pelo painel do vampiro' : !afford ? `Faltam ${skill.unlockCost - snap.blood} de sangue` : 'Desbloquear skill');
           html += `<button class="vxh-btn vxh-item-button" data-vampire-skill-buy="${id}" data-crypt="${building.id}" title="${reason}" ${access || unlocked || !afford ? 'disabled' : ''}>
-            <span class="vxh-command-icon">${skill.icon}</span>${skill.name}<small>${skill.description}</small>
+            ${commandArt(id)}${skill.name}<small>${skill.description}</small>
             ${unlocked ? '<small class="vxh-item-equipped">✓ Desbloqueada</small>' : `<small class="vxh-item-price"><span class="vxh-resource-cost ${afford ? '' : 'vxh-resource-missing'}">${skill.unlockCost}🩸</span></small>`}</button>`;
         }
-        html += `<span>${access ?? `Sangue: ${snap.blood} · Itens permanentes · Skills usam cooldown`}</span>`;
+        if (access) html += `<span>${access}</span>`;
       } else if (building.owner === myId && building.kind === 'wall' && building.done) {
         const cost = WALL_UPGRADE_COST[building.level];
         const max = building.level >= WALL_MAX_LEVEL;
@@ -449,24 +489,22 @@ export class Hud {
         const repairBtn = damaged ? `<button class="vxh-btn" data-repair="${building.id}" ${hasWorker ? '' : 'disabled'}>🔨 Reparar muro<small>${building.hp}/${building.maxHp} HP</small></button>` : '';
         html = upgradeBtn + repairBtn + marketButtons();
       }
-      else html = '<span>Estrutura selecionada · informações acima</span>';
+      else html = '';
     } else if (isVamp) {
-      html = `<button class="vxh-btn" disabled>🦇 Caçar<small>clique-direito</small></button>
-              <button class="vxh-btn" disabled>🌙 Forte à noite<small>+velocidade</small></button>`;
+      html = '';
       for (const id of Object.keys(VAMPIRE_SKILLS) as VampireSkillId[]) {
         const skill = VAMPIRE_SKILLS[id];
         const state = snap.vampireSkills?.[id];
         if (!state) {
-          html += `<button class="vxh-btn" disabled title="Desbloqueie na cripta durante o dia">🔒 ${skill.name}<small>cripta · ${skill.unlockCost}🩸</small></button>`;
+          html += `<button class="vxh-btn" disabled title="Desbloqueie na cripta durante o dia">${commandArt(id)}${skill.name}<small>🔒 ${skill.unlockCost}🩸</small></button>`;
         } else if (state.buff > 0) {
-          html += `<button class="vxh-btn active" disabled><span class="vxh-command-icon">${skill.icon}</span>${skill.name}<small>ativo · ${Math.ceil(state.buff)}s</small></button>`;
+          html += `<button class="vxh-btn active" disabled>${commandArt(id)}${skill.name}<small>ativo · ${Math.ceil(state.buff)}s</small></button>`;
         } else if (state.cd > 0) {
-          html += `<button class="vxh-btn" disabled><span class="vxh-command-icon">${skill.icon}</span>${skill.name}<small>recarga · ${Math.ceil(state.cd)}s</small></button>`;
+          html += `<button class="vxh-btn" disabled>${commandArt(id)}${skill.name}<small>recarga · ${Math.ceil(state.cd)}s</small></button>`;
         } else {
-          html += `<button class="vxh-btn" data-vampire-skill-cast="${id}" title="${skill.description} — clique para ativar"><span class="vxh-command-icon">${skill.icon}</span>${skill.name}<small>${skill.description}</small></button>`;
+          html += `<button class="vxh-btn" data-vampire-skill-cast="${id}" title="${skill.description} — clique para ativar">${commandArt(id)}${skill.name}<small>${skill.description}</small></button>`;
         }
       }
-      const boots = snap.vampireItems?.boots ?? 0, frenzy = snap.vampireItems?.frenzy ?? 0;
       for (const id of ['boots', 'frenzy'] as VampireItemId[]) {
         const count = snap.vampireItems?.[id] ?? 0;
         if (!count) continue; // primeira compra é na loja da cripta
@@ -474,20 +512,18 @@ export class Hud {
         const cost = vampireItemCost(id, count);
         const afford = snap.blood >= cost;
         html += `<button class="vxh-btn vxh-item-button" data-vampire-item-up="${id}" title="Upar a qualquer hora por ${cost} de sangue" ${afford ? '' : 'disabled'}>
-          <span class="vxh-command-icon">${item.icon}</span>${item.name}<small>Nv ${count} → ${count + 1}</small>
+          ${commandArt(id)}${item.name}<small>Nv ${count} → ${count + 1}</small>
           <small class="vxh-item-price"><span class="vxh-resource-cost ${afford ? '' : 'vxh-resource-missing'}">${cost}🩸</span></small></button>`;
       }
-      if (!boots && !frenzy) html += `<span>Compre Botas/Frenesi na cripta de dia; depois upe por aqui</span>`;
     } else if (hasSel) {
       for (const kind of BUILDABLE) {
         const c = BUILD_COSTS[kind];
         const afford = me && me.wood >= c.wood && me.gold >= c.gold;
         html += `<button class="vxh-btn ${afford ? '' : 'vxh-unavailable'}" data-build="${kind}" title="${afford ? BUILDING_HELP[kind] : shortageText(c)}" ${afford ? '' : 'disabled'}>
-          <span class="vxh-command-icon">${kind === 'bank' ? '🏦' : kind === 'taverna' ? '🍺' : kind === 'wall' ? '🧱' : '🗼'}</span>${BUILDING_NAMES[kind]}
+          ${commandArt(kind)}${BUILDING_NAMES[kind]}
           <small class="vxh-cost">${costMarkup(c)}</small><small>${Number((c.time / workerStats(snap.units.find(u => this.controls.selected.includes(u.id)) ?? {}).buildRate).toFixed(1))}s</small></button>`;
       }
     }
-    if (!html) html = '<span>Clique para selecionar · arraste para selecionar um grupo · botão direito para ordenar</span>';
     if (html !== this.panelHtml) {
       this.cmdPanel.innerHTML = html;
       this.panelHtml = html;
@@ -505,35 +541,42 @@ export class Hud {
     }).join('')}</div>`;
   }
 
+  private minimapTerrain: ImageData | null = null;
+  private minimapCameraKey = '';
+  private minimapCorners: Array<{ x: number; z: number } | null> = [];
+
   private renderMinimap(snap: Snapshot, myId: number) {
     const ctx = this.minimap.getContext('2d');
     if (!ctx) return;
     const S = 210;
     const map = this.scene.map;
     const n = map.tiles;
-    const img = ctx.createImageData(S, S);
-    for (let py = 0; py < S; py++) {
-      for (let px = 0; px < S; px++) {
-        const tx = Math.floor((px / S) * n);
-        const tz = Math.floor((py / S) * n);
-        const i = tz * n + tx;
-        const h = map.height[i] ?? 0;
-        let r: number, g: number, b: number;
-        if (map.water[i]) {
-          r = 30; g = 60; b = 110;
-        } else if ((map.forest[i] ?? 0) > 0.5) {
-          r = 24; g = 48; b = 43;
-        } else if (h > 0.62) {
-          r = 100; g = 100; b = 105;
-        } else {
-          r = 45 + h * 40; g = 80 + h * 30; b = 40;
+    const img = this.minimapTerrain ?? ctx.createImageData(S, S);
+    if (!this.minimapTerrain) {
+      for (let py = 0; py < S; py++) {
+        for (let px = 0; px < S; px++) {
+          const tx = Math.floor((px / S) * n);
+          const tz = Math.floor((py / S) * n);
+          const i = tz * n + tx;
+          const h = map.height[i] ?? 0;
+          let r: number, g: number, b: number;
+          if (map.water[i]) {
+            r = 30; g = 60; b = 110;
+          } else if ((map.forest[i] ?? 0) > 0.5) {
+            r = 24; g = 48; b = 43;
+          } else if (h > 0.62) {
+            r = 100; g = 100; b = 105;
+          } else {
+            r = 45 + h * 40; g = 80 + h * 30; b = 40;
+          }
+          const o = (py * S + px) * 4;
+          img.data[o] = r;
+          img.data[o + 1] = g;
+          img.data[o + 2] = b;
+          img.data[o + 3] = 255;
         }
-        const o = (py * S + px) * 4;
-        img.data[o] = r;
-        img.data[o + 1] = g;
-        img.data[o + 2] = b;
-        img.data[o + 3] = 255;
       }
+      this.minimapTerrain = img;
     }
     ctx.putImageData(img, 0, 0);
     const W = WORLD.half * 2;
@@ -567,7 +610,13 @@ export class Hud {
       ctx.arc(mx, mz, u.kind === 'vampire' ? 3.5 : 2, 0, Math.PI * 2);
       ctx.fill();
     }
-    const corners = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([x, y]) => this.scene.screenToGround(x!, y!));
+    this.scene.camera.updateMatrixWorld(true);
+    const cameraKey = [...this.scene.camera.matrixWorld.elements, ...this.scene.camera.projectionMatrix.elements].join(',');
+    if (cameraKey !== this.minimapCameraKey) {
+      this.minimapCameraKey = cameraKey;
+      this.minimapCorners = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([x, y]) => this.scene.screenToGround(x!, y!));
+    }
+    const corners = this.minimapCorners;
     if (corners.every(Boolean)) {
       ctx.strokeStyle = '#ddd7b4';
       ctx.lineWidth = 1;

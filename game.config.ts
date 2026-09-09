@@ -96,7 +96,7 @@ export const GAME_CONFIG = {
     },
     // Estruturas especiais; keep não aparece no painel por padrão.
     keep: { hp: 1200, size: 7, cost: { wood: 150, gold: 60, time: 12 } },
-    crypt: { hp: 4000, size: 8, shopRange: 3 }, // Distância permitida a partir da borda da cripta
+    crypt: { hp: 4000, size: 8 },
   },
   buildable: ['bank', 'taverna', 'wall', 'tower'] as BuildKind[],
 

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   applyCommand, createSession, step, makeSnapshot, vampireItemBonuses,
-  VAMPIRE, VAMPIRE_ITEMS, VAMPIRE_PLAYER_ID, CRYPT, BUILDING_SIZE,
+  VAMPIRE, VAMPIRE_ITEMS, VAMPIRE_PLAYER_ID, CRYPT_RADIUS, BUILDING_SIZE,
   type VampireItemId,
 } from '@vampire/shared';
 
@@ -39,7 +39,7 @@ test('loja rejeita compras à noite, longe da cripta, sem sangue ou por humanos'
   for (const scenario of ['night', 'far', 'poor', 'human', 'dead', 'wrong-building', 'unknown-item']) {
     const { session, vampire, crypt } = fixture();
     if (scenario === 'night') session.state.phase = 'night';
-    if (scenario === 'far') { vampire.x = crypt.x + BUILDING_SIZE.crypt / 2 + CRYPT.shopRange + 1; vampire.z = crypt.z; }
+    if (scenario === 'far') { vampire.x = crypt.x + CRYPT_RADIUS + 1; vampire.z = crypt.z; }
     if (scenario === 'poor') session.state.vampire.blood = VAMPIRE_ITEMS.claws.baseCost - 1;
     if (scenario === 'dead') { vampire.hp = 0; vampire.dead = true; }
     const before = session.state.vampire.blood;
