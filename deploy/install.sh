@@ -14,21 +14,20 @@ sed -i "s|__APP_DIR__|$(pwd)|g" /etc/systemd/system/vampire-x-humans.service
 systemctl daemon-reload
 systemctl enable --now vampire-x-humans
 
-# Cloudflare Tunnel (Zero Trust): instala o cloudflared e registra o serviço
-# apenas na primeira vez em que um token for informado. O restante da
-# configuração (hostname público → http://localhost:3000) fica no painel
-# do Zero Trust, Networks → Tunnels:
-#   Public hostname: vxh.mediumblue.space → HTTP → localhost:3000
+# Cloudflare Tunnel (Zero Trust): o token identifica o túnel que este conector
+# serve. Se o serviço existente aponta para outro túnel, ele é substituído.
 if [ -n "$TOKEN" ]; then
   if ! command -v cloudflared >/dev/null 2>&1; then
     curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
       -o /usr/local/bin/cloudflared
     chmod +x /usr/local/bin/cloudflared
   fi
-  if ! systemctl cat cloudflared >/dev/null 2>&1; then
+  CURRENT=$(sed -n 's/.*--token \(.*\)$/\1/p' /etc/systemd/system/cloudflared.service 2>/dev/null | tr -d '"' || true)
+  if [ "$CURRENT" != "$TOKEN" ]; then
+    systemctl stop cloudflared 2>/dev/null || true
+    cloudflared service uninstall >/dev/null 2>&1 || true
     cloudflared service install "$TOKEN"
   fi
-  systemctl restart cloudflared
 fi
 
 systemctl restart vampire-x-humans
