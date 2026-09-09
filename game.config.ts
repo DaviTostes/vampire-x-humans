@@ -15,8 +15,8 @@ export interface RefugeConfig {
 
 export const GAME_CONFIG = {
   match: {
-    daySeconds: 45,
-    nightSeconds: 120,
+    daySeconds: 60,
+    nightSeconds: 100,
     nightsToWin: 10,
     startingResources: { wood: 0, gold: 0 },
   },
@@ -76,7 +76,7 @@ export const GAME_CONFIG = {
     },
     taverna: {
       hp: 500, size: 6,
-      cost: { wood: 60, gold: 20, time: 5 },
+      cost: { wood: 40, gold: 20, time: 5 },
       recruit: { wood: 0, gold: 50, time: 2 },
     },
     wall: {
@@ -91,7 +91,7 @@ export const GAME_CONFIG = {
     },
     tower: {
       hp: 300, size: 3,
-      cost: { wood: 70, gold: 40, time: 2 },
+      cost: { wood: 30, gold: 40, time: 2 },
       range: 15, damage: 10, cooldown: 2,
     },
     // Estruturas especiais; keep não aparece no painel por padrão.
