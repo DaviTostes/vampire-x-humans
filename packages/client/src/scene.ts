@@ -16,6 +16,7 @@ import {
 } from '@vampire/shared';
 import { createBuildingModel, createUnitModel, createResourceModel, orientEntranceWall, createPineCanopyGeometry, createRockGeometry, createLanternModel } from './models.js';
 import { RTS_CAMERA } from './camera.js';
+import { UnitReveal } from './unit-reveal.js';
 
 const WORLD_SIZE = WORLD.tiles * WORLD.tileSize;
 
@@ -44,6 +45,7 @@ export class GameScene {
   private buildingSelection: THREE.LineLoop | null = null;
   private towerRanges = new Map<'placement' | 'selection', THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>>();
   private mapOccluders: THREE.Mesh[] = [];
+  private unitReveal = new UnitReveal();
   private animationTime = 0;
   private effects: Array<{ object: THREE.Object3D; age: number; lifetime: number; velocity: THREE.Vector3; spin: boolean; onComplete?: () => void }> = [];
 
@@ -164,6 +166,7 @@ export class GameScene {
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       mesh.position.set(x, base + h / 2, z);
+      this.unitReveal.apply(mesh);
       this.scene.add(mesh);
       return mesh;
     };
@@ -217,9 +220,11 @@ export class GameScene {
     const rocks = new THREE.InstancedMesh(createRockGeometry(), new THREE.MeshLambertMaterial({ color: 0xffffff }), rockTransforms.length);
     rockTransforms.forEach((matrix, i) => { rocks.setMatrixAt(i, matrix); rocks.setColorAt(i, rockColors[i]!); });
     rocks.castShadow = true; rocks.receiveShadow = true;
+    this.unitReveal.apply(rocks);
     this.scene.add(rocks); this.mapOccluders.push(rocks);
     const moss = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(0.8), new THREE.MeshLambertMaterial({ color: '#425341' }), mossTransforms.length);
     mossTransforms.forEach((matrix, i) => moss.setMatrixAt(i, matrix));
+    this.unitReveal.apply(moss);
     this.scene.add(moss);
     const plaza = new THREE.Mesh(new THREE.CircleGeometry(10, 32), new THREE.MeshLambertMaterial({ color: 0x707775 }));
     plaza.rotation.x = -Math.PI / 2;
@@ -305,6 +310,7 @@ export class GameScene {
       }
       if (!g) {
         g = createBuildingModel(b.kind, b.owner, b.done, b.level);
+        this.unitReveal.apply(g);
         if (b.kind === 'wall') orientEntranceWall(g, b.x, b.z);
         g.position.set(b.x, this.heightAt(b.x, b.z), b.z);
         this.buildingMeshes.set(b.id, g);
@@ -354,6 +360,7 @@ export class GameScene {
       let g = this.nodeMeshes.get(nd.id);
       if (!g) {
         g = createResourceModel(nd.kind);
+        this.unitReveal.apply(g);
         g.position.set(nd.x, this.heightAt(nd.x, nd.z), nd.z);
         g.userData.x = nd.x;
         g.userData.z = nd.z;
@@ -405,6 +412,8 @@ export class GameScene {
     );
     trunks.castShadow = true;
     crowns.castShadow = true;
+    this.unitReveal.apply(trunks);
+    this.unitReveal.apply(crowns);
     const m = new THREE.Matrix4();
     const rotation = new THREE.Quaternion(), scale = new THREE.Vector3(), position = new THREE.Vector3();
     const up = new THREE.Vector3(0, 1, 0);
@@ -724,9 +733,27 @@ export class GameScene {
     this.camera.updateMatrixWorld(true);
     this.scene.updateMatrixWorld(true);
     this.raycaster.setFromCamera(new THREE.Vector2(nx, ny), this.camera);
-    // Uma única lista por distância: um nó atrás da casa não captura o clique da casa.
+    // Unidades reveladas têm prioridade sobre copas/telhados que as encobrem.
+    const unitHit = this.raycaster.intersectObjects([...this.unitMeshes.values()], true)[0];
+    if (unitHit) {
+      for (let o: THREE.Object3D | null = unitHit.object; o; o = o.parent) {
+        if (o.userData.pick) return o.userData.pick;
+      }
+    }
+    // Pequena tolerância em pixels, inclusive sob árvores e estruturas.
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    let nearest = 10;
+    let unitId: number | undefined;
+    for (const [id] of this.unitMeshes) {
+      const p = this.unitScreenPosition(id)!;
+      if (p.z < -1 || p.z > 1) continue;
+      const d = Math.hypot((p.x - nx) * rect.width / 2, (p.y - ny) * rect.height / 2);
+      if (d < nearest) { nearest = d; unitId = id; }
+    }
+    if (unitId !== undefined) return { unitId };
+    // Entre estruturas e recursos, conserva a ordem de profundidade.
     const hits = this.raycaster.intersectObjects([
-      ...this.unitMeshes.values(), ...this.buildingMeshes.values(), ...this.nodeMeshes.values(),
+      ...this.buildingMeshes.values(), ...this.nodeMeshes.values(),
       ...(this.woodTrunks ? [this.woodTrunks, this.woodCrowns!] : []),
       ...this.mapOccluders, this.terrain,
     ], true);
@@ -744,21 +771,7 @@ export class GameScene {
         }
       }
     }
-    // Pequena tolerância em pixels para humanos vistos de longe.
-    const rect = this.renderer.domElement.getBoundingClientRect();
-    let nearest = 10;
-    let unitId: number | undefined;
-    for (const [id, g] of this.unitMeshes) {
-      const p = this.unitScreenPosition(id)!;
-      if (p.z < -1 || p.z > 1) continue;
-      const d = Math.hypot((p.x - nx) * rect.width / 2, (p.y - ny) * rect.height / 2);
-      const center = g.position.clone().add(new THREE.Vector3(0, 1, 0));
-      if (d < nearest && (!hit || this.camera.position.distanceTo(center) < hit.distance + 2)) {
-        nearest = d;
-        unitId = id;
-      }
-    }
-    return unitId === undefined ? {} : { unitId };
+    return {};
   }
 
   render(dt: number) {
@@ -833,6 +846,7 @@ export class GameScene {
       const g = this.unitMeshes.get(id);
       if (g) ring.position.set(g.position.x, g.position.y + 0.15, g.position.z);
     }
+    this.unitReveal.update(this.renderer, this.camera, this.unitMeshes);
     this.renderer.render(this.scene, this.camera);
   }
 }

@@ -5,8 +5,13 @@ import type { GameState, Unit } from './types.js';
 export const UNIT_RADIUS = INTERACTION.unitRadius;
 type Point = { x: number; z: number };
 type Goal = Point & { range: number; half: number };
-type Route = { key: string; points: Point[]; retryAt: number };
+type Route = { key: string; order: Unit['order']; points: Point[]; retryAt: number; search?: Generator<void, Point[]> };
+type Collider = Point & { halfX: number; halfZ: number; radius?: number; kind?: string };
 const SIZE = WORLD.tiles * WORLD.tileSize;
+const BUCKET_SIZE = 8;
+const BUCKET_COUNT = Math.ceil(SIZE / BUCKET_SIZE);
+// Orçamento compartilhado por todas as unidades da sala, por tick.
+const PATH_STEPS_PER_TICK = 512;
 
 /** Distância até a borda de um prédio, ou até um ponto. */
 export function distanceToTarget(p: Point, target: Point, half = 0): number {
@@ -19,6 +24,10 @@ export class Navigation {
   private routes = new Map<number, Route>();
   private signature = '';
   private grids = new Map<string, Uint8Array>();
+  private colliders = new Map<number, Collider[]>();
+  private searches: Route[] = [];
+  private searchBudget = PATH_STEPS_PER_TICK;
+  private indexed = false;
 
   constructor(private state: GameState, private map: GameMap) {}
 
@@ -29,6 +38,64 @@ export class Navigation {
       this.signature = signature;
       this.routes.clear();
       this.grids.clear();
+      this.searches = [];
+      this.rebuildColliders();
+    }
+    const units = new Map(this.state.units.map(u => [u.id, u]));
+    for (const [id, route] of this.routes) {
+      const unit = units.get(id);
+      if (!unit || unit.dead || !unit.order || unit.order !== route.order) {
+        route.search = undefined;
+        this.routes.delete(id);
+      }
+    }
+    this.searchBudget = PATH_STEPS_PER_TICK;
+    this.advanceSearches();
+  }
+
+  private rebuildColliders() {
+    this.colliders.clear();
+    const add = (c: Collider) => {
+      const minX = Math.max(0, Math.floor((c.x - c.halfX + WORLD.half) / BUCKET_SIZE));
+      const maxX = Math.min(BUCKET_COUNT - 1, Math.floor((c.x + c.halfX + WORLD.half) / BUCKET_SIZE));
+      const minZ = Math.max(0, Math.floor((c.z - c.halfZ + WORLD.half) / BUCKET_SIZE));
+      const maxZ = Math.min(BUCKET_COUNT - 1, Math.floor((c.z + c.halfZ + WORLD.half) / BUCKET_SIZE));
+      for (let z = minZ; z <= maxZ; z++) for (let x = minX; x <= maxX; x++) {
+        const key = z * BUCKET_COUNT + x;
+        let bucket = this.colliders.get(key);
+        if (!bucket) this.colliders.set(key, bucket = []);
+        bucket.push(c);
+      }
+    };
+    for (const b of this.state.buildings) {
+      const half = BUILDING_SIZE[b.kind] / 2 + UNIT_RADIUS;
+      add({ x: b.x, z: b.z, halfX: half, halfZ: half, kind: b.kind });
+    }
+    for (const wall of this.map.obstacles) {
+      add({ x: wall.x, z: wall.z, halfX: wall.width / 2 + UNIT_RADIUS, halfZ: wall.depth / 2 + UNIT_RADIUS });
+    }
+    for (const n of this.state.nodes) {
+      if (n.amount <= 0) continue;
+      const radius = (n.kind === 'wood' ? INTERACTION.woodCollisionRadius : INTERACTION.goldCollisionRadius) + UNIT_RADIUS;
+      add({ x: n.x, z: n.z, halfX: radius, halfZ: radius, radius });
+    }
+    this.indexed = true;
+  }
+
+  private advanceSearches() {
+    while (this.searchBudget > 0 && this.searches.length) {
+      const route = this.searches.shift()!;
+      if (!route.search) continue;
+      this.searchBudget--;
+      const next = route.search.next();
+      if (next.done) {
+        route.points = next.value;
+        route.search = undefined;
+        route.retryAt = this.state.tick + Math.ceil(INTERACTION.pathRetrySeconds * TICK_RATE);
+      } else {
+        // Rodízio: uma busca sem saída não impede as outras de avançar.
+        this.searches.push(route);
+      }
     }
   }
 
@@ -38,18 +105,13 @@ export class Navigation {
     for (const dx of [-r, 0, r]) {
       for (const dz of [-r, 0, r]) if (isWaterAt(this.map, x + dx, z + dz)) return false;
     }
-    for (const b of this.state.buildings) {
-      if (b.kind === 'crypt' && u.kind === 'vampire') continue;
-      if (b.kind === 'wall' && u.kind === 'worker') continue;
-      const h = BUILDING_SIZE[b.kind] / 2 + r;
-      if (Math.abs(x - b.x) < h && Math.abs(z - b.z) < h) return false;
-    }
-    for (const wall of this.map.obstacles) {
-      if (Math.abs(x - wall.x) < wall.width / 2 + r && Math.abs(z - wall.z) < wall.depth / 2 + r) return false;
-    }
-    for (const n of this.state.nodes) {
-      const radius = (n.kind === 'wood' ? INTERACTION.woodCollisionRadius : INTERACTION.goldCollisionRadius) + r;
-      if (n.amount > 0 && Math.hypot(x - n.x, z - n.z) < radius) return false;
+    if (!this.indexed) this.rebuildColliders();
+    const key = Math.floor((z + WORLD.half) / BUCKET_SIZE) * BUCKET_COUNT + Math.floor((x + WORLD.half) / BUCKET_SIZE);
+    for (const c of this.colliders.get(key) ?? []) {
+      if (c.kind === 'crypt' && u.kind === 'vampire') continue;
+      if (c.kind === 'wall' && u.kind === 'worker') continue;
+      const dx = x - c.x, dz = z - c.z;
+      if (c.radius !== undefined ? dx * dx + dz * dz < c.radius * c.radius : Math.abs(dx) < c.halfX && Math.abs(dz) < c.halfZ) return false;
     }
     return true;
   }
@@ -72,7 +134,7 @@ export class Navigation {
         if (this.canStand(u, x, z)) {
           u.x = x;
           u.z = z;
-          this.routes.delete(u.id);
+          this.cancelRoute(u.id);
           return;
         }
       }
@@ -83,7 +145,7 @@ export class Navigation {
     return { x: index % SIZE - WORLD.half + 0.5, z: Math.floor(index / SIZE) - WORLD.half + 0.5 };
   }
 
-  private findPath(u: Unit, goal: Goal): Point[] {
+  private *findPath(u: Unit, goal: Goal): Generator<void, Point[]> {
     let grid = this.grids.get(u.kind);
     if (!grid) {
       grid = new Uint8Array(SIZE * SIZE);
@@ -98,6 +160,16 @@ export class Navigation {
     };
     const sx = Math.floor(u.x + WORLD.half), sz = Math.floor(u.z + WORLD.half);
     const start = sz * SIZE + sx;
+    // Um clique no meio de um lago/prédio não deve explorar o mapa inteiro.
+    let reachableGoal = false;
+    const reach = goal.half + goal.range;
+    for (let z = Math.max(0, Math.floor(goal.z - reach + WORLD.half)); z < SIZE && z <= goal.z + reach + WORLD.half; z++) {
+      for (let x = Math.max(0, Math.floor(goal.x - reach + WORLD.half)); x < SIZE && x <= goal.x + reach + WORLD.half; x++) {
+        const id = z * SIZE + x;
+        if (distanceToTarget(this.point(id), goal, goal.half) <= goal.range + 0.001 && walkable(id)) reachableGoal = true;
+      }
+    }
+    if (!reachableGoal) return [];
     const costs = new Float64Array(SIZE * SIZE).fill(Infinity);
     const parent = new Int32Array(SIZE * SIZE).fill(-1);
     const closed = new Uint8Array(SIZE * SIZE);
@@ -133,6 +205,7 @@ export class Navigation {
     costs[start] = 0;
     push(start, heuristic(start));
     while (heap.length) {
+      yield;
       const current = pop();
       if (closed[current]) continue;
       closed[current] = 1;
@@ -163,15 +236,26 @@ export class Navigation {
 
   move(u: Unit, x: number, z: number, speed: number, dt: number, range = INTERACTION.moveArrivalRange, half = 0): boolean {
     const goal = { x, z, range, half };
-    if (distanceToTarget(u, goal, half) <= range) return true;
+    if (distanceToTarget(u, goal, half) <= range) { this.cancelRoute(u.id); return true; }
     const key = `${x.toFixed(2)},${z.toFixed(2)},${range},${half}`;
     let route = this.routes.get(u.id);
-    if (!route || route.key !== key || (!route.points.length && this.state.tick >= route.retryAt)) {
+    // Perseguição: deixe a busca terminar e avance antes de recalcular para um
+    // alvo móvel. Cancelar a cada posição recebida impediria o vampiro de andar.
+    const pursuing = route && route.order === u.order && u.order?.t === 'attack' &&
+      (route.search || (route.points.length > 0 && this.state.tick < route.retryAt));
+    if (!route || (route.key !== key && !pursuing) || (!route.search && !route.points.length && this.state.tick >= route.retryAt)) {
+      this.cancelRoute(u.id);
       // Sem obstáculo, conserva o destino exato do clique.
-      const points = !half && this.canStand(u, x, z) && this.clearSegment(u, u, goal)
-        ? [{ x, z }] : this.findPath(u, goal);
-      route = { key, points, retryAt: this.state.tick + Math.ceil(INTERACTION.pathRetrySeconds * TICK_RATE) };
+      const direct = !half && this.canStand(u, x, z) && this.clearSegment(u, u, goal);
+      const points = direct ? [{ x, z }] : [];
+      route = { key, order: u.order, points, retryAt: this.state.tick + Math.ceil(INTERACTION.pathRetrySeconds * TICK_RATE) };
       this.routes.set(u.id, route);
+      if (!direct) {
+        // Captura a origem: a separação de unidades pode movê-la durante a busca.
+        route.search = this.findPath({ ...u }, goal);
+        this.searches.push(route);
+        this.advanceSearches();
+      }
     }
     u.activity = route.points.length ? 'moving' : 'blocked';
     let budget = speed * dt;
@@ -181,7 +265,7 @@ export class Navigation {
       const step = Math.min(distance, budget);
       const p = distance < 0.001 ? next : { x: u.x + (next.x - u.x) * step / distance, z: u.z + (next.z - u.z) * step / distance };
       if (!this.clearSegment(u, u, p)) {
-        this.routes.delete(u.id);
+        this.cancelRoute(u.id);
         break;
       }
       u.x = p.x;
@@ -191,6 +275,12 @@ export class Navigation {
       if (distanceToTarget(u, goal, half) <= range) return true;
     }
     return false;
+  }
+
+  private cancelRoute(id: number) {
+    const route = this.routes.get(id);
+    if (route) route.search = undefined;
+    this.routes.delete(id);
   }
 
   separate(units: Unit[]) {

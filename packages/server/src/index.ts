@@ -152,9 +152,21 @@ wss.on('connection', (ws) => {
 });
 
 const TICK_MS = 1000 / TICK_RATE;
+let lastSlowTickLog = -Infinity;
 setInterval(() => {
+  const started = performance.now();
+  let slowestRoom = '';
+  let slowestMs = 0;
   for (const room of rooms.values()) {
+    const roomStarted = performance.now();
     stepRoom(room);
+    const duration = performance.now() - roomStarted;
+    if (duration > slowestMs) { slowestMs = duration; slowestRoom = room.code; }
+  }
+  const elapsed = performance.now() - started;
+  if (elapsed > TICK_MS && started - lastSlowTickLog >= 5000) {
+    lastSlowTickLog = started;
+    console.warn(`[vampire] tick lento: ${elapsed.toFixed(1)}ms (limite ${TICK_MS.toFixed(1)}ms); sala ${slowestRoom}: ${slowestMs.toFixed(1)}ms`);
   }
 }, TICK_MS);
 
