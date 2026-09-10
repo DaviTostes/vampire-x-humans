@@ -45,6 +45,17 @@ interface LoadedProp {
   template: THREE.Group;
 }
 
+interface BuildingAssetDefinition {
+  /** Kind da construção (ex.: 'goldMine'). */
+  kind: string;
+  src: string;
+  /** Altura alvo em unidades de mundo; o modelo é escalado e apoiado em y=0. */
+  targetHeight?: number;
+  rotationY?: number;
+  /** Multiplicador extra aplicado após encaixar o modelo no footprint da construção. */
+  scale?: number;
+}
+
 const VISUAL_ASSETS: readonly VisualAssetDefinition[] = [
   {
     id: 'unit:vampire:hero',
@@ -93,6 +104,21 @@ const VISUAL_ASSETS: readonly VisualAssetDefinition[] = [
 const PROP_ASSETS: readonly PropAssetDefinition[] = [
   { id: 'prop:rock:stone-cluster', src: 'assets/environment/stone_cluster.glb', targetHeight: 2.35 },
   { id: 'prop:tree:evergreen', src: 'assets/environment/emerald_evergreen.glb', targetHeight: 6.1 },
+];
+
+/** Modelos GLB que substituem o modelo procedural de uma construção. */
+// O encaixe de escala é feito pelo footprint em createBuildingModel.
+const BUILDING_ASSETS: readonly BuildingAssetDefinition[] = [
+  { kind: 'goldMine', src: 'assets/buildings/gold_mine.glb' },
+  // O modelo do muro é baixo; o multiplicador o traz para o tamanho de um portão.
+  { kind: 'wall', src: 'assets/buildings/wall.glb', scale: 3 },
+  { kind: 'market', src: 'assets/buildings/market.glb' },
+  { kind: 'taverna', src: 'assets/buildings/taverna.glb' },
+  { kind: 'bank', src: 'assets/buildings/bank.glb' },
+  { kind: 'tower', src: 'assets/buildings/tower.glb' },
+  // Capela gárgula: novo modelo da Cripta (base do Vampiro). O multiplicador
+  // deixa a base visualmente maior que o footprint padrão.
+  { kind: 'crypt', src: 'assets/buildings/crypt.glb', scale: 1.5 },
 ];
 
 function publicUrl(path: string): string {
@@ -170,7 +196,7 @@ function normalizeVisual(visual: THREE.Group, definition: VisualAssetDefinition)
  * Normaliza props estáticos: escala para a altura alvo e apoia a base em y=0,
  * centralizando em x/z para que posicionamento e instanciamento usem o centro no chão.
  */
-function normalizeProp(visual: THREE.Group, definition: PropAssetDefinition) {
+function normalizeProp(visual: THREE.Group, definition: { targetHeight?: number; rotationY?: number }) {
   visual.updateMatrixWorld(true);
   const size = new THREE.Box3().setFromObject(visual).getSize(new THREE.Vector3());
   if (definition.targetHeight && size.y > 1e-6) visual.scale.multiplyScalar(definition.targetHeight / size.y);
@@ -216,7 +242,7 @@ function firstMaterial(root: THREE.Object3D): THREE.Material | null {
   return found;
 }
 
-export function updateExternalAnimation(root: THREE.Group, requested: AnimationState, dt: number) {
+export function updateExternalAnimation(root: THREE.Group, requested: AnimationState, dt: number, timeScale?: number) {
   const mixer = root.userData.animationMixer as THREE.AnimationMixer | undefined;
   const actions = root.userData.animationActions as Map<AnimationState, THREE.AnimationAction> | undefined;
   if (!mixer || !actions?.size) return;
@@ -225,18 +251,22 @@ export function updateExternalAnimation(root: THREE.Group, requested: AnimationS
     ? requested
     : actions.has('idle') ? 'idle' : undefined;
 
-  if (desired && root.userData.animationState !== desired) {
-    const previousName = root.userData.animationState as AnimationState | undefined;
-    const previous = previousName ? actions.get(previousName) : undefined;
+  if (desired) {
     const next = actions.get(desired)!;
     const scales = root.userData.animationTimeScales as Map<AnimationState, number> | undefined;
-
-    next.enabled = true;
-    next.setLoop(THREE.LoopRepeat, Infinity);
-    next.timeScale = scales?.get(desired) ?? 1;
-    next.reset().fadeIn(0.15).play();
-    previous?.fadeOut(0.15);
-    root.userData.animationState = desired;
+    if (root.userData.animationState !== desired) {
+      const previousName = root.userData.animationState as AnimationState | undefined;
+      const previous = previousName ? actions.get(previousName) : undefined;
+      next.enabled = true;
+      next.setLoop(THREE.LoopRepeat, Infinity);
+      next.timeScale = timeScale ?? scales?.get(desired) ?? 1;
+      next.reset().fadeIn(0.15).play();
+      previous?.fadeOut(0.15);
+      root.userData.animationState = desired;
+    } else if (timeScale !== undefined) {
+      // Ajusta a velocidade em tempo real (ex.: velocidade de ataque do vampiro).
+      next.timeScale = timeScale;
+    }
   }
 
   mixer.update(dt);
@@ -247,6 +277,7 @@ class AssetRegistry {
   private readonly gltfLoader = new GLTFLoader();
   private readonly loaded = new Map<string, LoadedAsset>();
   private readonly props = new Map<string, LoadedProp>();
+  private readonly buildingTemplates = new Map<string, THREE.Group>();
   private preloadPromise: Promise<void> | null = null;
 
   preload(): Promise<void> {
@@ -254,8 +285,18 @@ class AssetRegistry {
     this.preloadPromise = Promise.all([
       ...VISUAL_ASSETS.map((definition) => this.load(definition)),
       ...PROP_ASSETS.map((definition) => this.loadProp(definition)),
+      ...BUILDING_ASSETS.map((definition) => this.loadBuilding(definition)),
     ]).then(() => undefined);
     return this.preloadPromise;
+  }
+
+  /**
+   * Cópia independente do modelo GLB da construção (materiais/texturas
+   * compartilhados). `null` enquanto não carregado — cai no procedural.
+   */
+  buildingTemplate(kind: string): THREE.Group | null {
+    const template = this.buildingTemplates.get(kind);
+    return template ? template.clone(true) as THREE.Group : null;
   }
 
   clone(id: string): THREE.Group | null {
@@ -357,6 +398,20 @@ class AssetRegistry {
     } catch (error) {
       // Sem o prop, createResourceModel e syncWoodNodes caem nos modelos procedurais.
       console.warn(`[assets] Falha ao carregar ${definition.id}; usando modelo procedural.`, error);
+    }
+  }
+
+  private async loadBuilding(definition: BuildingAssetDefinition): Promise<void> {
+    try {
+      const gltf = await this.gltfLoader.loadAsync(publicUrl(definition.src));
+      const template = gltf.scene;
+      prepareMeshes(template);
+      normalizeProp(template, definition);
+      template.userData.buildingScale = definition.scale ?? 1;
+      this.buildingTemplates.set(definition.kind, template);
+    } catch (error) {
+      // Sem o GLB, createBuildingModel usa o modelo procedural da construção.
+      console.warn(`[assets] Falha ao carregar a construção ${definition.kind} (${definition.src}); usando procedural.`, error);
     }
   }
 }

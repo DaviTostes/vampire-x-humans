@@ -17,14 +17,22 @@ export function createGameState(names: string[], _seed = MAP_SEED, playerIds = A
     return { id: owner + 1, owner, kind: vampire ? 'vampire' : 'worker', hero: true, ...position, hp, maxHp: hp,
       order: null, activity: 'idle', carrying: 0, carryRes: null, gatherNodeId: null, attackCd: 0, dead: false };
   });
+  const nodes = RESOURCE_PLACEMENTS.map((node, i) => ({ id: 200 + i, ...node,
+    amount: node.kind === 'wood' ? 600 : 2000, maxAmount: node.kind === 'wood' ? 600 : 2000 }));
+  // Contador de ids O(1) para novos prédios/unidades (evita varrer tudo a cada build).
+  // Começa acima do maior id existente (nós vão até ~700).
+  let nextId = 1;
+  for (const u of units) if (u.id >= nextId) nextId = u.id + 1;
+  for (const n of nodes) if (n.id >= nextId) nextId = n.id + 1;
+  if (100 >= nextId) nextId = 101; // cripta
   return {
     tick: 0, time: 0, phase: 'day', phaseTime: DAY_LENGTH, day: 1, result: null,
-    players: createPlayers(names, ids), units, vampire: { blood: 0, items: {}, skills: {} }, seed: MAP_SEED,
+    players: createPlayers(names, ids), units, vampire: { blood: 0, items: {}, skills: {}, revealUses: 1 }, seed: MAP_SEED,
     buildings: [
       { id: 100, kind: 'crypt', owner: -1, ...CRYPT_POSITION, hp: CRYPT.hp, maxHp: CRYPT.hp,
         level: 1, progress: 1, done: true, builderId: null, goldAcc: 0, attackCd: 0 },
     ],
-    nodes: RESOURCE_PLACEMENTS.map((node, i) => ({ id: 200 + i, ...node,
-      amount: node.kind === 'wood' ? 600 : 2000, maxAmount: node.kind === 'wood' ? 600 : 2000 })),
+    nodes,
+    nextId,
   };
 }

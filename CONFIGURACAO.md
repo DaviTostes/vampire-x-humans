@@ -11,15 +11,25 @@ O arquivo possui comentários em português para ajudar nas alterações.
 | Duração do dia, noite e número de noites para vencer | `match` |
 | Ouro e madeira iniciais | `match.startingResources` |
 | Vida, velocidade, coleta, dano e construção do Humano | `units.human` |
+| Vida, velocidade, dano, Attack Speed (base/máx.) e intervalo do Vampiro | `units.vampire` e `spec.vampireBase` |
 | Os mesmos atributos, mas apenas dos Peões | `units.peon` |
 | Vida, velocidade, dano, regeneração e sangue do Vampiro | `units.vampire` |
-| Preços em sangue, nomes, bônus e limite de cópias dos itens | `vampireItems` |
+| Itens do Vampiro: bônus e custo em sangue por nível (dano/vida/Attack Speed) | `spec.vampireItemTiers` |
+| Sangue ganho por dano e política de arredondamento | `spec.bloodPerDamage` e `spec.roundingPolicy` |
+| Produção em sangue (valor por ciclo) e evolução da Cripta | `spec.crypt` e `buildings.crypt.cycleSeconds` |
 | Custo, tempo, vida e espaço ocupado por uma construção | `buildings.<nome>` |
-| Ouro por ciclo, intervalo de cada nível e melhorias do Banco | `buildings.bank` |
+| Produção em gold/s, custos e pré-requisitos do Banco (níveis 1–8) | `spec.bankLevels` |
+| Custo e vida do Muro por nível (1–11) | `spec.wallLevels` |
+| Custo e dano da Torre por nível (1–7) | `spec.towerLevels` |
 | Custo e tempo de recrutamento de Peões | `buildings.taverna.recruit` |
-| Alcance, dano e intervalo dos ataques da Torre | `buildings.tower` |
+| Treino e pesquisa de Lenhador/Minerador/Reparador e seus limites | `spec.workers` e `spec.entityLimits` |
+| Custo, vida e ouro da Mina de Ouro | `buildings.goldMine` e `spec.goldMine` |
+| Habilidades do Humano (duração, cooldown, alcance) | `spec.humanAbilities` |
+| Habilidades do Vampiro (Revelar Área, Forma de Morcego, Teleport) | `spec.vampireAbilities` |
+| Alcance e intervalo dos ataques da Torre | `buildings.tower` |
 | Construções disponíveis no painel | `buildable` |
-| Quantidades de madeira e ouro trocadas no Muro | `market` |
+| Quantidades de madeira e ouro trocadas no Mercado | `market` |
+| Custo, vida e níveis do Mercado | `buildings.market` |
 | Zoom, inclinação, campo de visão e velocidade da câmera | `camera` |
 | Quantidade padrão e limite de recursos do painel Admin | `admin` |
 | Tamanho do mapa, refúgios, florestas, lagos, rios, pontes, relevo e recursos | `map` |
@@ -31,7 +41,7 @@ O arquivo possui comentários em português para ajudar nas alterações.
 ## Unidades dos valores
 
 - **Tempo:** segundos. `time: 8` significa 8 segundos de trabalho.
-- **Velocidade:** unidades do mapa por segundo.
+- **Velocidade:** unidades do mapa por segundo. O Move Speed da spec (367 no Humano, 400 no Vampiro) usa outra unidade e é convertido por `spec.moveSpeedScale` (âncora: Humano = 7 u/s).
 - **Distância:** unidades do mapa.
 - **Coleta:** `gatherRate` é a quantidade por segundo; `carry` é a quantidade por ciclo.
 - **Construção:** `buildRate: 1` usa o tempo normal; `buildRate: 2` faz essa unidade construir duas vezes mais rápido.
@@ -49,27 +59,64 @@ Na entrada `buildings.wall`, altere:
 cost: { wood: 10, gold: 0, time: 1 },
 ```
 
-### Fazer o Banco produzir mais frequentemente
+### Fazer o Banco produzir mais
 
-Na entrada `buildings.bank`:
+Na seção `spec.bankLevels`, cada nível tem `production` (em **gold/s**) e `upgradeCost` (custo para alcançar aquele nível):
 
 ```ts
-goldPerCycle: 5,
-cycleSecondsByLevel: {
-  1: 5,
-  2: 4,
-  3: 3,
-  4: 2,
-  5: 1.5,
-  6: 1,
+bankLevels: {
+  1: { upgradeCost: null, production: 1, prerequisite: null },
+  2: { upgradeCost: { gold: 50 }, production: 2, prerequisite: { wallLevel: 1 } },
+  // ...
 },
 ```
 
-O Banco gera **5 de ouro em todos os níveis**. Neste exemplo, o nível 1 produz a cada 5 segundos e o nível 6 produz a cada segundo. Diminua o intervalo de um nível para acelerar sua renda.
+O Banco gera ouro continuamente conforme o nível. `prerequisite` define o pré-requisito para alcançar o nível (ex.: `{ wallLevel: 1 }` exige um Muro nível 1; `{ marketLevel: 1 }` exigiria o Mercado, ainda não implementado).
 
-Os intervalos em `cycleSecondsByLevel` são os ciclos econômicos do Banco. Eles são independentes de `simulation.ticksPerSecond`, que controla a frequência da simulação.
+O Muro segue o mesmo formato em `spec.wallLevels` (`cost` + `hp`) e a Torre em `spec.towerLevels` (`cost` + `damage`).
 
-Ao aumentar `maxLevel`, inclua os custos das novas melhorias em `upgradeCosts` e os intervalos dos novos níveis em `cycleSecondsByLevel`. Nos custos, a chave indica o nível de origem: a chave `3` é o custo de melhorar do nível 3 para o 4.
+### Economia do Vampiro (sangue, Cripta e itens)
+
+O Vampiro usa **apenas sangue** como moeda. A especificação chama a recompensa por dano de "ouro", mas aqui ela é convertida em sangue.
+
+- **Sangue por dano** (`spec.bloodPerDamage`, padrão 0,80): o Vampiro recebe sangue sempre que causa dano. O arredondamento fica centralizado em `spec.roundingPolicy` (A CONFIRMAR; hoje usa truncamento).
+- **Cripta** (`spec.crypt`): gera sangue em **ciclos de duração fixa** (`buildings.crypt.cycleSeconds`), igual ao Banco. Cada upgrade aumenta o **sangue por ciclo** (`productionByLevel`: níveis 1–4 = 1/2/4/8), sem acelerar o intervalo. O Vampiro evolui a Cripta com sangue; o custo inicial do nível 1 continua A CONFIRMAR.
+- **Itens** (`spec.vampireItemTiers`): três categorias — **Dano**, **Vida** e **Attack Speed** — compradas com **sangue** na cripta. Attack Speed é limitada ao máximo de 600. Níveis com bônus marcado A CONFIRMAR (Attack Speed 3–6) não podem ser comprados. A política de acúmulo (`accumulation`) está em A CONFIRMAR e hoje é **substitutiva** (o nível novo substitui o anterior).
+
+O sangue também paga a skill legada "Golpe Sombrio" (fora da especificação).
+
+### Habilidades do Vampiro
+
+Em `spec.vampireAbilities`:
+
+- **Revelar Área** (10s): revela uma área no mapa. **1 uso por noite**, sem acúmulo; o uso volta a 1 quando a noite começa. Só pode ser usada à noite.
+- **Invisibilidade / Forma de Morcego**: o Vampiro fica **invulnerável** e mais rápido por até **15s**; ao terminar, há 1,5s de animação de saída.
+- **Teleport para a Base**: canaliza **2,8s** e então retorna à base (posição obtida da cripta/spawn).
+
+**Pendências (A CONFIRMAR):** raio/forma de Revelar Área (provisório: 30), bônus de Move Speed da Forma de Morcego, invulnerabilidade durante a saída e cancelamento manual, e as condições de interrupção do Teleport.
+
+### Habilidades do Humano
+
+Em `spec.humanAbilities`:
+
+- **Enredar** (4s, recarga 32s): o Vampiro não pode atacar.
+- **Fortificar** (8s, recarga 300s): alvo (unidade ou construção própria) fica invulnerável.
+- **Teleporte** (recarga 32s, alcance 600): o Humano se move até o ponto escolhido.
+- **Silenciador** (1,5s, recarga 45s): o Vampiro não pode usar habilidades.
+
+No jogo, selecione o Humano, clique na habilidade e depois no alvo (Vampiro, aliado/construção ou ponto no chão). **Pendência (A CONFIRMAR):** alcance de Enredar/Silenciador não definido — hoje não há verificação de distância para essas duas.
+
+### Trabalhadores (Lenhador, Minerador, Reparador)
+
+A Taverna treina três funções, com limites por jogador em `spec.entityLimits`. **O Humano (herói) não coleta** — só trabalhadores especializados:
+
+- **Lenhador** (máx. 20): coleta madeira. `spec.workers.lumberjack` define o custo de treino (custo do nível 1) e a progressão: `gatherInterval` cai de 8 para 1 segundo mantendo `lumberAmount: 4` por coleta.
+- **Minerador** (máx. 15): custa 2 madeiras, coleta ouro e constrói Minas de Ouro.
+- **Reparador** (máx. 1): repara Muros. `spec.workers.repairer` define custo, `repairSpeed` e `trainingTime` (0 = instantâneo).
+
+Construção: **Lenhador e Reparador não constroem**. O **Humano** ergue todas as construções, exceto a Mina de Ouro; o **Minerador** constrói **apenas** a Mina de Ouro.
+
+A pesquisa de nível é comprada na própria Taverna (comando `upgradeWorker`) e vale para o jogador. **Pendências (A CONFIRMAR):** unidade de `Gather Interval`/`Repair Speed`, custo de treino de Lenhador/Reparador e semântica de progressão por unidade vs. por jogador.
 
 ### Melhorar apenas os Peões
 
@@ -81,7 +128,7 @@ Em `units.peon`, aumente `gatherRate`, `carry` ou `buildRate`. Isso não altera 
 market: { wood: 20, gold: 10 },
 ```
 
-A venda usa 20 de madeira e entrega 10 de ouro; a compra faz a operação inversa. Os botões e a sinalização de recursos insuficientes acompanham os valores.
+A troca acontece no **Mercado** (única construção com essa função): a venda usa 20 de madeira e entrega 10 de ouro; a compra faz a operação inversa. Os botões e a sinalização de recursos insuficientes acompanham os valores.
 
 ### Ajustar o mapa e as vagas
 

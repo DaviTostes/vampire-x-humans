@@ -5,6 +5,9 @@ import { Hud } from './ui.js';
 import { Net } from './net.js';
 import { Lobby } from './lobby.js';
 import { assetRegistry } from './assets/asset-registry.js';
+import { installCursors } from './cursor.js';
+
+installCursors();
 
 const app = document.getElementById('app')!;
 const visualAssetsReady = assetRegistry.preload();

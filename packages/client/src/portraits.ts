@@ -19,6 +19,8 @@ const BUILDING_FILES: Partial<Record<string, string>> = {
   wall: 'wall.jpg',
   tower: 'tower.jpg',
   keep: 'keep.jpg',
+  market: 'market.jpg',
+  goldMine: 'mine.jpg',
   crypt: 'crypt.jpg',
 };
 

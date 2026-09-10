@@ -1,16 +1,22 @@
 // Controles RTS: câmera, seleção, ordens, ghost de construção
 
 import * as THREE from 'three';
-import { BUILDING_SIZE, BUILD_COSTS, BUILDABLE, WORLD, VAMPIRE_PLAYER_ID, VAMPIRE_SKILLS, canPlaceBuilding, type BuildKind, type Snapshot, type VampireSkillId } from '@vampire/shared';
+import { BUILDING_SIZE, BUILD_COSTS, BUILDABLE, WORLD, VAMPIRE_PLAYER_ID, canBuildKind, canPlaceBuilding, type BuildKind, type HumanAbilityId, type Snapshot, type VampireAbilityId } from '@vampire/shared';
 import type { GameScene } from './scene.js';
 import type { Net } from './net.js';
 import { RTS_CAMERA } from './camera.js';
+
+// Keybinds das habilidades: Q/E/R/T (T é a skill ativa do Vampiro).
+const HUMAN_ABILITY_KEYS: Record<string, HumanAbilityId> = { q: 'entangle', e: 'fortify', r: 'teleport', t: 'silencer' };
+const VAMPIRE_ABILITY_KEYS: Record<string, VampireAbilityId> = { q: 'revealArea', e: 'batForm', r: 'teleportHome' };
 
 export class RtsControls {
   selected: number[] = [];
   selectedBuilding: number | null = null;
   inspectedUnit: number | null = null;
   buildMode: BuildKind | null = null;
+  abilityMode: HumanAbilityId | null = null;
+  vampireAbilityMode: VampireAbilityId | null = null;
   private ghost: THREE.Mesh | null = null;
   private buildPointer: { clientX: number; clientY: number } | null = null;
   private pointer: { clientX: number; clientY: number } | null = null;
@@ -42,12 +48,13 @@ export class RtsControls {
       if ((e.target as HTMLElement).matches('input, textarea, select')) return;
       const key = e.key.toLowerCase();
       this.keys.add(key);
-      if (key === 'escape') { this.cancelBuild(); return; }
+      if (key === 'escape') { this.cancelBuild(); this.cancelAbility(); this.cancelVampireAbility(); return; }
       if (e.repeat) return;
       // Espaço: foca e seleciona o personagem principal.
       if (e.code === 'Space') { e.preventDefault(); this.focusHero(); return; }
-      // 1..9: constrói (humano) ou usa habilidade (vampiro).
-      if (/^[1-9]$/.test(key)) this.hotkey(Number(key));
+      // Q/E/R/T: habilidades. Os atalhos 1..9 do painel de comandos são
+      // tratados pela HUD (unidades e construções).
+      if (key === 'q' || key === 'e' || key === 'r' || key === 't') this.abilityHotkey(key);
     });
     window.addEventListener('keyup', (e) => this.keys.delete(e.key.toLowerCase()));
     window.addEventListener('blur', () => {
@@ -68,6 +75,8 @@ export class RtsControls {
     dom.addEventListener('pointerleave', () => {
       this.buildPointer = null;
       this.updateBuildPreview();
+      this.scene.setHoverEnemy(null);
+      this.scene.renderer.domElement.style.cursor = '';
     });
     dom.addEventListener('pointerup', (e) => this.onUp(e));
     dom.addEventListener('pointercancel', () => {
@@ -100,6 +109,8 @@ export class RtsControls {
     );
     cam.position.lerp(desired, Math.min(1, dt * RTS_CAMERA.smoothing));
     cam.lookAt(this.camTarget);
+    // A sombra acompanha o alvo da câmera para manter a resolução concentrada.
+    this.scene.setShadowFocus(this.camTarget.x, this.camTarget.z);
   }
 
   focusOn(x: number, z: number) {
@@ -122,31 +133,35 @@ export class RtsControls {
     this.onSelectionChanged();
   }
 
-  /** Atalhos numéricos: construir (humano) ou lançar habilidade (vampiro). */
-  private hotkey(index: number) {
+  /** Atalhos Q/E/R/T das habilidades (T = skill ativa do Vampiro). */
+  private abilityHotkey(key: string) {
     const snap = this.getSnap();
     if (!snap || snap.result) return;
-    if (this.getMyId() === VAMPIRE_PLAYER_ID) {
-      const skill = (Object.keys(VAMPIRE_SKILLS) as VampireSkillId[])[index - 1];
-      if (skill && snap.vampireSkills?.[skill]) this.net.command({ type: 'castVampireSkill', skillId: skill });
+    const myId = this.getMyId();
+    const isVamp = myId === VAMPIRE_PLAYER_ID;
+    // Habilidades são por classe: exigem o herói humano / vampiro selecionado.
+    const casterSelected = this.selected.some(id => {
+      const unit = snap.units.find(u => u.id === id);
+      if (!unit) return false;
+      return isVamp ? unit.kind === 'vampire' : unit.kind === 'worker' && unit.hero === true;
+    });
+    if (!casterSelected) return;
+    if (isVamp) {
+      const ability = VAMPIRE_ABILITY_KEYS[key];
+      if (ability) {
+        if (ability === 'revealArea') this.enterVampireAbility('revealArea');
+        else this.net.command({ type: 'castVampireAbility', ability });
+        return;
+      }
+      if (key === 't') this.net.command({ type: 'castVampireSkill', skillId: 'powerStrike' });
       return;
     }
-    const kind = BUILDABLE[index - 1];
-    if (!kind) return;
-    if (this.buildMode === kind) { this.cancelBuild(); return; }
-    // Sem trabalhador selecionado, seleciona o principal para não travar o atalho.
-    const hasWorker = snap.units.some(u => u.owner === this.getMyId() && u.kind === 'worker' && this.selected.includes(u.id));
-    if (!hasWorker) {
-      const worker = snap.units.find(u => u.owner === this.getMyId() && u.kind === 'worker' && u.hp > 0);
-      if (worker) {
-        this.selected = [worker.id];
-        this.selectedBuilding = null;
-        this.inspectedUnit = null;
-        this.scene.setSelection(this.selected);
-        this.scene.setBuildingSelection(null);
-      }
-    }
-    this.enterBuild(kind);
+    const id = HUMAN_ABILITY_KEYS[key];
+    if (!id) return;
+    const cd = snap.players.find(p => p.id === myId)?.abilityCooldowns?.[id] ?? 0;
+    if (cd > 0) return;
+    // Alterna o modo de alvo (mesmo fluxo do clique no botão).
+    this.enterAbility(id);
   }
 
   // ---------- mouse ----------
@@ -166,6 +181,14 @@ export class RtsControls {
         this.placeBuild(e);
         return;
       }
+      if (this.abilityMode) {
+        this.castAbility(e);
+        return;
+      }
+      if (this.vampireAbilityMode) {
+        this.castVampireAbility(e);
+        return;
+      }
       this.dragStart = { x: e.clientX, y: e.clientY };
       this.scene.renderer.domElement.setPointerCapture(e.pointerId);
     } else if (e.button === 2) {
@@ -179,6 +202,8 @@ export class RtsControls {
       this.buildPointer = this.pointer;
       this.updateBuildPreview();
     }
+    // Indicador de alvo: retículo vermelho ao passar o mouse sobre um inimigo.
+    if (!this.buildMode) this.updateHoverEnemy(e);
     if (this.dragStart) {
       const x = Math.min(this.dragStart.x, e.clientX);
       const y = Math.min(this.dragStart.y, e.clientY);
@@ -186,6 +211,18 @@ export class RtsControls {
       const h = Math.abs(e.clientY - this.dragStart.y);
       this.dragBox.style.cssText += `display:block; left:${x}px; top:${y}px; width:${w}px; height:${h}px;`;
     }
+  }
+
+  /** Mostra o retículo sobre uma unidade inimiga sob o cursor. */
+  private updateHoverEnemy(e: { clientX: number; clientY: number }) {
+    const n = this.ndc(e);
+    const id = this.scene.unitUnderCursor(n.x, n.y);
+    const snap = this.getSnap();
+    const unit = id !== undefined ? snap?.units.find(u => u.id === id) : undefined;
+    const myId = this.getMyId();
+    const enemy = unit && (unit.owner === VAMPIRE_PLAYER_ID) !== (myId === VAMPIRE_PLAYER_ID) ? unit.id : null;
+    this.scene.setHoverEnemy(enemy);
+    this.scene.renderer.domElement.style.cursor = enemy !== null ? 'crosshair' : '';
   }
 
   private onUp(e: PointerEvent) {
@@ -249,6 +286,8 @@ export class RtsControls {
 
   private rightClick(e: PointerEvent) {
     if (this.buildMode) { this.cancelBuild(); return; }
+    if (this.abilityMode) { this.cancelAbility(); return; }
+    if (this.vampireAbilityMode) { this.cancelVampireAbility(); return; }
     const n = this.ndc(e);
     const ground = this.scene.screenToGround(n.x, n.y);
     if (ground) this.scene.clickMarker(ground.x, ground.z, 0x8fe07a);
@@ -267,6 +306,7 @@ export class RtsControls {
       const u = snap.units.find((uu) => uu.id === pick.unitId);
       if (u && (u.owner === VAMPIRE_PLAYER_ID) !== (this.getMyId() === VAMPIRE_PLAYER_ID)) {
         this.net.command({ type: 'attack', ids: this.selected, targetId: pick.unitId });
+        this.scene.clickMarker(u.x, u.z, 0xff5a5a);
         return;
       }
     }
@@ -274,6 +314,12 @@ export class RtsControls {
       const b = snap.buildings.find((bb) => bb.id === pick.buildingId);
       if (b && b.owner >= 0 && (b.owner === VAMPIRE_PLAYER_ID) !== (this.getMyId() === VAMPIRE_PLAYER_ID)) {
         this.net.command({ type: 'attack', ids: this.selected, targetId: pick.buildingId });
+        this.scene.clickMarker(b.x, b.z, 0xff5a5a);
+        return;
+      }
+      // Mina de Ouro própria e concluída: clicar inicia a extração (comando gather).
+      if (b && b.done && b.kind === 'goldMine' && b.owner === this.getMyId() && this.getMyId() !== VAMPIRE_PLAYER_ID) {
+        this.net.command({ type: 'gather', ids: this.selected, nodeId: b.id });
         return;
       }
       if (b && !b.done && b.owner === this.getMyId()) {
@@ -307,7 +353,7 @@ export class RtsControls {
 
   enterBuild(kind: BuildKind) {
     const snap = this.getSnap();
-    if (!snap?.units.some(u => u.owner === this.getMyId() && u.kind === 'worker' && this.selected.includes(u.id))) return;
+    if (!snap?.units.some(u => u.owner === this.getMyId() && this.selected.includes(u.id) && canBuildKind(u, kind))) return;
     this.cancelBuild();
     this.buildMode = kind;
     const size = BUILDING_SIZE[kind];
@@ -345,7 +391,7 @@ export class RtsControls {
     this.buildTarget = { x, z };
     const me = snap.players.find(p => p.id === this.getMyId());
     const cost = BUILD_COSTS[this.buildMode];
-    const hasBuilder = snap.units.some(u => u.owner === this.getMyId() && u.kind === 'worker' && this.selected.includes(u.id));
+    const hasBuilder = snap.units.some(u => u.owner === this.getMyId() && this.selected.includes(u.id) && canBuildKind(u, this.buildMode!));
     this.buildValid = !!me && !snap.result && hasBuilder && me.wood >= cost.wood && me.gold >= cost.gold &&
       canPlaceBuilding(this.scene.map, snap, this.buildMode, x, z);
     const color = this.buildValid ? 0x6ad66a : 0xff4b4b;
@@ -368,6 +414,74 @@ export class RtsControls {
     this.buildValid = false;
     this.scene.setTowerRange('placement', null);
     this.onSelectionChanged();
+  }
+
+  /** Ativa/desativa o modo de alvo de uma habilidade do Humano. */
+  enterAbility(id: HumanAbilityId) {
+    if (this.getMyId() === VAMPIRE_PLAYER_ID) return;
+    const snap = this.getSnap();
+    const hero = snap?.units.find(u => u.owner === this.getMyId() && u.kind === 'worker' && u.hero && u.hp > 0);
+    if (!hero) return;
+    this.cancelBuild();
+    this.abilityMode = this.abilityMode === id ? null : id;
+    this.onSelectionChanged();
+  }
+
+  cancelAbility() {
+    if (!this.abilityMode) return;
+    this.abilityMode = null;
+    this.onSelectionChanged();
+  }
+
+  private castAbility(e: PointerEvent) {
+    const id = this.abilityMode;
+    if (!id) return;
+    const snap = this.getSnap();
+    if (!snap) return;
+    const n = this.ndc(e);
+    const pick = this.scene.pickAt(n.x, n.y);
+    if (id === 'teleport') {
+      const hit = this.scene.screenToGround(n.x, n.y);
+      if (!hit) return;
+      this.net.command({ type: 'castHumanAbility', ability: 'teleport', x: hit.x, z: hit.z });
+    } else if (id === 'entangle' || id === 'silencer') {
+      const target = pick.unitId !== undefined ? snap.units.find(u => u.id === pick.unitId) : undefined;
+      if (!target || target.kind !== 'vampire') return;
+      this.net.command({ type: 'castHumanAbility', ability: id, targetId: target.id });
+    } else {
+      const targetId = pick.unitId ?? pick.buildingId;
+      if (targetId === undefined) return;
+      const unit = snap.units.find(u => u.id === targetId);
+      const bld = snap.buildings.find(b => b.id === targetId);
+      if (!(unit?.owner === this.getMyId() || bld?.owner === this.getMyId())) return;
+      this.net.command({ type: 'castHumanAbility', ability: 'fortify', targetId });
+    }
+    this.cancelAbility();
+  }
+
+  /** Modo de alvo no chão para Revelar Área (habilidade do Vampiro). */
+  enterVampireAbility(id: VampireAbilityId) {
+    if (this.getMyId() !== VAMPIRE_PLAYER_ID) return;
+    this.cancelBuild();
+    this.cancelAbility();
+    this.vampireAbilityMode = this.vampireAbilityMode === id ? null : id;
+    this.onSelectionChanged();
+  }
+
+  cancelVampireAbility() {
+    if (!this.vampireAbilityMode) return;
+    this.vampireAbilityMode = null;
+    this.onSelectionChanged();
+  }
+
+  private castVampireAbility(e: PointerEvent) {
+    const id = this.vampireAbilityMode;
+    if (!id) return;
+    const n = this.ndc(e);
+    const hit = this.scene.screenToGround(n.x, n.y);
+    if (!hit) return;
+    this.net.command({ type: 'castVampireAbility', ability: id, x: hit.x, z: hit.z });
+    this.cancelVampireAbility();
   }
 
   private placeBuild(e: PointerEvent) {

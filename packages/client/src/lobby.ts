@@ -7,9 +7,19 @@ function escapeHtml(value: string) {
   return value.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 }
 
+const NAME_STORAGE_KEY = 'vxh.playerName';
+
+function loadName() {
+  try { return localStorage.getItem(NAME_STORAGE_KEY)?.slice(0, 24) ?? ''; } catch { return ''; }
+}
+
+function saveName(name: string) {
+  try { localStorage.setItem(NAME_STORAGE_KEY, name); } catch { /* armazenamento indisponível */ }
+}
+
 export class Lobby {
   private el = document.createElement('div');
-  private name = '';
+  private name = loadName();
   private code = '';
   private copyMessage = '';
   private unsubscribe: () => void;
@@ -20,7 +30,7 @@ export class Lobby {
     this.unsubscribe = net.subscribe(() => this.render());
     this.el.addEventListener('input', e => {
       const input = e.target as HTMLInputElement;
-      if (input.id === 'v-name') this.name = input.value;
+      if (input.id === 'v-name') { this.name = input.value; saveName(this.name); }
       if (input.id === 'v-code') {
         this.code = input.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, GAME_CONFIG.lobby.codeLength);
         input.value = this.code;

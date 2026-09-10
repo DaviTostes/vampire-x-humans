@@ -11,20 +11,40 @@ import {
   NIGHT_LENGTH,
   MARKET,
   BUILD_COSTS,
-  BANK_UPGRADE_COST,
-  WALL_UPGRADE_COST,
   WALL_MAX_LEVEL,
+  TOWER_MAX_LEVEL,
+  MARKET_MAX_LEVEL,
   wallMaxHp,
-  BANK,
+  wallUpgradeCost,
+  marketUpgradeCost,
+  bankUpgradeCost,
+  bankPrerequisite,
+  towerUpgradeCost,
+  towerDamage,
+  meetsPrerequisite,
+  canBuildKind,
+  HUMAN_ABILITIES,
+  SPEC_CRYPT,
+  workerTrainCost,
+  workerUpgradeCost,
+  workerMaxLevel,
+  repairerTrainingTime,
+  SPEC_ENTITY_LIMITS,
   RECRUIT,
   BUILD_MAX_LEVEL,
   bankProduction,
-  bankCycleSeconds,
+  BANK_CYCLE_SECONDS,
+  cryptProduction,
+  CRYPT_CYCLE_SECONDS,
   BRIDGES,
   distanceToTrails,
   type BuildingKind,
   type BuildKind,
+  type HumanAbilityId,
+  type SpecPrerequisite,
   type Snapshot,
+  type VampireAbilityId,
+  type WorkerRole,
 } from '@vampire/shared';
 import type { GameScene } from './scene.js';
 import type { RtsControls } from './rts.js';
@@ -34,20 +54,35 @@ import { activityLabel, resourceLabel } from './activity.js';
 import { AdminPanel } from './admin.js';
 import hudTheme from './hud-theme.css?inline';
 import { commandArt, factionCrest } from './hud-icons.js';
-import { VAMPIRE_ITEMS, VAMPIRE_SKILLS, vampireEffectiveCooldown, vampireEffectiveSpeed, vampireItemBonuses, vampireItemCost, vampireShopAccess, vampireSkillMultiplier, type VampireItemId, type VampireSkillId } from '@vampire/shared';
+import { VAMPIRE_ITEM_IDS, VAMPIRE_ITEM_INFO, VAMPIRE_SKILLS, vampireAttackSpeed, vampireEffectiveCooldown, vampireEffectiveSpeed, vampireItemBonuses, vampireItemCost, vampireItemBonus, vampireItemMaxLevel, vampireItemNextLevel, vampireShopAccess, vampireSkillMultiplier, type VampireItemId, type VampireSkillId } from '@vampire/shared';
 
+const WORKER_ROLE_NAMES: Record<WorkerRole, string> = {
+  lumberjack: 'Lenhador', miner: 'Minerador', repairer: 'Reparador',
+};
+const WORKER_ROLES: WorkerRole[] = ['lumberjack', 'miner', 'repairer'];
+const HUMAN_ABILITY_IDS: HumanAbilityId[] = ['entangle', 'fortify', 'teleport', 'silencer'];
+const HUMAN_ABILITY_KEYS = ['Q', 'E', 'R', 'T'];
+const VAMPIRE_ABILITY_KEYS: Record<string, string> = { revealArea: 'Q', batForm: 'E', teleportHome: 'R' };
+
+function unitDisplayName(u: { kind: string; hero?: boolean; workerRole?: WorkerRole }): string {
+  if (u.kind === 'vampire') return 'Vampiro';
+  if (u.hero === false) return u.workerRole ? WORKER_ROLE_NAMES[u.workerRole] : 'Peão';
+  return 'Humano';
+}
 const BUILDING_NAMES: Record<BuildingKind, string> = {
-  keep: 'Sede da vila', bank: 'Banco', taverna: 'Taverna', wall: 'Muro', tower: 'Torre', crypt: 'Cripta do Vampiro',
+  keep: 'Sede da vila', bank: 'Banco', taverna: 'Taverna', wall: 'Muro', tower: 'Torre',
+  goldMine: 'Mina de Ouro', market: 'Mercado', crypt: 'Cripta do Vampiro',
 };
 const BUILDING_HELP: Record<BuildingKind, string> = {
   keep: 'Base principal da vila.',
-  bank: `Gera ${BANK.goldPerCycle} de ouro por ciclo desde o nível 1. As melhorias reduzem o intervalo.`,
+  bank: 'Gera ouro a cada ciclo; o valor dobra a cada melhoria (1 → 2 → 4…).',
   taverna: 'Recruta Peões auxiliares para coletar e construir.',
-  wall: 'Humanos atravessam; o vampiro precisa destruí-lo. Selecione para comprar e vender recursos.', tower: 'Ataca o vampiro automaticamente quando ele entra no alcance.',
+  wall: 'Humanos atravessam; o vampiro precisa destruí-lo.', tower: 'Ataca o vampiro automaticamente quando ele entra no alcance.',
+  market: 'Única construção onde se troca madeira por ouro e vice-versa.',
+  goldMine: 'Fonte de ouro: o Minerador extrai ouro dela.',
   crypt: 'Base do Vampiro. Compre itens e desbloqueie skills durante o dia.',
 };
-// Itens vendidos na cripta.
-const VAMPIRE_ITEM_IDS = (Object.keys(VAMPIRE_ITEMS) as VampireItemId[]);
+// Itens vendidos na cripta (dano/vida/Attack Speed).
 
 const CSS = `
 .vxh-hud { position: fixed; inset: 0; pointer-events: none; z-index: 20;
@@ -244,12 +279,21 @@ export class Hud {
   private clock!: HTMLDivElement;
   private selInfo!: HTMLDivElement;
   private cmdPanel!: HTMLDivElement;
+  private abilityPanel!: HTMLDivElement;
+  private abilityBlock!: HTMLDivElement;
   private minimap!: HTMLCanvasElement;
   private resultEl: HTMLDivElement | null = null;
   private quitModal!: HTMLDivElement;
+  private feedEl!: HTMLDivElement;
+  private tipEl!: HTMLDivElement;
+  private tipTitle!: HTMLDivElement;
+  private tipBody!: HTMLDivElement;
   private shownResult: string | null = null;
   private admin: AdminPanel;
   private portraitKind: string | null = null;
+  // Rastreio de unidades humanas para avisar a todos quando uma tomba.
+  private knownHumanUnits = new Map<number, { owner: number; kind: string; hero?: boolean; x: number; z: number }>();
+  private deathMarks: Array<{ x: number; z: number; until: number }> = [];
 
   constructor(
     private scene: GameScene,
@@ -281,9 +325,18 @@ export class Hud {
         <div class="vxh-statbar healthbar"><i style="width:100%"></i><span>—</span></div>
         <div class="vxh-activity vxh-portrait-activity">—</div>
       </div>
-      <div class="vxh-frame vxh-sheet"><div class="vxh-sheet-heading">ATRIBUTOS</div><div class="vxh-selinfo"></div></div>
+      <div class="vxh-frame vxh-sheet">
+        <div class="vxh-sheet-heading">ATRIBUTOS</div>
+        <div class="vxh-selinfo"></div>
+        <div class="vxh-abilities-block">
+          <div class="vxh-abilities-heading">HABILIDADES</div>
+          <div class="vxh-abilities-grid"></div>
+        </div>
+      </div>
       <div class="vxh-frame vxh-commands"><div class="vxh-commands-heading">VAMPIRE × HUMANS</div><div class="vxh-panel"></div></div>
       </div>
+      <div class="vxh-feed" aria-live="polite"></div>
+      <div class="vxh-tip" hidden><div class="vxh-tip-title"></div><div class="vxh-tip-body"></div></div>
     `;
     document.body.appendChild(this.el);
     this.admin = new AdminPanel(this.el, net);
@@ -310,7 +363,13 @@ export class Hud {
     this.clock = this.el.querySelector('.vxh-clock')!;
     this.selInfo = this.el.querySelector('.vxh-selinfo')!;
     this.cmdPanel = this.el.querySelector('.vxh-panel')!;
+    this.abilityPanel = this.el.querySelector('.vxh-abilities-grid')!;
+    this.abilityBlock = this.el.querySelector('.vxh-abilities-block')!;
     this.minimap = this.el.querySelector('.vxh-minimap')!;
+    this.feedEl = this.el.querySelector('.vxh-feed')!;
+    this.tipEl = this.el.querySelector('.vxh-tip')!;
+    this.tipTitle = this.el.querySelector('.vxh-tip-title')!;
+    this.tipBody = this.el.querySelector('.vxh-tip-body')!;
     this.el.querySelector('.vxh-hero')!.addEventListener('click', () => {
       const unit = this.net.latestSnap?.units.find(u => u.owner === this.getMyId());
       if (!unit) return;
@@ -338,13 +397,21 @@ export class Hud {
     });
 
     // Delegação mantém o clique válido enquanto chegam snapshots.
-    this.cmdPanel.addEventListener('click', (e) => {
+    const onPanelClick = (e: Event) => {
       const b = (e.target as HTMLElement).closest<HTMLButtonElement>('button');
       if (!b || b.disabled) return;
       if (b.dataset.build) this.controls.enterBuild(b.dataset.build as BuildKind);
       if (b.dataset.market) this.net.command({ type: 'market', targetId: Number(b.dataset.marketTarget), trade: b.dataset.market as 'woodToGold' | 'goldToWood', amount: b.dataset.market === 'woodToGold' ? MARKET.wood : MARKET.gold });
       if (b.dataset.upgrade) this.net.command({ type: 'upgrade', ids: [], targetId: Number(b.dataset.upgrade) });
       if (b.dataset.recruit) this.net.command({ type: 'recruit', targetId: Number(b.dataset.recruit) });
+      if (b.dataset.recruitRole) this.net.command({ type: 'recruit', targetId: Number(b.dataset.recruitTarget), role: b.dataset.recruitRole as WorkerRole });
+      if (b.dataset.upgradeWorker) this.net.command({ type: 'upgradeWorker', targetId: Number(b.dataset.recruitTarget), role: b.dataset.upgradeWorker as WorkerRole });
+      if (b.dataset.humanAbility) this.controls.enterAbility(b.dataset.humanAbility as HumanAbilityId);
+      if (b.dataset.vampireAbility) {
+        const ability = b.dataset.vampireAbility as VampireAbilityId;
+        if (ability === 'revealArea') this.controls.enterVampireAbility('revealArea');
+        else this.net.command({ type: 'castVampireAbility', ability });
+      }
       if (b.dataset.vampireItem) this.net.command({ type: 'buyVampireItem', cryptId: Number(b.dataset.crypt), itemId: b.dataset.vampireItem as VampireItemId });
       if (b.dataset.vampireSkillBuy) this.net.command({ type: 'buyVampireSkill', cryptId: Number(b.dataset.crypt), skillId: b.dataset.vampireSkillBuy as VampireSkillId });
       if (b.dataset.vampireSkillCast) this.net.command({ type: 'castVampireSkill', skillId: b.dataset.vampireSkillCast as VampireSkillId });
@@ -359,10 +426,49 @@ export class Hud {
       if (b.dataset.repair) {
         const snap = this.net.latestSnap;
         const wall = snap?.buildings.find(w => w.id === Number(b.dataset.repair));
-        const workers = wall && snap?.units.filter(u => u.owner === this.getMyId() && u.kind === 'worker')
+        const canRepair = (role?: WorkerRole) => role === undefined || role === 'repairer';
+        const workers = wall && snap?.units.filter(u => u.owner === this.getMyId() && u.kind === 'worker' && canRepair(u.workerRole))
           .sort((a, c) => Math.hypot(a.x - wall.x, a.z - wall.z) - Math.hypot(c.x - wall.x, c.z - wall.z)).slice(0, 3).map(u => u.id);
         if (workers?.length && wall) this.net.command({ type: 'repair', ids: workers, targetId: wall.id });
       }
+      if (b.dataset.demolish) this.net.command({ type: 'demolish', targetId: Number(b.dataset.demolish) });
+    };
+    this.cmdPanel.addEventListener('click', onPanelClick);
+    this.abilityPanel.addEventListener('click', onPanelClick);
+
+    // Tooltip das habilidades: quadrados só com ícone, a descrição aparece no hover.
+    const showTip = (btn: HTMLElement) => {
+      const title = btn.dataset.tipTitle ?? '';
+      const body = btn.dataset.tipBody ?? '';
+      if (!title && !body) { this.tipEl.hidden = true; return; }
+      this.tipTitle.textContent = title;
+      this.tipBody.textContent = body;
+      this.tipBody.hidden = body === '';
+      this.tipEl.hidden = false;
+      const rect = btn.getBoundingClientRect();
+      const tip = this.tipEl.getBoundingClientRect();
+      const left = Math.max(8, Math.min(window.innerWidth - tip.width - 8, rect.left + rect.width / 2 - tip.width / 2));
+      let top = rect.top - tip.height - 8;
+      if (top < 8) top = rect.bottom + 8;
+      this.tipEl.style.left = `${left}px`;
+      this.tipEl.style.top = `${top}px`;
+    };
+    const hideTip = () => { this.tipEl.hidden = true; };
+    this.abilityPanel.addEventListener('mouseover', (e) => {
+      const btn = (e.target as HTMLElement).closest<HTMLElement>('button[data-tip-title]');
+      if (btn) showTip(btn); else hideTip();
+    });
+    this.abilityPanel.addEventListener('mouseleave', hideTip);
+    this.abilityPanel.addEventListener('click', hideTip);
+
+    // Atalhos 1..9: acionam o botão correspondente do painel de comandos
+    // (construções de unidade ou ações de construção selecionada).
+    window.addEventListener('keydown', (e) => {
+      if (e.repeat) return;
+      if ((e.target as HTMLElement).matches('input, textarea, select')) return;
+      if (!/^[1-9]$/.test(e.key)) return;
+      const btn = this.cmdPanel.querySelector<HTMLButtonElement>(`button[data-hotkey="${e.key}"]`);
+      if (btn && !btn.disabled) { e.preventDefault(); btn.click(); }
     });
 
     this.minimap.addEventListener('pointerdown', (e) => {
@@ -375,6 +481,7 @@ export class Hud {
 
   update(snap: Snapshot, myId: number) {
     this.admin.update(snap);
+    this.detectDeaths(snap);
     const me = snap.players.find((p) => p.id === myId);
     if (me) {
       this.gold.textContent = String(me.gold);
@@ -382,6 +489,7 @@ export class Hud {
     }
     const isVamp = myId === VAMPIRE_PLAYER_ID;
     this.el.dataset.phase = snap.phase;
+    // O Vampiro usa apenas SANGUE; madeira e ouro ficam ocultos.
     this.el.querySelector<HTMLElement>('[data-blood]')!.style.display = isVamp ? 'flex' : 'none';
     for (const res of this.el.querySelectorAll<HTMLElement>('.vxh-topbar .res[data-wood], .vxh-topbar .res[data-gold]'))
       res.style.display = isVamp ? 'none' : 'flex';
@@ -403,17 +511,19 @@ export class Hud {
     if (building) {
       this.selInfo.innerHTML = `<b>${BUILDING_NAMES[building.kind]} · nível ${building.level}</b>
         <div>${building.hp}/${building.maxHp} HP${building.done ? '' : ` · Obra: ${Math.floor(building.progress * 100)}%`}</div>
-        ${building.kind === 'bank' && building.done ? `<div>Produção: ${bankProduction()} ouro / ${bankCycleSeconds(building.level)}s</div>` : ''}
+        ${building.kind === 'bank' && building.done ? `<div>Produção: ${bankProduction(building.level)} ouro / ${BANK_CYCLE_SECONDS}s</div>` : ''}
+        ${building.kind === 'crypt' && building.done ? `<div>Produção: ${cryptProduction(building.level)} sangue / ${CRYPT_CYCLE_SECONDS}s</div>` : ''}
         ${building.kind === 'wall' && building.done ? `<div>Vida máxima: ${building.maxHp}${building.level < WALL_MAX_LEVEL ? ` · Nível ${building.level + 1}: ${wallMaxHp(building.level + 1)} HP` : ' · Nível máximo'}</div>` : ''}
         ${building.kind === 'wall' && building.done && building.hp < building.maxHp ? `<div class="vxh-activity">Danificado — clique com o botão direito com um Humano/Peão para reparar</div>` : ''}`;
       if (building.recruitment) {
         const progress = 1 - building.recruitment.remaining / building.recruitment.total;
-        this.selInfo.innerHTML += `<div class="vxh-activity">${building.recruitment.remaining > 0 ? `Recrutando Peão · ${Math.ceil(building.recruitment.remaining)}s` : 'Aguardando uma saída livre'}</div>
+        const recruitingName = building.recruitment.role ? WORKER_ROLE_NAMES[building.recruitment.role] : 'Peão';
+        this.selInfo.innerHTML += `<div class="vxh-activity">${building.recruitment.remaining > 0 ? `Treinando ${recruitingName} · ${Math.ceil(building.recruitment.remaining)}s` : 'Aguardando uma saída livre'}</div>
           <div class="vxh-progress"><div style="width:${progress * 100}%"></div></div>`;
       }
       if (building.kind === 'tower') {
         const vampire = snap.units.find(u => u.kind === 'vampire' && Math.hypot(u.x - building.x, u.z - building.z) <= TOWER.range);
-        this.selInfo.innerHTML += `<div>Alcance: ${TOWER.range} · Dano: ${TOWER.damage} / ${TOWER.cooldown}s</div>
+        this.selInfo.innerHTML += `<div>Alcance: ${TOWER.range} · Dano: ${towerDamage(building.level)} / ${TOWER.cooldown}s</div>
           <div class="vxh-activity">${!building.done ? 'Aguardando conclusão da obra' : vampire ? `Alvo: Vampiro — ${vampire.hp}/${vampire.maxHp} HP` : 'Sem alvo no alcance'}</div>`;
       }
       if (building.kind === 'crypt') {
@@ -430,7 +540,7 @@ export class Hud {
       this.selInfo.innerHTML = sel
         .map(
           (u) =>
-            `<b>${u!.kind === 'vampire' ? 'Vampiro' : u!.hero === false ? 'Peão' : 'Humano'}</b><div>${u!.hp}/${u!.maxHp} HP</div>`,
+            `<b>${unitDisplayName(u!)}</b><div>${u!.hp}/${u!.maxHp} HP</div>`,
         )
         .join('');
       const unit = sel[0];
@@ -438,10 +548,21 @@ export class Hud {
         const bonus = vampireItemBonuses(snap.vampireItems);
         const damage = (VAMPIRE.attackDamage + bonus.damage) * vampireSkillMultiplier(snap.vampireSkills) * (snap.phase === 'night' ? 1 : VAMPIRE.dayDamageMultiplier);
         const speed = vampireEffectiveSpeed(snap.phase, snap.vampireItems);
+        const attackSpeed = vampireAttackSpeed(snap.vampireItems);
         const cooldown = vampireEffectiveCooldown(snap.vampireItems);
         const buff = (snap.vampireSkills?.powerStrike?.buff ?? 0) > 0 ? ` · 💥 Golpe ativo (${Math.ceil(snap.vampireSkills!.powerStrike!.buff)}s)` : '';
         this.selInfo.innerHTML += `<div>Sangue: ${snap.blood} · Dano: ${Math.round(damage * 10) / 10}${buff}</div>
-          <div>Bônus: +${bonus.damage} dano · +${bonus.health} vida · +${Math.round(bonus.moveSpeed * 10) / 10} veloc. · ataque a cada ${Math.round(cooldown * 100) / 100}s</div>${this.inventoryMarkup(snap)}`;
+          <div>Bônus: +${bonus.damage} dano · +${bonus.health} vida · +${bonus.attackSpeed} vel. ataque (AS ${Math.round(attackSpeed)})</div>
+          <div>Velocidade: ${Math.round(speed * 10) / 10} · ataque a cada ${Math.round(cooldown * 100) / 100}s</div>${this.inventoryMarkup(snap)}`;
+        const st = snap.vampireStatuses;
+        const parts = [
+          (st?.entangled ?? 0) > 0 ? `Enredado (${Math.ceil(st!.entangled!)}s)` : '',
+          (st?.silenced ?? 0) > 0 ? `Silenciado (${Math.ceil(st!.silenced!)}s)` : '',
+          (st?.batForm ?? 0) > 0 ? `Forma de Morcego (${Math.ceil(st!.batForm!)}s)` : '',
+          (st?.exitingBatForm ?? 0) > 0 ? 'Retornando da Forma de Morcego' : '',
+          (st?.channelingTeleport ?? 0) > 0 ? `Canalizando Teleport (${Math.ceil(st!.channelingTeleport!)}s)` : '',
+        ].filter(Boolean);
+        if (parts.length) this.selInfo.innerHTML += `<div class="vxh-activity">${parts.join(' · ')}</div>`;
       }
       const site = snap.buildings.find(b => b.id === unit?.targetId && !b.done);
       if (site && unit?.orderType === 'build') {
@@ -468,7 +589,7 @@ export class Hud {
         : unitPortrait(portraitKey.slice(2) as UnitPortraitKind);
     }
     this.el.querySelector<HTMLElement>('.vxh-portrait .name')!.textContent = building ? BUILDING_NAMES[building.kind] :
-      sel[0] ? (sel[0].kind === 'vampire' ? 'Vampiro' : sel[0].hero === false ? 'Peão' : 'Humano') : 'Selecione uma unidade';
+      sel[0] ? unitDisplayName(sel[0]) : 'Selecione uma unidade';
     this.el.querySelector<HTMLElement>('.healthbar > i')!.style.width = `${focus ? Math.max(0, focus.hp / focus.maxHp * 100) : 0}%`;
     this.el.querySelector<HTMLElement>('.healthbar > span')!.textContent = focus ? `${focus.hp} / ${focus.maxHp}` : 'Sem seleção';
     // Ação da unidade logo abaixo da vida, no painel do retrato.
@@ -477,6 +598,7 @@ export class Hud {
     this.el.querySelector<HTMLElement>('.vxh-hero .vxh-bar > div')!.style.width = `${hero ? Math.max(0, hero.hp / hero.maxHp * 100) : 0}%`;
 
     this.renderCmdPanel(snap, myId, sel.length > 0);
+    this.renderAbilities(snap, myId);
     this.renderMinimap(snap, myId);
 
     if (snap.result && !this.resultEl) {
@@ -494,6 +616,10 @@ export class Hud {
       const { icon, name } = resourceLabel(kind);
       return `<span class="vxh-resource-cost ${missing > 0 ? 'vxh-resource-missing' : ''}" data-resource="${kind}" title="${missing > 0 ? `Faltam ${missing} de ${name}` : `${name}: suficiente`}">${amount}${icon}</span>`;
     };
+    const normalizeCost = (cost: { wood?: number; gold?: number } | null | undefined) => ({ wood: cost?.wood ?? 0, gold: cost?.gold ?? 0 });
+    const prereqText = (prereq: SpecPrerequisite) => !prereq ? ''
+      : prereq.wallLevel !== undefined ? `Requer Muro nível ${prereq.wallLevel}`
+        : prereq.marketLevel !== undefined ? `Requer Mercado nível ${prereq.marketLevel} (A CONFIRMAR)` : '';
     const costMarkup = (cost: { wood: number; gold: number }) =>
       [cost.wood > 0 ? resourceCost('wood', cost.wood) : '', cost.gold > 0 ? resourceCost('gold', cost.gold) : ''].filter(Boolean).join(' ');
     const shortageText = (cost: { wood: number; gold: number }) => (['wood', 'gold'] as const)
@@ -515,34 +641,58 @@ export class Hud {
         const hasWorker = snap.units.some(u => u.owner === myId && u.kind === 'worker');
         html = `<button class="vxh-btn" data-resume="${building.id}" ${hasWorker ? '' : 'disabled'}>🔨 Retomar obra<small>Enviar seu Humano</small></button>`;
       } else if (building.owner === myId && building.kind === 'bank') {
-        const cost = BANK_UPGRADE_COST[building.level];
         const max = building.level >= BUILD_MAX_LEVEL;
-        const afford = cost && me && me.wood >= cost.wood && me.gold >= cost.gold;
-        html = `<button class="vxh-btn ${!max && !afford ? 'vxh-unavailable' : ''}" title="${!max && !afford && cost ? shortageText(cost) : 'Melhoria do Banco'}" data-upgrade="${building.id}" ${!max && afford ? '' : 'disabled'}>
-          ${max ? 'Nível máximo' : `Melhorar para nível ${building.level + 1}`}<small>${!max && cost ? costMarkup(cost) : ''}</small></button>`;
+        const nextLevel = building.level + 1;
+        const cost = normalizeCost(bankUpgradeCost(building.level));
+        const prereq = bankPrerequisite(building.level);
+        const prereqOk = meetsPrerequisite(snap, myId, prereq);
+        const afford = !!me && me.wood >= cost.wood && me.gold >= cost.gold;
+        const reason = max ? 'Nível máximo' : !prereqOk ? prereqText(prereq) : !afford ? shortageText(cost)
+          : `Produção ${bankProduction(building.level)} → ${bankProduction(nextLevel)} ouro/ciclo`;
+        html = `<button class="vxh-btn ${!max && (!prereqOk || !afford) ? 'vxh-unavailable' : ''}" title="${reason}" data-upgrade="${building.id}" ${!max && prereqOk && afford ? '' : 'disabled'}>
+          ${max ? 'Nível máximo' : `Melhorar para nível ${nextLevel}`}<small>${!max ? costMarkup(cost) : ''}</small>${!max ? `<small>${bankProduction(building.level)} → ${bankProduction(nextLevel)} ouro/ciclo</small>` : ''}</button>`;
+        if (!max && !prereqOk) html += `<span>${prereqText(prereq)}</span>`;
       } else if (building.owner === myId && building.kind === 'taverna') {
         const busy = !!building.recruitment;
-        const afford = me && me.gold >= RECRUIT.gold && me.wood >= RECRUIT.wood;
-        html = `<button class="vxh-btn ${!busy && !afford ? 'vxh-unavailable' : ''}" data-recruit="${building.id}" title="${!afford ? shortageText(RECRUIT) : 'Recrutar um Peão auxiliar'}" ${busy || !afford ? 'disabled' : ''}>
-          ${busy ? 'Recrutando…' : 'Recrutar Peão'}<small>${costMarkup(RECRUIT)}</small><small>${RECRUIT.time}s</small></button>`;
+        const levels = me?.workerLevels ?? {};
+        for (const role of WORKER_ROLES) {
+          const cost = normalizeCost(workerTrainCost(role));
+          const count = snap.units.filter(u => u.owner === myId && u.kind === 'worker' && u.workerRole === role).length;
+          const limit = SPEC_ENTITY_LIMITS[role];
+          const full = count >= limit;
+          const afford = !!me && me.wood >= cost.wood && me.gold >= cost.gold;
+          const level = levels[role] ?? 1;
+          const trainTime = role === 'repairer' ? repairerTrainingTime(level) : RECRUIT.time;
+          const reason = full ? `Limite de ${WORKER_ROLE_NAMES[role]} atingido (${limit})`
+            : !afford ? shortageText(cost) : `${WORKER_ROLE_NAMES[role]} — ${count}/${limit}`;
+          html += `<button class="vxh-btn ${!busy && !full && afford ? '' : 'vxh-unavailable'}" data-recruit-role="${role}" data-recruit-target="${building.id}" title="${reason}" ${busy || full || !afford ? 'disabled' : ''}>
+            ${WORKER_ROLE_NAMES[role]}<small>${costMarkup(cost)}</small><small>${trainTime > 0 ? `${trainTime}s` : 'instantâneo'} · ${count}/${limit}</small></button>`;
+        }
+        for (const role of WORKER_ROLES) {
+          if (role === 'miner') continue; // Minerador sem progressão definida (A CONFIRMAR)
+          const level = levels[role] ?? 1;
+          const max = level >= workerMaxLevel(role);
+          const cost = normalizeCost(workerUpgradeCost(role, level));
+          const afford = !!me && me.wood >= cost.wood && me.gold >= cost.gold;
+          html += `<button class="vxh-btn ${!max && !afford ? 'vxh-unavailable' : ''}" data-upgrade-worker="${role}" data-recruit-target="${building.id}" title="${max ? 'Nível máximo' : !afford ? shortageText(cost) : `Melhorar ${WORKER_ROLE_NAMES[role]} para nível ${level + 1}`}" ${!max && afford ? '' : 'disabled'}>
+            ${WORKER_ROLE_NAMES[role]} Nv ${level} → ${level + 1}${max ? ' (máx)' : ''}<small>${!max ? costMarkup(cost) : ''}</small></button>`;
+        }
       } else if (building.kind === 'crypt' && isVamp) {
         // A cripta é a base e vende itens e skills.
         const vampire = snap.units.find(u => u.kind === 'vampire' && u.owner === myId);
         const access = vampireShopAccess(snap.phase, vampire, building);
         for (const id of VAMPIRE_ITEM_IDS) {
-          const item = VAMPIRE_ITEMS[id];
-          const count = snap.vampireItems?.[id] ?? 0;
-          const cost = vampireItemCost(id, count);
-          const full = count >= item.maxCount;
-          const afford = snap.blood >= cost;
-          const reason = access ?? (full ? 'Limite de compras atingido' : !afford ? `Faltam ${cost - snap.blood} de sangue` : 'Comprar e equipar');
-          const bonuses = [item.damageBonus ? `+${item.damageBonus} dano` : '', item.healthBonus ? `+${item.healthBonus} vida` : '',
-            item.speedBonus ? `+${item.speedBonus} veloc.` : '',
-            item.cooldownFactor < 1 ? `ataque ${Math.round((1 - item.cooldownFactor) * 100)}% mais rápido` : ''].filter(Boolean).join(' · ');
-          const level = item.maxCount === Infinity ? `<small>Nv ${count} → ${count + 1}</small>` : '';
-          html += `<button class="vxh-btn vxh-item-button" data-vampire-item="${id}" data-crypt="${building.id}" title="${reason}" ${access || full || !afford ? 'disabled' : ''}>
-            ${commandArt(id)}${item.name}<small>${bonuses}</small>${level}
-            ${full ? '<small class="vxh-item-equipped">✓ Equipado</small>' : `<small class="vxh-item-price"><span class="vxh-resource-cost ${afford ? '' : 'vxh-resource-missing'}">${cost}🩸</span></small>`}</button>`;
+          const info = VAMPIRE_ITEM_INFO[id];
+          const level = snap.vampireItems?.[id] ?? 0;
+          const next = vampireItemNextLevel(id, level);
+          const cost = vampireItemCost(id, level);
+          const max = next == null;
+          const afford = cost != null && snap.blood >= cost;
+          const reason = access ?? (max ? 'Nível indefinido (A CONFIRMAR) ou máximo' : !afford ? `Faltam ${(cost ?? 0) - snap.blood} de sangue` : 'Comprar com sangue');
+          const previewBonus = vampireItemBonus(id, next ?? Math.max(1, level));
+          html += `<button class="vxh-btn vxh-item-button" data-vampire-item="${id}" data-crypt="${building.id}" title="${reason}" ${access || max || !afford ? 'disabled' : ''}>
+            ${commandArt(id)}${info.name}<small>${info.description}: +${previewBonus}</small>
+            ${max ? '<small class="vxh-item-equipped">✓ Máximo</small>' : `<small>Nv ${level} → ${next}</small><small class="vxh-item-price"><span class="vxh-resource-cost ${afford ? '' : 'vxh-resource-missing'}">${cost}🩸</span></small>`}</button>`;
         }
         for (const id of Object.keys(VAMPIRE_SKILLS) as VampireSkillId[]) {
           const skill = VAMPIRE_SKILLS[id];
@@ -553,74 +703,223 @@ export class Hud {
             ${commandArt(id)}${skill.name}<small>${skill.description}</small>
             ${unlocked ? '<small class="vxh-item-equipped">✓ Desbloqueada</small>' : `<small class="vxh-item-price"><span class="vxh-resource-cost ${afford ? '' : 'vxh-resource-missing'}">${skill.unlockCost}🩸</span></small>`}</button>`;
         }
+        // Evolução da Cripta (paga com sangue).
+        const cryptNext = building.level + 1;
+        const cryptCost = SPEC_CRYPT.upgradeCosts[cryptNext];
+        const cryptMax = cryptCost == null;
+        const cryptAfford = cryptCost != null && snap.blood >= cryptCost;
+        html += `<button class="vxh-btn ${!cryptMax && !cryptAfford ? 'vxh-unavailable' : ''}" title="${cryptMax ? 'Nível máximo' : !cryptAfford ? `Faltam ${cryptCost - snap.blood} de sangue` : `Produção ${cryptProduction(building.level)} → ${cryptProduction(cryptNext)} sangue / ${CRYPT_CYCLE_SECONDS}s`}" data-upgrade="${building.id}" ${!cryptMax && cryptAfford ? '' : 'disabled'}>
+          ${cryptMax ? 'Cripta no nível máximo' : `Melhorar Cripta para nível ${cryptNext}`}<small>${!cryptMax ? `${cryptCost}🩸` : ''}</small></button>`;
         if (access) html += `<span>${access}</span>`;
       } else if (building.owner === myId && building.kind === 'wall' && building.done) {
-        const cost = WALL_UPGRADE_COST[building.level];
+        const cost = normalizeCost(wallUpgradeCost(building.level));
         const max = building.level >= WALL_MAX_LEVEL;
-        const afford = cost && me && me.wood >= cost.wood && me.gold >= cost.gold;
-        const upgradeBtn = `<button class="vxh-btn ${!max && !afford ? 'vxh-unavailable' : ''}" title="${!max && !afford && cost ? shortageText(cost) : `Aumenta a vida máxima para ${max ? building.maxHp : wallMaxHp(building.level + 1)} HP`}" data-upgrade="${building.id}" ${!max && afford ? '' : 'disabled'}>
-          ${max ? 'Nível máximo' : `Melhorar para nível ${building.level + 1}`}<small>${!max && cost ? costMarkup(cost) : ''}</small>${!max ? `<small>${building.maxHp} → ${wallMaxHp(building.level + 1)} HP</small>` : ''}</button>`;
+        const afford = !!me && me.wood >= cost.wood && me.gold >= cost.gold;
+        const upgradeBtn = `<button class="vxh-btn ${!max && !afford ? 'vxh-unavailable' : ''}" title="${!max && !afford ? shortageText(cost) : `Aumenta a vida máxima para ${max ? building.maxHp : wallMaxHp(building.level + 1)} HP`}" data-upgrade="${building.id}" ${!max && afford ? '' : 'disabled'}>
+          ${max ? 'Nível máximo' : `Melhorar para nível ${building.level + 1}`}<small>${!max ? costMarkup(cost) : ''}</small>${!max ? `<small>${building.maxHp} → ${wallMaxHp(building.level + 1)} HP</small>` : ''}</button>`;
         const damaged = building.hp < building.maxHp;
         const hasWorker = snap.units.some(u => u.owner === myId && u.kind === 'worker');
         const repairBtn = damaged ? `<button class="vxh-btn" data-repair="${building.id}" ${hasWorker ? '' : 'disabled'}>🔨 Reparar muro<small>${building.hp}/${building.maxHp} HP</small></button>` : '';
-        html = upgradeBtn + repairBtn + marketButtons();
+        html = upgradeBtn + repairBtn;
+      } else if (building.owner === myId && building.kind === 'market' && building.done) {
+        const upgradeCost = normalizeCost(marketUpgradeCost(building.level));
+        const max = building.level >= MARKET_MAX_LEVEL;
+        const afford = !!me && me.wood >= upgradeCost.wood && me.gold >= upgradeCost.gold;
+        const upgradeBtn = max ? '' : `<button class="vxh-btn ${!afford ? 'vxh-unavailable' : ''}" title="${afford ? 'Aumenta o nível do Mercado' : shortageText(upgradeCost)}" data-upgrade="${building.id}" ${afford ? '' : 'disabled'}>
+          Melhorar para nível ${building.level + 1}<small>${costMarkup(upgradeCost)}</small></button>`;
+        html = upgradeBtn + marketButtons();
+      } else if (building.owner === myId && building.kind === 'tower' && building.done) {
+        const cost = normalizeCost(towerUpgradeCost(building.level));
+        const max = building.level >= TOWER_MAX_LEVEL;
+        const afford = !!me && me.wood >= cost.wood && me.gold >= cost.gold;
+        html = `<button class="vxh-btn ${!max && !afford ? 'vxh-unavailable' : ''}" title="${!max && !afford ? shortageText(cost) : `Aumenta o dano para ${max ? building.level : towerDamage(building.level + 1)}`}" data-upgrade="${building.id}" ${!max && afford ? '' : 'disabled'}>
+          ${max ? 'Nível máximo' : `Melhorar para nível ${building.level + 1}`}<small>${!max ? costMarkup(cost) : ''}</small>${!max ? `<small>${towerDamage(building.level)} → ${towerDamage(building.level + 1)} dano</small>` : ''}</button>`;
       }
       else html = '';
+      // O Humano pode demolir as construções que ele mesmo criou (a Cripta é
+      // neutra e não pertence a ninguém). O servidor revalida a posse.
+      if (!isVamp && building.owner === myId) {
+        html += `<button class="vxh-btn vxh-danger" data-demolish="${building.id}" title="Destrói esta construção (sem reembolso)">🧨 Demolir</button>`;
+      }
     } else if (isVamp) {
       html = '';
-      for (const [i, id] of (Object.keys(VAMPIRE_SKILLS) as VampireSkillId[]).entries()) {
-        const skill = VAMPIRE_SKILLS[id];
-        const state = snap.vampireSkills?.[id];
-        if (!state) {
-          html += `<button class="vxh-btn" disabled title="Desbloqueie na cripta durante o dia">${commandArt(id)}${skill.name}<small>🔒 ${skill.unlockCost}🩸</small></button>`;
-        } else if (state.buff > 0) {
-          html += `<button class="vxh-btn active" disabled>${commandArt(id)}${skill.name}<small>ativo · ${Math.ceil(state.buff)}s</small></button>`;
-        } else if (state.cd > 0) {
-          html += `<button class="vxh-btn" disabled>${commandArt(id)}${skill.name}<small>recarga · ${Math.ceil(state.cd)}s</small></button>`;
-        } else {
-          html += `<button class="vxh-btn" data-vampire-skill-cast="${id}" title="${skill.description} — clique ou tecla ${i + 1}">${commandArt(id)}${skill.name}<span class="vxh-hotkey">${i + 1}</span><small>${skill.description}</small></button>`;
-        }
-      }
+      // As habilidades ficam no painel próprio (`.vxh-abilities`); aqui só itens.
       for (const id of VAMPIRE_ITEM_IDS) {
         const count = snap.vampireItems?.[id] ?? 0;
         if (!count) continue; // primeira compra é na cripta
-        const item = VAMPIRE_ITEMS[id];
+        const info = VAMPIRE_ITEM_INFO[id];
+        const next = vampireItemNextLevel(id, count);
         const cost = vampireItemCost(id, count);
-        const afford = snap.blood >= cost;
-        html += `<button class="vxh-btn vxh-item-button" data-vampire-item-up="${id}" title="Upar a qualquer hora por ${cost} de sangue" ${afford ? '' : 'disabled'}>
-          ${commandArt(id)}${item.name}<small>Nv ${count} → ${count + 1}</small>
-          <small class="vxh-item-price"><span class="vxh-resource-cost ${afford ? '' : 'vxh-resource-missing'}">${cost}🩸</span></small></button>`;
+        const afford = cost != null && snap.blood >= cost;
+        html += `<button class="vxh-btn vxh-item-button" data-vampire-item-up="${id}" title="${next == null ? 'Nível indefinido (A CONFIRMAR) ou máximo' : `Upar a qualquer hora por ${cost} de sangue`}" ${afford ? '' : 'disabled'}>
+          ${commandArt(id)}${info.name}<small>${next == null ? 'máximo' : `Nv ${count} → ${next}`}</small>
+          ${cost != null ? `<small class="vxh-item-price"><span class="vxh-resource-cost ${afford ? '' : 'vxh-resource-missing'}">${cost}🩸</span></small>` : ''}</button>`;
       }
     } else if (hasSel) {
-      for (const [i, kind] of BUILDABLE.entries()) {
+      const selectedUnits = snap.units.filter(u => this.controls.selected.includes(u.id));
+      // Só o Humano e o Minerador constroem; a Mina de Ouro é exclusiva do Minerador.
+      const kinds = BUILDABLE.filter(k => selectedUnits.some(u => canBuildKind(u, k)));
+      if (!kinds.length) {
+        html = '<span>Esta unidade não constrói.<br>Use o Humano ou um Minerador.</span>';
+      }
+      for (const [i, kind] of kinds.entries()) {
         const c = BUILD_COSTS[kind];
         const afford = me && me.wood >= c.wood && me.gold >= c.gold;
         const active = this.controls.buildMode === kind;
         html += `<button class="vxh-btn ${afford ? '' : 'vxh-unavailable'} ${active ? 'active' : ''}" data-build="${kind}" title="${afford ? `${BUILDING_HELP[kind]} — tecla ${i + 1}` : shortageText(c)}" ${afford ? '' : 'disabled'}>
           ${buildingIcon(kind) ?? commandArt(kind)}${BUILDING_NAMES[kind]}<span class="vxh-hotkey">${i + 1}</span>
-          <small class="vxh-cost">${costMarkup(c)}</small><small>${Number((c.time / workerStats(snap.units.find(u => this.controls.selected.includes(u.id)) ?? {}).buildRate).toFixed(1))}s</small></button>`;
+          <small class="vxh-cost">${costMarkup(c)}</small><small>${Number((c.time / workerStats(selectedUnits.find(u => canBuildKind(u, kind)) ?? {}).buildRate).toFixed(1))}s</small></button>`;
       }
     }
     if (html !== this.panelHtml) {
       this.cmdPanel.innerHTML = html;
       this.panelHtml = html;
+      this.assignCommandHotkeys();
     }
   }
 
+  /** Numera os botões do painel de comandos (1..9) e exibe o atalho no canto. */
+  private assignCommandHotkeys() {
+    const buttons = this.cmdPanel.querySelectorAll<HTMLButtonElement>('button.vxh-btn');
+    buttons.forEach((btn, index) => {
+      const n = index + 1;
+      let badge = btn.querySelector<HTMLSpanElement>('.vxh-hotkey');
+      if (n > 9) {
+        delete btn.dataset.hotkey;
+        badge?.remove();
+        return;
+      }
+      btn.dataset.hotkey = String(n);
+      if (!badge) {
+        badge = document.createElement('span');
+        badge.className = 'vxh-hotkey';
+        btn.appendChild(badge);
+      }
+      badge.textContent = String(n);
+    });
+  }
+
   private panelHtml = '';
+  private abilityHtml = '';
+
+  /** Painel próprio de habilidades, à direita das construções. */
+  private renderAbilities(snap: Snapshot, myId: number) {
+    const isVamp = myId === VAMPIRE_PLAYER_ID;
+    const me = snap.players.find(p => p.id === myId);
+    // Habilidades são por classe: só o herói humano e o vampiro as têm. O painel
+    // só aparece quando a unidade dessa classe está selecionada (peão não tem).
+    const casterSelected = this.controls.selected.some(id => {
+      const unit = snap.units.find(u => u.id === id);
+      if (!unit) return false;
+      return isVamp ? unit.kind === 'vampire' : unit.kind === 'worker' && unit.hero === true;
+    });
+    if (!casterSelected) {
+      this.controls.cancelAbility();
+      this.controls.cancelVampireAbility();
+      this.abilityBlock.hidden = true;
+      if (this.abilityHtml !== '') {
+        this.abilityPanel.innerHTML = '';
+        this.abilityHtml = '';
+      }
+      return;
+    }
+    let html = '';
+    if (isVamp) {
+      const st = snap.vampireStatuses ?? {};
+      const reveal = snap.vampireReveal;
+      const revealActive = !!reveal && reveal.remaining > 0;
+      const revealUses = snap.vampireRevealUses ?? 0;
+      const revealDisabled = revealActive || snap.phase !== 'night' || revealUses <= 0;
+      const revealState = revealActive ? `Ativa · ${Math.ceil(reveal!.remaining)}s`
+        : snap.phase !== 'night' ? 'Disponível apenas à noite'
+          : revealUses <= 0 ? 'Sem usos nesta noite (1 por noite)' : 'Revela uma área do mapa por 10s';
+      html += `<button class="vxh-btn ${this.controls.vampireAbilityMode === 'revealArea' ? 'active' : ''}" data-vampire-ability="revealArea" data-tip-title="Revelar Área" data-tip-body="${revealState}" ${revealDisabled ? 'disabled' : ''}>
+        ${commandArt('revealArea')}<span class="vxh-hotkey">${VAMPIRE_ABILITY_KEYS.revealArea}</span></button>`;
+      const bat = st.batForm ?? 0;
+      const exiting = st.exitingBatForm ?? 0;
+      const batState = bat > 0 ? `Ativa · ${Math.ceil(bat)}s` : exiting > 0 ? 'Saindo da forma' : 'Invulnerável e mais rápido por até 15s';
+      html += `<button class="vxh-btn ${bat > 0 ? 'active' : ''}" data-vampire-ability="batForm" data-tip-title="Forma de Morcego" data-tip-body="${batState}" ${bat > 0 || exiting > 0 ? 'disabled' : ''}>
+        ${commandArt('batForm')}<span class="vxh-hotkey">${VAMPIRE_ABILITY_KEYS.batForm}</span></button>`;
+      const chan = st.channelingTeleport ?? 0;
+      const tpState = chan > 0 ? `Canalizando · ${Math.ceil(chan * 10) / 10}s` : 'Canaliza 2,8s e retorna à base';
+      html += `<button class="vxh-btn ${chan > 0 ? 'active' : ''}" data-vampire-ability="teleportHome" data-tip-title="Teleportar para a Base" data-tip-body="${tpState}" ${chan > 0 ? 'disabled' : ''}>
+        ${commandArt('teleportHome')}<span class="vxh-hotkey">${VAMPIRE_ABILITY_KEYS.teleportHome}</span></button>`;
+      const skill = VAMPIRE_SKILLS.powerStrike;
+      const state = snap.vampireSkills?.powerStrike;
+      if (!state) {
+        html += `<button class="vxh-btn" disabled data-tip-title="${skill.name}" data-tip-body="Desbloqueie na cripta durante o dia">${commandArt('powerStrike')}<span class="vxh-hotkey">T</span></button>`;
+      } else if (state.buff > 0) {
+        html += `<button class="vxh-btn active" disabled data-tip-title="${skill.name}" data-tip-body="Ativa · ${Math.ceil(state.buff)}s">${commandArt('powerStrike')}<span class="vxh-hotkey">T</span></button>`;
+      } else if (state.cd > 0) {
+        html += `<button class="vxh-btn" disabled data-tip-title="${skill.name}" data-tip-body="Recarga · ${Math.ceil(state.cd)}s">${commandArt('powerStrike')}<span class="vxh-hotkey">T</span></button>`;
+      } else {
+        html += `<button class="vxh-btn" data-vampire-skill-cast="powerStrike" data-tip-title="${skill.name}" data-tip-body="${skill.description}">${commandArt('powerStrike')}<span class="vxh-hotkey">T</span></button>`;
+      }
+    } else {
+      const vampireAlive = snap.units.some(u => u.kind === 'vampire');
+      HUMAN_ABILITY_IDS.forEach((id, i) => {
+        const ability = HUMAN_ABILITIES[id];
+        const cd = me?.abilityCooldowns?.[id] ?? 0;
+        const active = this.controls.abilityMode === id;
+        const needsVampire = id === 'entangle' || id === 'silencer';
+        const disabled = cd > 0 || (needsVampire && !vampireAlive);
+        const state = cd > 0 ? `Recarga · ${Math.ceil(cd)}s`
+          : needsVampire && !vampireAlive ? 'Vampiro indisponível' : ability.description;
+        html += `<button class="vxh-btn ${active ? 'active' : ''}" data-human-ability="${id}" data-tip-title="${ability.name}" data-tip-body="${state}" ${disabled ? 'disabled' : ''}>
+          ${commandArt(id)}<span class="vxh-hotkey">${HUMAN_ABILITY_KEYS[i]}</span></button>`;
+      });
+    }
+    if (html !== this.abilityHtml) {
+      this.abilityPanel.innerHTML = html;
+      this.abilityHtml = html;
+      this.tipEl.hidden = true;
+    }
+    this.abilityBlock.hidden = html === '';
+  }
 
   private inventoryMarkup(snap: Snapshot): string {
-    const ids = (Object.keys(VAMPIRE_ITEMS) as VampireItemId[]).filter(id => (snap.vampireItems?.[id] ?? 0) > 0);
+    const ids = VAMPIRE_ITEM_IDS.filter(id => (snap.vampireItems?.[id] ?? 0) > 0);
     if (!ids.length) return '<div class="vxh-inventory"><span>Sem itens equipados</span></div>';
     return `<div class="vxh-inventory">${ids.map(id => {
-      const item = VAMPIRE_ITEMS[id], count = snap.vampireItems![id]!;
-      return `<span title="+${item.damageBonus * count} dano · +${item.healthBonus * count} vida máxima">${item.icon} ${item.name}${count > 1 ? ` ×${count}` : ''}</span>`;
+      const info = VAMPIRE_ITEM_INFO[id], level = snap.vampireItems![id]!;
+      const bonus = vampireItemBonus(id, level);
+      return `<span title="Bônus total: +${bonus}">${info.icon} ${info.name} Nv ${level}${bonus ? ` (+${bonus})` : ''}</span>`;
     }).join('')}</div>`;
   }
 
   private minimapTerrain: ImageData | null = null;
   private minimapCameraKey = '';
   private minimapCorners: Array<{ x: number; z: number } | null> = [];
+
+  /**
+   * Detecta quedas comparando as unidades vivas do snapshot com o tick anterior.
+   * Como todos recebem o mesmo estado, o aviso aparece para todos os jogadores.
+   */
+  private detectDeaths(snap: Snapshot) {
+    const current = new Map<number, { owner: number; kind: string; hero?: boolean; x: number; z: number }>();
+    for (const u of snap.units) current.set(u.id, { owner: u.owner, kind: u.kind, hero: u.hero, x: u.x, z: u.z });
+    for (const [id, prev] of this.knownHumanUnits) {
+      if (current.has(id) || prev.owner < 0 || prev.owner >= VAMPIRE_PLAYER_ID) continue;
+      this.reportDeath(prev);
+    }
+    this.knownHumanUnits.clear();
+    for (const [id, v] of current) if (v.owner >= 0 && v.owner < VAMPIRE_PLAYER_ID) this.knownHumanUnits.set(id, v);
+  }
+
+  private reportDeath(prev: { owner: number; kind: string; hero?: boolean; x: number; z: number }) {
+    const who = prev.hero === false ? `Peão do Humano ${prev.owner + 1}` : `Humano ${prev.owner + 1}`;
+    this.pushFeed(`☠ ${who} tombou`);
+    this.deathMarks.push({ x: prev.x, z: prev.z, until: performance.now() + 6000 });
+    this.scene.deathPulse(prev.x, prev.z, who);
+  }
+
+  private pushFeed(text: string) {
+    const toast = document.createElement('div');
+    toast.className = 'vxh-toast';
+    toast.textContent = text;
+    this.feedEl.appendChild(toast);
+    setTimeout(() => toast.remove(), 5000);
+  }
 
   private renderMinimap(snap: Snapshot, myId: number) {
     const ctx = this.minimap.getContext('2d');
@@ -695,6 +994,18 @@ export class Hud {
       ctx.beginPath();
       ctx.arc(mx, mz, u.kind === 'vampire' ? 3.5 : 2, 0, Math.PI * 2);
       ctx.fill();
+    }
+    // Quedas recentes: um X vermelho no minimapa, visível para todos.
+    const now = performance.now();
+    this.deathMarks = this.deathMarks.filter((m) => m.until > now);
+    ctx.strokeStyle = '#ff5a5a';
+    ctx.lineWidth = 2;
+    for (const m of this.deathMarks) {
+      const [mx, mz] = toMap(m.x, m.z);
+      ctx.beginPath();
+      ctx.moveTo(mx - 3, mz - 3); ctx.lineTo(mx + 3, mz + 3);
+      ctx.moveTo(mx + 3, mz - 3); ctx.lineTo(mx - 3, mz + 3);
+      ctx.stroke();
     }
     this.scene.camera.updateMatrixWorld(true);
     const cameraKey = [...this.scene.camera.matrixWorld.elements, ...this.scene.camera.projectionMatrix.elements].join(',');

@@ -31,6 +31,8 @@ export interface Room {
   // Última quantidade de cada nó enviada ao cliente. Os nós são quase estáticos;
   // enviá-los por inteiro a cada tick custava ~33 KB × 15 Hz por jogador.
   nodeAmounts: Map<number, number>;
+  // Quando a partida terminou (para liberar a sala depois de um tempo).
+  endedAt?: number;
 }
 
 export const rooms = new Map<string, Room>();
@@ -123,8 +125,16 @@ export function startRoom(room: Room, requesterId: string): boolean {
     c.playerId = c.role === 'vampire' ? VAMPIRE_PLAYER_ID : humanId++;
     names[c.playerId] = c.name;
   }
-  room.session = createSession(names, room.seed, room.clients.map(c => c.playerId));
-  room.session.state.practice = room.clients.length === 1;
+  const playerIds = room.clients.map(c => c.playerId);
+  const solo = room.clients.length === 1;
+  // Modo solo como vampiro: sem humanos não há alvo. Adiciona um humano de
+  // treino (parado) para testar ataques, sangue e a condição de vitória.
+  if (solo && room.clients[0]!.role === 'vampire') {
+    playerIds.push(0);
+    names[0] = 'Humano (treino)';
+  }
+  room.session = createSession(names, room.seed, playerIds);
+  room.session.state.practice = solo;
   room.nodeAmounts.clear();
   for (const node of room.session.state.nodes) room.nodeAmounts.set(node.id, node.amount);
   room.status = 'playing';
@@ -165,7 +175,7 @@ export function stepRoom(room: Room): void {
   room.queue = [];
   room.cmdCount.clear();
   step(room.session, commands);
-  const snap = makeSnapshot(room.session.state) as WireSnapshot;
+  const snap = makeSnapshot(room.session.state, false) as WireSnapshot;
   // Nós não vão no snapshot por tick; o cliente usa o cache do 'started' e os
   // deltas de 'nodes'. Reduz o snapshot de ~37 KB para poucos KB.
   snap.nodes = undefined;
@@ -184,9 +194,27 @@ export function stepRoom(room: Room): void {
   }
   if (room.session.state.result) {
     room.status = 'ended';
+    room.endedAt = Date.now();
     const res = JSON.stringify({ type: 'result', result: room.session.state.result });
     for (const c of room.clients) {
       if (c.ws.readyState === 1) c.ws.send(res);
+    }
+  }
+}
+
+/** Libera salas vazias e salas encerradas há muito tempo (evita acúmulo). */
+const ENDED_ROOM_TTL_MS = 5 * 60_000;
+export function purgeRooms(now = Date.now()): void {
+  for (const [code, room] of rooms) {
+    if (room.clients.length === 0) {
+      rooms.delete(code);
+      continue;
+    }
+    if (room.status === 'ended' && room.endedAt !== undefined && now - room.endedAt > ENDED_ROOM_TTL_MS) {
+      for (const c of room.clients) {
+        try { c.ws.close(1000, 'partida encerrada'); } catch { /* socket já fechado */ }
+      }
+      rooms.delete(code);
     }
   }
 }

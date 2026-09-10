@@ -1,35 +1,99 @@
-import { CRYPT_RADIUS, VAMPIRE, VAMPIRE_ITEMS, VAMPIRE_SKILLS, type VampireItemId, type VampireSkillId } from './constants.js';
+import {
+  CRYPT_RADIUS,
+  SPEC_VAMPIRE_ITEM_TIERS,
+  VAMPIRE,
+  VAMPIRE_SPEC,
+  VAMPIRE_SKILLS,
+  type VampireItemId,
+  type VampireSkillId,
+} from './constants.js';
 import type { Building, Unit, VampireState } from './types.js';
 
-export function vampireItemBonuses(items: VampireState['items'] = {}) {
-  let damage = 0, health = 0, moveSpeed = 0, cooldownMult = 1;
-  for (const id of Object.keys(VAMPIRE_ITEMS) as VampireItemId[]) {
-    const count = items[id] ?? 0;
-    if (!count) continue;
-    const item = VAMPIRE_ITEMS[id];
-    damage += item.damageBonus * count;
-    health += item.healthBonus * count;
-    moveSpeed += item.speedBonus * count;
-    cooldownMult *= Math.pow(item.cooldownFactor, count);
+// ---- Itens do Vampiro (seções 20–24) ----
+// Três categorias; custo em OURO; bônus por nível. Níveis com bônus `null`
+// (A CONFIRMAR) não podem ser comprados.
+
+export const VAMPIRE_ITEM_IDS: VampireItemId[] = ['damage', 'health', 'attackSpeed'];
+
+export const VAMPIRE_ITEM_INFO: Record<VampireItemId, { name: string; icon: string; description: string }> = {
+  damage: { name: 'Lâmina Sangrenta', icon: '⚔', description: 'Aumenta o dano do Vampiro' },
+  health: { name: 'Coração Ancestral', icon: '♥', description: 'Aumenta a vida máxima' },
+  attackSpeed: { name: 'Ímpeto Sanguinário', icon: '🌀', description: `Aumenta a velocidade de ataque (máx. ${VAMPIRE_SPEC.maxAttackSpeed})` },
+};
+
+function tiers(id: VampireItemId): Record<number, { bonus: number | null; cost: number }> {
+  return SPEC_VAMPIRE_ITEM_TIERS[id];
+}
+
+/** Nível máximo nominal da categoria. */
+export function vampireItemMaxLevel(id: VampireItemId): number {
+  return Object.keys(tiers(id)).length;
+}
+
+/**
+ * Próximo nível comprável, ou `null` se indefinido (bônus A CONFIRMAR) ou máximo.
+ * Bloquear níveis sem bônus evita inventar Attack Speed para os níveis 3–6.
+ */
+export function vampireItemNextLevel(id: VampireItemId, owned: number): number | null {
+  const next = owned + 1;
+  const tier = tiers(id)[next];
+  if (!tier || tier.bonus == null) return null;
+  return next;
+}
+
+/** Custo em ouro do próximo nível, ou `null` se não houver próximo comprável. */
+export function vampireItemCost(id: VampireItemId, owned: number): number | null {
+  const next = vampireItemNextLevel(id, owned);
+  return next == null ? null : tiers(id)[next]!.cost;
+}
+
+function singleBonus(id: VampireItemId, level: number): number {
+  if (level <= 0) return 0;
+  return tiers(id)[level]?.bonus ?? 0;
+}
+
+/** Bônus total da categoria conforme a política de acúmulo (substitutivo por padrão). */
+export function vampireItemBonus(id: VampireItemId, level: number): number {
+  if (SPEC_VAMPIRE_ITEM_TIERS.accumulation === 'cumulative') {
+    let total = 0;
+    for (let l = 1; l <= level; l++) total += singleBonus(id, l);
+    return total;
   }
-  return { damage, health, moveSpeed, cooldownMult };
+  return singleBonus(id, level);
 }
 
-/** Custo em sangue do próximo nível do item, dado quantos já possui. */
-export function vampireItemCost(itemId: VampireItemId, owned: number): number {
-  const item = VAMPIRE_ITEMS[itemId];
-  return Math.floor(item.baseCost * Math.pow(item.costGrowth, owned));
+export function vampireItemBonuses(items: VampireState['items'] = {}) {
+  let damage = 0, health = 0, attackSpeed = 0;
+  for (const id of VAMPIRE_ITEM_IDS) {
+    const level = items[id] ?? 0;
+    if (!level) continue;
+    const value = vampireItemBonus(id, level);
+    if (id === 'damage') damage += value;
+    else if (id === 'health') health += value;
+    else attackSpeed += value;
+  }
+  return { damage, health, attackSpeed };
 }
 
-/** Velocidade de movimento efetiva do vampiro, com bônus das botas. */
-export function vampireEffectiveSpeed(phase: 'day' | 'night', items: VampireState['items'] = {}): number {
-  const base = phase === 'night' ? VAMPIRE.speedNight : VAMPIRE.speedDay;
-  return base + vampireItemBonuses(items).moveSpeed;
+/** Attack Speed final, nunca acima do limite absoluto (seção 13). */
+export function vampireAttackSpeed(items: VampireState['items'] = {}): number {
+  return Math.min(VAMPIRE_SPEC.attackSpeed + vampireItemBonuses(items).attackSpeed, VAMPIRE_SPEC.maxAttackSpeed);
 }
 
-/** Intervalo entre ataques, com bônus do Frenesi e piso configurado. */
+/** Velocidade de movimento efetiva do vampiro (sem item de velocidade na spec). */
+export function vampireEffectiveSpeed(phase: 'day' | 'night', _items: VampireState['items'] = {}): number {
+  return phase === 'night' ? VAMPIRE.speedNight : VAMPIRE.speedDay;
+}
+
+/**
+ * Intervalo entre ataques a partir da Attack Speed. A conversão exata
+ * Attack Speed → intervalo não foi definida na spec (A CONFIRMAR); usamos uma
+ * regra proporcional à Attack Speed base, respeitando o piso do projeto.
+ */
 export function vampireEffectiveCooldown(items: VampireState['items'] = {}): number {
-  return Math.max(VAMPIRE.minAttackCooldown, VAMPIRE.attackCooldown * vampireItemBonuses(items).cooldownMult);
+  const speed = vampireAttackSpeed(items);
+  const ratio = VAMPIRE_SPEC.attackSpeed / Math.max(1, speed);
+  return Math.max(VAMPIRE.minAttackCooldown, VAMPIRE.attackCooldown * ratio);
 }
 
 /** Multiplicador de dano da skill ativa (1 quando nenhuma ativa). */
@@ -49,8 +113,6 @@ export function vampireShopAccess(
   if (phase !== 'day') return 'A loja da cripta só abre durante o dia';
   if (!vampire || vampire.kind !== 'vampire' || vampire.hp <= 0) return 'Vampiro indisponível';
   if (!crypt || crypt.kind !== 'crypt' || !crypt.done || crypt.hp <= 0) return 'Cripta indisponível';
-  // Mesmo alcance do confinamento diurno (clampVampireToCrypt): de dia o vampiro
-  // nunca fica a mais de CRYPT_RADIUS da cripta, então a loja abre em toda a área dele.
   const distance = Math.hypot(vampire.x - crypt.x, vampire.z - crypt.z);
   return distance > CRYPT_RADIUS ? 'Aproxime o Vampiro da cripta para comprar' : null;
 }

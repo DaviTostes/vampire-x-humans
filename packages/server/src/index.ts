@@ -22,6 +22,7 @@ import {
   rooms,
   startRoom,
   stepRoom,
+  purgeRooms,
   type Room,
 } from './rooms.js';
 
@@ -215,6 +216,21 @@ const wss = new WebSocketServer({ server, maxPayload: 64 * 1024 });
 const clientRoom = new Map<WebSocket, Room>();
 const alive = new WeakSet<WebSocket>();
 
+// Limite de tentativas de criar/entrar por conexão (anti brute-force do código).
+const joinAttempts = new WeakMap<WebSocket, { count: number; resetAt: number }>();
+const JOIN_ATTEMPT_LIMIT = 20;
+const JOIN_WINDOW_MS = 10_000;
+function allowJoinAttempt(ws: WebSocket): boolean {
+  const now = Date.now();
+  const record = joinAttempts.get(ws);
+  if (!record || now > record.resetAt) {
+    joinAttempts.set(ws, { count: 1, resetAt: now + JOIN_WINDOW_MS });
+    return true;
+  }
+  record.count++;
+  return record.count <= JOIN_ATTEMPT_LIMIT;
+}
+
 wss.on('connection', (ws) => {
   alive.add(ws);
   ws.on('pong', () => alive.add(ws));
@@ -234,6 +250,7 @@ wss.on('connection', (ws) => {
 
     // mensagens de lobby
     if (msg.type === 'create') {
+      if (!allowJoinAttempt(ws)) { error('Muitas tentativas. Aguarde alguns segundos.'); ws.close(1008, 'rate limit'); return; }
       if (clientRoom.has(ws)) { error('Saia da sala atual antes de criar outra'); return; }
       const room = createRoom();
       const client = joinRoom(room, ws, String(msg.name ?? ''));
@@ -243,6 +260,7 @@ wss.on('connection', (ws) => {
       return;
     }
     if (msg.type === 'join') {
+      if (!allowJoinAttempt(ws)) { error('Muitas tentativas. Aguarde alguns segundos.'); ws.close(1008, 'rate limit'); return; }
       if (clientRoom.has(ws)) { error('Você já está em uma sala'); return; }
       const room = getRoom(String(msg.code ?? ''));
       if (!room) {
@@ -344,6 +362,7 @@ const tickTimer = setInterval(() => {
     if (duration > slowestMs) { slowestMs = duration; slowestRoom = room.code; }
   }
   const elapsed = performance.now() - started;
+  purgeRooms();
   if (elapsed > TICK_MS && started - lastSlowTickLog >= 5000) {
     lastSlowTickLog = started;
     console.warn(`[vampire] tick lento: ${elapsed.toFixed(1)}ms (limite ${TICK_MS.toFixed(1)}ms); sala ${slowestRoom}: ${slowestMs.toFixed(1)}ms`);

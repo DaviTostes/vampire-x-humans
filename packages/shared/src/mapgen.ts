@@ -8,6 +8,13 @@ export const MAP_SEED = GAME_CONFIG.map.version;
 export const HUMAN_SPAWNS = GAME_CONFIG.map.humanSpawns.map((p) => ({ x: S(p.x), z: S(p.z) }));
 export const CRYPT_POSITION = { x: S(GAME_CONFIG.map.crypt.x), z: S(GAME_CONFIG.map.crypt.z) };
 
+// Raio mantido livre de árvores ao redor da cripta (spawn do Vampiro): cobre a
+// praça de pedra e uma folga. Vale para a floresta e para os nós de madeira.
+const CRYPT_FOREST_CLEARANCE = S(44);
+function withinCryptClearance(x: number, z: number): boolean {
+  return Math.hypot(x - CRYPT_POSITION.x, z - CRYPT_POSITION.z) < CRYPT_FOREST_CLEARANCE;
+}
+
 export interface MapObstacle { x: number; z: number; width: number; depth: number; height: number }
 export interface Compound { name: string; x: number; z: number; width: number; depth: number; facing: 'north' | 'south' | 'east' | 'west' }
 export const COMPOUNDS: Compound[] = GAME_CONFIG.map.refuges.map((c) => ({
@@ -389,7 +396,7 @@ export function isForestAt(x: number, z: number): boolean {
   if (nearMountain(x, z, S(2))) return false;
   // As formações rochosas ficam despidas de árvores.
   if (ROCK_FORMATIONS.some(f => ((x - f.x) / (f.rx * 1.08)) ** 2 + ((z - f.z) / (f.rz * 1.08)) ** 2 < 1)) return false;
-  if (Math.hypot(x - CRYPT_POSITION.x, z - CRYPT_POSITION.z) < S(30)) return false;
+  if (withinCryptClearance(x, z)) return false;
   if (Math.hypot(x, z) < S(16)) return false;
   return true;
 }
@@ -420,7 +427,7 @@ export const RESOURCE_PLACEMENTS = [
     .filter(p => distanceToTrails(p.x, p.z) >= S(5.5)),
   ...BASE_TREES,
   ...FOREST_WOOD_NODES,
-].filter(n => !isWaterTile(n.x, n.z));
+].filter(n => !isWaterTile(n.x, n.z) && !withinCryptClearance(n.x, n.z));
 
 export interface GameMap {
   seed: number;
@@ -433,7 +440,26 @@ export interface GameMap {
 }
 
 /** Materializa o mesmo mapa desenhado à mão para renderização e colisão. */
+// A geração custa ~150 ms (varredura de ~17 mil tiles) e é determinística; o
+// resultado é memoizado. Cada chamada recebe uma CÓPIA, para que mutações
+// (ex.: ferramentas/testes que alteram água ou obstáculos) não vazem entre salas.
+const MAP_CACHE = new Map<number, GameMap>();
+
+function cloneMap(map: GameMap): GameMap {
+  return {
+    seed: map.seed,
+    tiles: map.tiles,
+    height: map.height.slice(),
+    water: map.water.slice(),
+    bridge: map.bridge.slice(),
+    forest: map.forest.slice(),
+    obstacles: map.obstacles.map((o) => ({ ...o })),
+  };
+}
+
 export function generateMap(_seed = MAP_SEED): GameMap {
+  const cached = MAP_CACHE.get(_seed);
+  if (cached) return cloneMap(cached);
   const n = WORLD.tiles;
   const height = new Float32Array(n * n);
   const water = new Uint8Array(n * n);
@@ -478,7 +504,9 @@ export function generateMap(_seed = MAP_SEED): GameMap {
     }
     if (isBridgeAtWorld(wx, wz)) bridge[i] = 1;
   }
-  return { seed: MAP_SEED, tiles: n, height, water, bridge, forest, obstacles: [...NATURAL_BLOCKERS, ...ROCK_OBSTACLES, ...BASE_ROCKS].map(o => ({ ...o })) };
+  const map: GameMap = { seed: MAP_SEED, tiles: n, height, water, bridge, forest, obstacles: [...NATURAL_BLOCKERS, ...ROCK_OBSTACLES, ...BASE_ROCKS].map(o => ({ ...o })) };
+  MAP_CACHE.set(_seed, map);
+  return cloneMap(map);
 }
 
 export function tileToWorld(tx: number): number {

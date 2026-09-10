@@ -1,5 +1,5 @@
 import { BUILDING_SIZE, WORLD, INTERACTION, TICK_RATE, TERRAIN_MAX_SLOPE } from './constants.js';
-import { isWaterAt, type GameMap } from './mapgen.js';
+import type { GameMap } from './mapgen.js';
 import type { GameState, Unit } from './types.js';
 
 export const UNIT_RADIUS = INTERACTION.unitRadius;
@@ -23,32 +23,47 @@ const BUCKET_SIZE = 8;
 const BUCKET_COUNT = Math.ceil(SIZE / BUCKET_SIZE);
 // Orçamento compartilhado por todas as unidades da sala, por tick.
 const PATH_STEPS_PER_TICK = 512;
+// Rede de segurança: mesmo com expansões caras, não gastar mais que isto por
+// tick em busca de caminhos (deixa o restante para os próximos ticks).
+const PATH_MS_PER_TICK = 12;
 
 /** Distância até a borda de um prédio, ou até um ponto. */
 export function distanceToTarget(p: Point, target: Point, half = 0): number {
-  return Math.hypot(Math.max(0, Math.abs(p.x - target.x) - half),
-    Math.max(0, Math.abs(p.z - target.z) - half));
+  // Math.sqrt é ~5x mais rápido que Math.hypot neste caminho quente.
+  const dx = Math.max(0, Math.abs(p.x - target.x) - half);
+  const dz = Math.max(0, Math.abs(p.z - target.z) - half);
+  return Math.sqrt(dx * dx + dz * dz);
 }
 
 /** Navegação por sala. A* em grade de 1u, sem cortar quinas; movimento contínuo validado. */
 export class Navigation {
   private routes = new Map<number, Route>();
-  private signature = '';
+  private bCount = 0;
+  private bIdSum = 0;
+  private nCount = 0;
+  private nIdSum = 0;
   private grids = new Map<string, Uint8Array>();
-  private colliders = new Map<number, Collider[]>();
+  private colliders: Collider[][] = [];
   private searches: Route[] = [];
   private searchBudget = PATH_STEPS_PER_TICK;
+  private searchStart = 0;
   private indexed = false;
+  private separationBuckets = new Map<number, number[]>();
   private pathPool: PathBuffers[] = [];
   private pathGen = 0;
+  private readonly invTile = 1 / WORLD.tileSize;
 
   constructor(private state: GameState, private map: GameMap) {}
 
   refresh() {
-    const signature = this.state.buildings.map(b => `${b.id}:${b.kind}:${b.x}:${b.z}`).join('|') +
-      '/' + this.state.nodes.filter(n => n.amount > 0).map(n => n.id).join(',');
-    if (signature !== this.signature) {
-      this.signature = signature;
+    // Assinatura numérica (contagem + soma de ids): evita montar uma string com
+    // todos os prédios e nós a cada tick. Posições/tipos não mudam; o que muda é
+    // adicionar/remover prédio ou esvaziar um nó.
+    let bCount = 0, bIdSum = 0, nCount = 0, nIdSum = 0;
+    for (const b of this.state.buildings) { bCount++; bIdSum += b.id; }
+    for (const n of this.state.nodes) if (n.amount > 0) { nCount++; nIdSum += n.id; }
+    if (bCount !== this.bCount || bIdSum !== this.bIdSum || nCount !== this.nCount || nIdSum !== this.nIdSum) {
+      this.bCount = bCount; this.bIdSum = bIdSum; this.nCount = nCount; this.nIdSum = nIdSum;
       // Fecha os geradores pendentes para devolver os buffers ao pool.
       for (const route of this.routes.values()) route.search?.return([]);
       this.routes.clear();
@@ -66,6 +81,7 @@ export class Navigation {
       }
     }
     this.searchBudget = PATH_STEPS_PER_TICK;
+    this.searchStart = performance.now();
     this.advanceSearches();
   }
 
@@ -91,7 +107,7 @@ export class Navigation {
   }
 
   private rebuildColliders() {
-    this.colliders.clear();
+    this.colliders.length = 0;
     const add = (c: Collider) => {
       const minX = Math.max(0, Math.floor((c.x - c.halfX + WORLD.half) / BUCKET_SIZE));
       const maxX = Math.min(BUCKET_COUNT - 1, Math.floor((c.x + c.halfX + WORLD.half) / BUCKET_SIZE));
@@ -99,8 +115,8 @@ export class Navigation {
       const maxZ = Math.min(BUCKET_COUNT - 1, Math.floor((c.z + c.halfZ + WORLD.half) / BUCKET_SIZE));
       for (let z = minZ; z <= maxZ; z++) for (let x = minX; x <= maxX; x++) {
         const key = z * BUCKET_COUNT + x;
-        let bucket = this.colliders.get(key);
-        if (!bucket) this.colliders.set(key, bucket = []);
+        let bucket = this.colliders[key];
+        if (!bucket) this.colliders[key] = bucket = [];
         bucket.push(c);
       }
     };
@@ -121,6 +137,8 @@ export class Navigation {
 
   private advanceSearches() {
     while (this.searchBudget > 0 && this.searches.length) {
+      // Checa o relógio a cada 32 expansões para não pagar o custo por passo.
+      if ((this.searchBudget & 31) === 0 && performance.now() - this.searchStart > PATH_MS_PER_TICK) break;
       const route = this.searches.shift()!;
       if (!route.search) continue;
       this.searchBudget--;
@@ -138,12 +156,15 @@ export class Navigation {
 
   /** Altura do terreno (unidades de mapa) por interpolação bilinear. */
   private groundHeight(x: number, z: number): number {
-    const n = this.map.tiles;
-    const gx = Math.max(0, Math.min(n - 1.0001, (x + WORLD.half) / WORLD.tileSize));
-    const gz = Math.max(0, Math.min(n - 1.0001, (z + WORLD.half) / WORLD.tileSize));
+    const n = this.map.tiles, height = this.map.height, half = WORLD.half, ts = WORLD.tileSize;
+    const gx = Math.max(0, Math.min(n - 1.0001, (x + half) / ts));
+    const gz = Math.max(0, Math.min(n - 1.0001, (z + half) / ts));
     const tx = Math.floor(gx), tz = Math.floor(gz), fx = gx - tx, fz = gz - tz;
-    const h = (dx: number, dz: number) => this.map.height[Math.min(n - 1, tz + dz) * n + Math.min(n - 1, tx + dx)] ?? 0;
-    return (h(0, 0) * (1 - fx) + h(1, 0) * fx) * (1 - fz) + (h(0, 1) * (1 - fx) + h(1, 1) * fx) * fz;
+    // Sem closure: esta função é chamada milhões de vezes via canStand/A*.
+    const x1 = Math.min(n - 1, tx + 1), z1 = Math.min(n - 1, tz + 1);
+    const h00 = height[tz * n + tx] ?? 0, h10 = height[tz * n + x1] ?? 0;
+    const h01 = height[z1 * n + tx] ?? 0, h11 = height[z1 * n + x1] ?? 0;
+    return (h00 * (1 - fx) + h10 * fx) * (1 - fz) + (h01 * (1 - fx) + h11 * fx) * fz;
   }
 
   /** Só a falésia (inclinação acima do limite) bloqueia; o platô é andável. */
@@ -161,14 +182,26 @@ export class Navigation {
 
   canStand(u: Pick<Unit, 'kind'>, x: number, z: number): boolean {
     const r = UNIT_RADIUS;
-    if (!Number.isFinite(x) || !Number.isFinite(z) || Math.abs(x) + r >= WORLD.half || Math.abs(z) + r >= WORLD.half) return false;
-    for (const dx of [-r, 0, r]) {
-      for (const dz of [-r, 0, r]) if (isWaterAt(this.map, x + dx, z + dz)) return false;
+    const half = WORLD.half;
+    if (!Number.isFinite(x) || !Number.isFinite(z) || Math.abs(x) + r >= half || Math.abs(z) + r >= half) return false;
+    // Água em 9 amostras, sem chamar função nem redividir por tile a cada uma.
+    const map = this.map, n = map.tiles, water = map.water, bridge = map.bridge, inv = this.invTile;
+    const bx = (x + half) * inv, bz = (z + half) * inv, ro = r * inv;
+    for (let i = -1; i <= 1; i++) {
+      const tx = Math.floor(bx + i * ro);
+      if (tx < 0 || tx >= n) return false;
+      for (let j = -1; j <= 1; j++) {
+        const tz = Math.floor(bz + j * ro);
+        if (tz < 0 || tz >= n) return false;
+        const idx = tz * n + tx;
+        if (water[idx] === 1 && bridge[idx] !== 1) return false;
+      }
     }
     if (this.tooSteep(x, z)) return false;
     if (!this.indexed) this.rebuildColliders();
-    const key = Math.floor((z + WORLD.half) / BUCKET_SIZE) * BUCKET_COUNT + Math.floor((x + WORLD.half) / BUCKET_SIZE);
-    for (const c of this.colliders.get(key) ?? []) {
+    const key = Math.floor((z + half) / BUCKET_SIZE) * BUCKET_COUNT + Math.floor((x + half) / BUCKET_SIZE);
+    const bucket = this.colliders[key];
+    if (bucket) for (const c of bucket) {
       if (c.kind === 'crypt' && u.kind === 'vampire') continue;
       if (c.kind === 'wall' && u.kind === 'worker') continue;
       const dx = x - c.x, dz = z - c.z;
@@ -178,9 +211,14 @@ export class Navigation {
   }
 
   private clearSegment(u: Unit, a: Point, b: Point): boolean {
-    const steps = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.z - a.z) / 0.25));
+    return this.clearSegmentXZ(u, a.x, a.z, b.x, b.z);
+  }
+
+  private clearSegmentXZ(u: Unit, ax: number, az: number, bx: number, bz: number): boolean {
+    const dx = bx - ax, dz = bz - az;
+    const steps = Math.max(1, Math.ceil(Math.sqrt(dx * dx + dz * dz) / 0.25));
     for (let i = 1; i <= steps; i++) {
-      if (!this.canStand(u, a.x + (b.x - a.x) * i / steps, a.z + (b.z - a.z) * i / steps)) return false;
+      if (!this.canStand(u, ax + dx * i / steps, az + dz * i / steps)) return false;
     }
     return true;
   }
@@ -202,10 +240,6 @@ export class Navigation {
     }
   }
 
-  private point(index: number): Point {
-    return { x: index % SIZE - WORLD.half + 0.5, z: Math.floor(index / SIZE) - WORLD.half + 0.5 };
-  }
-
   private *findPath(u: Unit, goal: Goal): Generator<void, Point[], void> {
     const buffers = this.acquirePathBuffers();
     try {
@@ -217,8 +251,10 @@ export class Navigation {
       }
       const walkable = (index: number) => {
         if (!grid![index]) {
-          const p = this.point(index);
-          grid![index] = this.canStand(u, p.x, p.z) ? 1 : 2;
+          // Sem alocar objeto de ponto: o índice carrega x,z da grade.
+          const px = index % SIZE - WORLD.half + 0.5;
+          const pz = ((index / SIZE) | 0) - WORLD.half + 0.5;
+          grid![index] = this.canStand(u, px, pz) ? 1 : 2;
         }
         return grid![index] === 1;
       };
@@ -230,7 +266,10 @@ export class Navigation {
       for (let z = Math.max(0, Math.floor(goal.z - reach + WORLD.half)); z < SIZE && z <= goal.z + reach + WORLD.half; z++) {
         for (let x = Math.max(0, Math.floor(goal.x - reach + WORLD.half)); x < SIZE && x <= goal.x + reach + WORLD.half; x++) {
           const id = z * SIZE + x;
-          if (distanceToTarget(this.point(id), goal, goal.half) <= goal.range + 0.001 && walkable(id)) reachableGoal = true;
+          const px = x - WORLD.half + 0.5, pz = z - WORLD.half + 0.5;
+          const ddx = Math.max(0, Math.abs(px - goal.x) - goal.half);
+          const ddz = Math.max(0, Math.abs(pz - goal.z) - goal.half);
+          if (Math.sqrt(ddx * ddx + ddz * ddz) <= goal.range + 0.001 && walkable(id)) reachableGoal = true;
         }
       }
       if (!reachableGoal) return [];
@@ -262,7 +301,13 @@ export class Navigation {
         }
         return first.id;
       };
-      const heuristic = (id: number) => Math.max(0, distanceToTarget(this.point(id), goal, goal.half) - goal.range);
+      const heuristic = (id: number) => {
+        const px = id % SIZE - WORLD.half + 0.5;
+        const pz = ((id / SIZE) | 0) - WORLD.half + 0.5;
+        const ddx = Math.max(0, Math.abs(px - goal.x) - goal.half);
+        const ddz = Math.max(0, Math.abs(pz - goal.z) - goal.half);
+        return Math.max(0, Math.sqrt(ddx * ddx + ddz * ddz) - goal.range);
+      };
       stamp[start] = gen;
       costs[start] = 0;
       parent[start] = -1;
@@ -276,11 +321,15 @@ export class Navigation {
         closed[current] = 1;
         if (heuristic(current) <= 0.001 && walkable(current)) {
           const path: Point[] = [];
-          for (let id = current; id !== start; id = parent[id]!) path.push(this.point(id));
+          for (let id = current; id !== start; id = parent[id]!) {
+            path.push({ x: id % SIZE - WORLD.half + 0.5, z: ((id / SIZE) | 0) - WORLD.half + 0.5 });
+          }
           path.reverse();
           return path;
         }
-        const cx = current % SIZE, cz = Math.floor(current / SIZE);
+        const cx = current % SIZE, cz = (current / SIZE) | 0;
+        const cwx = current === start ? u.x : cx - WORLD.half + 0.5;
+        const cwz = current === start ? u.z : cz - WORLD.half + 0.5;
         for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
           if (!dx && !dz) continue;
           const x = cx + dx, z = cz + dz;
@@ -288,7 +337,7 @@ export class Navigation {
           const next = z * SIZE + x;
           if ((stamp[next] === gen && closed[next]) || !walkable(next)) continue;
           if (dx && dz && (!walkable(cz * SIZE + x) || !walkable(z * SIZE + cx))) continue;
-          if (!this.clearSegment(u, current === start ? u : this.point(current), this.point(next))) continue;
+          if (!this.clearSegmentXZ(u, cwx, cwz, x - WORLD.half + 0.5, z - WORLD.half + 0.5)) continue;
           const cost = costs[current]! + (dx && dz ? Math.SQRT2 : 1);
           if (stamp[next] === gen && cost >= costs[next]!) continue;
           stamp[next] = gen;
@@ -331,7 +380,8 @@ export class Navigation {
     let budget = speed * dt;
     while (budget > 0 && route.points.length) {
       const next = route.points[0]!;
-      const distance = Math.hypot(next.x - u.x, next.z - u.z);
+      const ddx = next.x - u.x, ddz = next.z - u.z;
+      const distance = Math.sqrt(ddx * ddx + ddz * ddz);
       const step = Math.min(distance, budget);
       const p = distance < 0.001 ? next : { x: u.x + (next.x - u.x) * step / distance, z: u.z + (next.z - u.z) * step / distance };
       if (!this.clearSegment(u, u, p)) {
@@ -357,18 +407,50 @@ export class Navigation {
   }
 
   separate(units: Unit[]) {
+    const count = units.length;
+    if (count < 2) return;
+    const sep = INTERACTION.unitSeparation;
+    // Grade de células do tamanho da separação: só vizinhos de 3x3 podem colidir.
+    const cell = sep;
+    const cols = Math.ceil((WORLD.half * 2) / cell) + 1;
+    const colOf = (x: number) => Math.max(0, Math.min(cols - 1, Math.floor((x + WORLD.half) / cell)));
+    const rowOf = (z: number) => Math.max(0, Math.min(cols - 1, Math.floor((z + WORLD.half) / cell)));
+    const buckets = this.separationBuckets;
     for (let pass = 0; pass < 3; pass++) {
-      for (let i = 0; i < units.length; i++) for (let j = i + 1; j < units.length; j++) {
-        const a = units[i]!, b = units[j]!;
-        const dx = b.x - a.x, dz = b.z - a.z;
-        const d = Math.hypot(dx, dz);
-        if (d >= INTERACTION.unitSeparation) continue;
-        const nx = d > 0.001 ? dx / d : 1, nz = d > 0.001 ? dz / d : 0;
-        const push = (INTERACTION.unitSeparation - d) / 2;
-        const ax = a.x - nx * push, az = a.z - nz * push;
-        const bx = b.x + nx * push, bz = b.z + nz * push;
-        if (this.canStand(a, ax, az)) { a.x = ax; a.z = az; }
-        if (this.canStand(b, bx, bz)) { b.x = bx; b.z = bz; }
+      buckets.clear();
+      for (let i = 0; i < count; i++) {
+        const u = units[i]!;
+        const key = rowOf(u.z) * cols + colOf(u.x);
+        const bucket = buckets.get(key);
+        if (bucket) bucket.push(i);
+        else buckets.set(key, [i]);
+      }
+      for (let i = 0; i < count; i++) {
+        const a = units[i]!;
+        const cx = colOf(a.x), cz = rowOf(a.z);
+        for (let dz = -1; dz <= 1; dz++) {
+          const nz = cz + dz;
+          if (nz < 0 || nz >= cols) continue;
+          for (let dx = -1; dx <= 1; dx++) {
+            const nx = cx + dx;
+            if (nx < 0 || nx >= cols) continue;
+            const bucket = buckets.get(nz * cols + nx);
+            if (!bucket) continue;
+            for (const j of bucket) {
+              if (j <= i) continue;
+              const b = units[j]!;
+              const ddx = b.x - a.x, ddz = b.z - a.z;
+              const d = Math.sqrt(ddx * ddx + ddz * ddz);
+              if (d >= sep) continue;
+              const nxv = d > 0.001 ? ddx / d : 1, nzv = d > 0.001 ? ddz / d : 0;
+              const push = (sep - d) / 2;
+              const ax = a.x - nxv * push, az = a.z - nzv * push;
+              const bx = b.x + nxv * push, bz = b.z + nzv * push;
+              if (this.canStand(a, ax, az)) { a.x = ax; a.z = az; }
+              if (this.canStand(b, bx, bz)) { b.x = bx; b.z = bz; }
+            }
+          }
+        }
       }
     }
   }

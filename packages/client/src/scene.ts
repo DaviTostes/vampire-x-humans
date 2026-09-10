@@ -15,7 +15,11 @@ import {
   isBridgeAtWorld,
   isLandAt,
   isWaterAtWorld,
+  isForestAt,
+  RESOURCE_PLACEMENTS,
   CRYPT_POSITION,
+  VAMPIRE,
+  vampireEffectiveCooldown,
   type BuildingKind,
   WORLD,
   generateMap,
@@ -28,6 +32,12 @@ import { UnitReveal } from './unit-reveal.js';
 import { assetRegistry, updateExternalAnimation } from './assets/asset-registry.js';
 
 const WORLD_SIZE = WORLD.tiles * WORLD.tileSize;
+
+/** Hash determinístico para espalhar a decoração sem depender de estado global. */
+function decorHash(x: number, z: number): number {
+  const h = Math.sin(x * 127.1 + z * 311.7) * 43758.5453123;
+  return h - Math.floor(h);
+}
 
 /**
  * Visão de guerra (cliente): unidades inimigas só aparecem dentro do raio de
@@ -201,74 +211,40 @@ function createGroundMaterial(field: THREE.DataTexture): THREE.MeshStandardMater
   return material;
 }
 
-// ---------- Piso da cripta: praça escura com borda suave + círculo rúnico ----------
-// Em vez de um disco chapado de borda dura, o piso some suavemente na grama e o
-// anel de runas fica brilhando no chão (material sem luz) marcando o raio diário.
+// ---------- Piso da cripta: praça de pedra texturizada ----------
+// O piso usa um tile de pedra do spawn com alpha radial suave, dissolvendo na grama.
 const CRYPT_DECAL_RADIUS = 16;
-const CRYPT_RUNE_RADIUS = 14; // alinha com CRYPT_RADIUS (confinamento diurno)
+const CRYPT_FLOOR_URL = 'assets/environment/ground/ground_crypt.jpg';
+const CRYPT_FLOOR_TILE = 7; // unidades de mundo por repetição do tile de pedra.
 
-function cryptDecalCanvas(runes: boolean): HTMLCanvasElement {
+function cryptFloorMap(): THREE.Texture {
+  const texture = new THREE.TextureLoader().load(groundPublicUrl(CRYPT_FLOOR_URL));
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = 4;
+  const repeat = (CRYPT_DECAL_RADIUS * 2) / CRYPT_FLOOR_TILE;
+  texture.repeat.set(repeat, repeat);
+  return texture;
+}
+
+/** Máscara radial: opaca no centro e dissolvendo na grama na borda. */
+function cryptFloorAlphaTexture(): THREE.CanvasTexture {
   const SZ = 512, R = SZ / 2;
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = SZ;
   const ctx = canvas.getContext('2d')!;
-  if (!runes) {
-    const plaza = ctx.createRadialGradient(R, R, 0, R, R, R);
-    plaza.addColorStop(0.0, 'rgba(52,45,64,0.72)');
-    plaza.addColorStop(0.55, 'rgba(41,35,52,0.62)');
-    plaza.addColorStop(0.80, 'rgba(30,24,41,0.32)');
-    plaza.addColorStop(1.0, 'rgba(24,18,32,0)');
-    ctx.fillStyle = plaza;
-    ctx.beginPath(); ctx.arc(R, R, R, 0, Math.PI * 2); ctx.fill();
-    // Pedra manchada, determinística, para o piso não ficar liso.
-    for (let i = 0; i < 2600; i++) {
-      const a = i * 2.399963, rr = Math.sqrt(((i * 37) % 101) / 101) * R * 0.94;
-      const x = R + Math.cos(a) * rr, y = R + Math.sin(a) * rr;
-      const s = 1 + (i % 3);
-      ctx.fillStyle = i % 2 ? 'rgba(84,72,104,0.05)' : 'rgba(0,0,0,0.07)';
-      ctx.fillRect(x, y, s, s);
-    }
-    return canvas;
-  }
-  // Camada rúnica (transparente fora das linhas).
-  const ring = R * (CRYPT_RUNE_RADIUS / CRYPT_DECAL_RADIUS);
-  ctx.save();
-  ctx.translate(R, R);
-  ctx.shadowColor = 'rgba(255,64,96,0.9)';
-  ctx.shadowBlur = 9;
-  ctx.strokeStyle = 'rgba(214,68,92,0.92)';
-  for (const scale of [0.9, 1, 1.05]) {
-    ctx.lineWidth = scale === 1 ? 3 : 1.6;
-    ctx.beginPath(); ctx.arc(0, 0, ring * scale, 0, Math.PI * 2); ctx.stroke();
-  }
-  ctx.lineWidth = 2.4;
-  for (let i = 0; i < 64; i++) {
-    const a = (i / 64) * Math.PI * 2;
-    const major = i % 4 === 0;
-    const inner = ring * (major ? 0.78 : 0.88);
-    const outer = ring * (major ? 1.12 : 1.03);
-    ctx.beginPath();
-    ctx.moveTo(Math.cos(a) * inner, Math.sin(a) * inner);
-    ctx.lineTo(Math.cos(a) * outer, Math.sin(a) * outer);
-    ctx.stroke();
-  }
-  // Glifos internos, como um selo arcano.
-  ctx.lineWidth = 2.4;
-  for (let i = 0; i < 3; i++) {
-    const r2 = ring * (0.34 + i * 0.17);
-    ctx.beginPath(); ctx.arc(0, 0, r2, i * 1.15 + 0.3, i * 1.15 + 2.0); ctx.stroke();
-  }
-  ctx.restore();
-  return canvas;
-}
-
-function cryptDecalTexture(runes: boolean): THREE.CanvasTexture {
-  const texture = new THREE.CanvasTexture(cryptDecalCanvas(runes));
-  texture.colorSpace = THREE.SRGBColorSpace;
+  const mask = ctx.createRadialGradient(R, R, 0, R, R, R);
+  mask.addColorStop(0.0, 'rgba(255,255,255,1)');
+  mask.addColorStop(0.55, 'rgba(255,255,255,0.98)');
+  mask.addColorStop(0.80, 'rgba(255,255,255,0.45)');
+  mask.addColorStop(1.0, 'rgba(255,255,255,0)');
+  ctx.fillStyle = mask;
+  ctx.fillRect(0, 0, SZ, SZ);
+  const texture = new THREE.CanvasTexture(canvas);
   texture.anisotropy = 4;
   return texture;
 }
-
 
 export class GameScene {
   scene = new THREE.Scene();
@@ -280,12 +256,19 @@ export class GameScene {
   private unitMeshes = new Map<number, THREE.Group>();
   private buildingMeshes = new Map<number, THREE.Group>();
   private nodeMeshes = new Map<number, THREE.Group>();
+  private hoverEnemyId: number | null = null;
+  private hoverRing: THREE.Group | null = null;
   private woodInstances: THREE.InstancedMesh[] = [];
   private woodKey = '';
   private hpBars = new Map<number, THREE.Mesh>();
   private selectionRings = new Map<number, THREE.Mesh>();
   private sun: THREE.DirectionalLight;
   private hemi: THREE.HemisphereLight;
+  // Direção do sol e ponto do chão observado. A câmera de sombra acompanha o
+  // foco para concentrar a resolução do mapa perto de onde o jogador olha.
+  private sunDir = new THREE.Vector3(0.55, 0.8, 0.35).normalize();
+  private readonly sunDistance = 320;
+  private shadowFocus = new THREE.Vector3(0, 0, 0);
   private fog: THREE.Fog;
   private torches: THREE.PointLight[] = [];
   private raycaster = new THREE.Raycaster();
@@ -353,14 +336,20 @@ export class GameScene {
     this.sun = new THREE.DirectionalLight(0xffeecc, 1.6);
     this.sun.position.set(60, 100, 30);
     this.sun.castShadow = true;
-    this.sun.shadow.mapSize.set(1024, 1024);
-    Object.assign(this.sun.shadow.camera, { left: -WORLD.half, right: WORLD.half, top: WORLD.half, bottom: -WORLD.half, near: 1, far: 500 });
-    this.sun.shadow.bias = -0.001;
+    // Frustum pequeno (a sombra segue a câmera): com 2048² a resolução fica
+    // concentrada na área visível, deixando as silhuetas nítidas de verdade.
+    this.sun.shadow.mapSize.set(2048, 2048);
+    Object.assign(this.sun.shadow.camera, { left: -85, right: 85, top: 85, bottom: -85, near: 1, far: 1000 });
+    this.sun.shadow.camera.updateProjectionMatrix();
+    this.sun.shadow.bias = -0.0006;
+    this.sun.shadow.normalBias = 0.04;
     this.scene.add(this.sun);
-    this.scene.add(new THREE.AmbientLight(0x404060, 0.4));
+    this.scene.add(this.sun.target);
+    this.scene.add(new THREE.AmbientLight(0x404060, 0.22));
 
     this.buildTerrain();
     this.buildFixedMap();
+    this.buildDecorTrees();
     this.buildFogOfWar();
     window.addEventListener('resize', () => this.onResize());
   }
@@ -446,6 +435,7 @@ export class GameScene {
     });
     const water = new THREE.Mesh(waterGeo, waterMat);
     water.position.y = 2.4;
+    water.receiveShadow = true;
     this.scene.add(water);
   }
 
@@ -584,6 +574,8 @@ export class GameScene {
     }
     const moss = new THREE.InstancedMesh(createRockGeometry(3), new THREE.MeshLambertMaterial({ color: '#4c6242' }), mossTransforms.length);
     mossTransforms.forEach((matrix, i) => moss.setMatrixAt(i, matrix));
+    moss.castShadow = true;
+    moss.receiveShadow = true;
     this.unitReveal.apply(moss);
     this.scene.add(moss);
 
@@ -665,7 +657,7 @@ export class GameScene {
         this.scene.add(plank);
       }
     }
-    // Base do vampiro: praça escura de borda suave e anel rúnico brilhante.
+    // Base do vampiro: praça de pedra de borda suave.
     // Cada vértice acompanha o terreno para o piso assentar no platô.
     const drape = (geo: THREE.BufferGeometry, lift: number) => {
       const pos = geo.attributes.position as THREE.BufferAttribute;
@@ -675,13 +667,11 @@ export class GameScene {
       pos.needsUpdate = true;
       geo.computeVertexNormals();
     };
-    const decalAt = (map: THREE.Texture, lift: number, lit: boolean, order: number, factor: number) => {
+    const decalAt = (map: THREE.Texture, lift: number, order: number, factor: number, alphaMap?: THREE.Texture) => {
       const geo = new THREE.CircleGeometry(CRYPT_DECAL_RADIUS, 128);
       geo.rotateX(-Math.PI / 2);
       drape(geo, lift);
-      const mat = lit
-        ? new THREE.MeshLambertMaterial({ map, transparent: true, depthWrite: false })
-        : new THREE.MeshBasicMaterial({ map, transparent: true, depthWrite: false });
+      const mat = new THREE.MeshLambertMaterial({ map, alphaMap, transparent: true, depthWrite: false });
       mat.polygonOffset = true;
       mat.polygonOffsetFactor = factor;
       mat.polygonOffsetUnits = factor * 2;
@@ -690,8 +680,7 @@ export class GameScene {
       decal.renderOrder = order;
       this.scene.add(decal);
     };
-    decalAt(cryptDecalTexture(false), 0.05, true, 1, -2);
-    decalAt(cryptDecalTexture(true), 0.10, false, 2, -6);
+    decalAt(cryptFloorMap(), 0.05, 1, -2, cryptFloorAlphaTexture());
   }
 
   /** altura do terreno em coordenadas de mundo */
@@ -759,6 +748,11 @@ export class GameScene {
         if (teamOf(b.owner) !== myTeam) continue;
         const radius = (BUILDING_VISION[b.kind] ?? 12) * VISION_SCALE * PHASE_VISION[myTeam][snap.phase];
         sources.push({ x: b.x, z: b.z, r: radius, dir: 0, cone: false, buildingId: b.id, ...HUMAN_VISION });
+      }
+      // Revelar Área: fonte de visão temporária do Vampiro (seção 15).
+      const reveal = snap.vampireReveal;
+      if (reveal && myTeam === 'vampire') {
+        sources.push({ x: reveal.x, z: reveal.z, r: reveal.radius, dir: 0, cone: false, ...HUMAN_VISION });
       }
     } else {
       this.unitHeading.clear();
@@ -844,6 +838,10 @@ export class GameScene {
       g.userData.hp = u.hp;
       g.userData.maxHp = u.maxHp;
       g.userData.activity = u.activity;
+      // Velocidade da animação de ataque acompanha o item de velocidade (Frenesi).
+      g.userData.attackScale = u.kind === 'vampire'
+        ? VAMPIRE.attackCooldown / Math.max(1e-3, vampireEffectiveCooldown(snap.vampireItems))
+        : 1;
       g.userData.resource = u.carryRes ?? snap.nodes.find(n => n.id === u.targetId)?.kind;
       const target = snap.nodes.find(n => n.id === u.targetId) ?? snap.buildings.find(b => b.id === u.targetId) ?? snap.units.find(t => t.id === u.targetId);
       if (target && (u.activity === 'gathering' || u.activity === 'building' || u.activity === 'repairing' || u.activity === 'attacking')) {
@@ -903,7 +901,11 @@ export class GameScene {
         if (g.userData.lastShotTick !== undefined || snap.tick - b.lastShot.tick <= 2) this.towerShotEffect(g, b.lastShot);
         g.userData.lastShotTick = b.lastShot.tick;
       }
-      if (goldDelta > 0) this.productionEffect(g.position, goldDelta);
+      if (goldDelta > 0) {
+        const isCrypt = b.kind === 'crypt';
+        this.productionEffect(g.position, goldDelta, isCrypt ? 'sangue' : 'ouro',
+          isCrypt ? '#ff8b8b' : '#ffe48b', isCrypt ? '#a51f30' : '#f8ca4f');
+      }
       if (completed) {
         this.floatingText('Obra concluída', g.position.clone().add(new THREE.Vector3(0, 5, 0)), '#c0e4a7');
         this.dustEffect(g.position, '#bca77f');
@@ -974,12 +976,12 @@ export class GameScene {
     let k = 0;
 
     // GLB decimado da árvore: uma malha instanciada por nó (tronco + copa juntos).
-    // Uma árvore por nó e sem sombra; cor e escala variam por instância.
+    // Cor e escala variam por instância; projeta e recebe sombra como os demais modelos.
     const tree = assetRegistry.propInstance('prop:tree:evergreen');
     if (tree) {
       const trees = new THREE.InstancedMesh(tree.geometry, tree.material.clone(), Math.max(1, wood.length));
-      trees.castShadow = false;
-      trees.receiveShadow = false;
+      trees.castShadow = true;
+      trees.receiveShadow = true;
       this.unitReveal.apply(trees);
       const treeTint = new THREE.Color();
       for (const nd of wood) {
@@ -1050,6 +1052,66 @@ export class GameScene {
     crowns.userData.woodNodeIds = ids;
     this.woodInstances = [trunks, crowns];
     this.scene.add(trunks, crowns);
+  }
+
+  /**
+   * Floresta decorativa: preenche os vazios entre as árvores coletáveis. É puramente
+   * visual — não entra no estado, não colide e não bloqueia construção — mas respeita
+   * trilhas, bases, pedras, água, cripta e a posição das árvores que dão madeira.
+   */
+  private buildDecorTrees() {
+    const tree = assetRegistry.propInstance('prop:tree:evergreen');
+    if (!tree) return;
+    // Células (3×3) ocupadas por nós de madeira, para não sobrepor a coleta.
+    const cell = 2;
+    const occupied = new Set<string>();
+    for (const n of RESOURCE_PLACEMENTS) {
+      const cx = Math.floor(n.x / cell), cz = Math.floor(n.z / cell);
+      for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) occupied.add(`${cx + dx},${cz + dz}`);
+    }
+    const obstacles = this.map.obstacles;
+    const step = 2.8;
+    const half = WORLD.half - 4;
+    const spots: Array<[number, number, number, number]> = [];
+    for (let gx = -half; gx <= half; gx += step) {
+      for (let gz = -half; gz <= half; gz += step) {
+        const jx = (decorHash(gx * 0.7, gz * 1.3) - 0.5) * step * 0.9;
+        const jz = (decorHash(gz * 1.1, gx * 0.5) - 0.5) * step * 0.9;
+        const x = gx + jx, z = gz + jz;
+        if (!isForestAt(x, z)) continue;
+        // Mantém a base do Vampiro (cripta e praça) livre de árvores decorativas.
+        if (Math.hypot(x - CRYPT_POSITION.x, z - CRYPT_POSITION.z) < CRYPT_DECAL_RADIUS + 10) continue;
+        if (occupied.has(`${Math.floor(x / cell)},${Math.floor(z / cell)}`)) continue;
+        if (obstacles.some(o => Math.abs(x - o.x) < o.width / 2 + 1.6 && Math.abs(z - o.z) < o.depth / 2 + 1.6)) continue;
+        spots.push([x, z, decorHash(x, z), decorHash(z, x)]);
+      }
+    }
+    if (!spots.length) return;
+    const trees = new THREE.InstancedMesh(tree.geometry, tree.material.clone(), spots.length);
+    trees.castShadow = true;
+    trees.receiveShadow = true;
+    this.unitReveal.apply(trees);
+    const m = new THREE.Matrix4();
+    const rotation = new THREE.Quaternion();
+    const scale = new THREE.Vector3();
+    const position = new THREE.Vector3();
+    const up = new THREE.Vector3(0, 1, 0);
+    const tint = new THREE.Color();
+    for (let i = 0; i < spots.length; i++) {
+      const [x, z, h1, h2] = spots[i]!;
+      const size = 0.5 + h1 * 0.55;
+      rotation.setFromAxisAngle(up, h1 * Math.PI * 2);
+      scale.set(size * (0.8 + h2 * 0.2), size * (0.9 + h1 * 0.3), size * (0.8 + h2 * 0.2));
+      position.set(x, this.heightAt(x, z), z);
+      m.compose(position, rotation, scale);
+      trees.setMatrixAt(i, m);
+      const shade = 0.72 + h2 * 0.34;
+      tint.setRGB(shade * 0.93, shade, shade * 0.86);
+      trees.setColorAt(i, tint);
+    }
+    trees.instanceMatrix.needsUpdate = true;
+    if (trees.instanceColor) trees.instanceColor.needsUpdate = true;
+    this.scene.add(trees);
   }
 
   private addHealthBar(unitGroup: THREE.Group, unitId: number) {
@@ -1193,10 +1255,10 @@ export class GameScene {
     this.addEffect(sprite, new THREE.Vector3(0, 1.8, 0), 1.8);
   }
 
-  private productionEffect(position: THREE.Vector3, amount: number) {
-    this.floatingText(`+${amount} ouro`, position.clone().add(new THREE.Vector3(0, 8, 0)), '#ffe48b');
+  private productionEffect(position: THREE.Vector3, amount: number, label = 'ouro', textColor = '#ffe48b', coinColor = '#f8ca4f') {
+    this.floatingText(`+${amount} ${label}`, position.clone().add(new THREE.Vector3(0, 8, 0)), textColor);
     for (let i = 0; i < Math.min(3, amount + 1); i++) {
-      const coin = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.08, 12), new THREE.MeshBasicMaterial({ color: '#f8ca4f', transparent: true }));
+      const coin = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.08, 12), new THREE.MeshBasicMaterial({ color: coinColor, transparent: true }));
       coin.position.copy(position).add(new THREE.Vector3((i - 1) * 0.6, 7, 0));
       coin.rotation.x = Math.PI / 2;
       this.addEffect(coin, new THREE.Vector3((i - 1) * 0.4, 2 + i * 0.2, 0), 1.5, true);
@@ -1210,6 +1272,20 @@ export class GameScene {
       dust.position.copy(position).add(new THREE.Vector3(0, 0.5, 0));
       this.addEffect(dust, new THREE.Vector3(Math.sin(a) * 1.5, 0.8, Math.cos(a) * 1.5), 1.2);
     }
+  }
+
+  /** Marcador global de morte: texto flutuante, poeira escura e um anel que se abre. */
+  deathPulse(x: number, z: number, label: string) {
+    const base = new THREE.Vector3(x, this.heightAt(x, z) + 1.2, z);
+    this.floatingText(`☠ ${label}`, base.clone().add(new THREE.Vector3(0, 1.4, 0)), '#ff8a8a');
+    this.dustEffect(base, '#6d1620');
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(1.0, 1.4, 32),
+      new THREE.MeshBasicMaterial({ color: '#c0392b', transparent: true, opacity: 0.85, depthWrite: false, side: THREE.DoubleSide }),
+    );
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.copy(base);
+    this.addEffect(ring, new THREE.Vector3(0, 0, 0), 1.6, false, undefined, 3.2);
   }
 
   // ---------- seleção ----------
@@ -1302,7 +1378,69 @@ export class GameScene {
     return g.position.clone().add(new THREE.Vector3(0, g.userData.kind === 'vampire' ? 1.8 : 1, 0)).project(this.camera);
   }
 
+  /** Unidade mais próxima do cursor (em pixels), para o indicador de alvo. */
+  unitUnderCursor(nx: number, ny: number, maxPx = 18): number | undefined {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    let nearest = maxPx;
+    let found: number | undefined;
+    for (const [id, g] of this.unitMeshes) {
+      if (!g.visible) continue;
+      const p = this.unitScreenPosition(id);
+      if (!p || p.z < -1 || p.z > 1) continue;
+      const d = Math.hypot((p.x - nx) * rect.width / 2, (p.y - ny) * rect.height / 2);
+      if (d < nearest) { nearest = d; found = id; }
+    }
+    return found;
+  }
+
+  /** Retículo vermelho sobre o inimigo sob o cursor (null esconde). */
+  setHoverEnemy(id: number | null): void {
+    if (this.hoverEnemyId === id) return;
+    this.hoverEnemyId = id;
+    if (id === null) {
+      if (this.hoverRing) this.hoverRing.visible = false;
+      return;
+    }
+    if (!this.hoverRing) {
+      const group = new THREE.Group();
+      const mat = new THREE.MeshBasicMaterial({ color: 0xff4b4b, transparent: true, opacity: 0.9, side: THREE.DoubleSide, depthTest: false, depthWrite: false, toneMapped: false });
+      const ring = new THREE.Mesh(new THREE.RingGeometry(0.95, 1.14, 28), mat);
+      ring.rotation.x = -Math.PI / 2;
+      group.add(ring);
+      for (let i = 0; i < 4; i++) {
+        const a = i * Math.PI / 2;
+        const tick = new THREE.Mesh(new THREE.PlaneGeometry(0.18, 0.42), mat);
+        tick.rotation.x = -Math.PI / 2;
+        tick.rotation.z = -a;
+        tick.position.set(Math.cos(a) * 1.4, 0, Math.sin(a) * 1.4);
+        group.add(tick);
+      }
+      group.renderOrder = 13;
+      this.hoverRing = group;
+      this.scene.add(group);
+    }
+    this.hoverRing.visible = true;
+  }
+
   // ---------- dia / noite ----------
+
+  /** Ponto do chão que a câmera observa; usado para posicionar a sombra. */
+  setShadowFocus(x: number, z: number) {
+    this.shadowFocus.set(x, 0, z);
+  }
+
+  /** Posiciona sol e alvo acompanhando o foco, mantendo o frustum de sombra pequeno. */
+  private updateSunFollow() {
+    const y = this.heightAt(this.shadowFocus.x, this.shadowFocus.z);
+    const { x, z } = this.shadowFocus;
+    this.sun.target.position.set(x, y, z);
+    this.sun.position.set(
+      x + this.sunDir.x * this.sunDistance,
+      y + this.sunDir.y * this.sunDistance,
+      z + this.sunDir.z * this.sunDistance,
+    );
+    this.sun.target.updateMatrixWorld();
+  }
 
   updateDayNight(phase: 'day' | 'night', phaseTime: number, day: number) {
     const DAY_SKY = new THREE.Color(0x87b5e0);
@@ -1321,16 +1459,19 @@ export class GameScene {
       else if (t > 0.85) sky.copy(DAY_SKY).lerp(DUSK_SKY, (t - 0.85) / 0.15);
       else sky.copy(DAY_SKY);
       const ang = t * Math.PI; // sol nasce e se põe
-      this.sun.position.set(Math.cos(ang) * 120, Math.max(10, Math.sin(ang) * 140), 40);
+      // Sol alto: sombras curtas e "sentadas" nos modelos (sem esticar demais),
+      // mas nítidas e escuras pelo frustum pequeno + pouca luz de preenchimento.
+      this.sunDir.set(Math.cos(ang) * 75, Math.max(150, Math.sin(ang) * 35 + 145), 45).normalize();
       this.sun.intensity = 1.6 * Math.max(0.2, Math.sin(ang));
       this.sun.color.setHex(t > 0.8 ? 0xffb080 : 0xffeecc);
-      this.hemi.intensity = 1.4;
+      // Luz de preenchimento baixa: aumenta o contraste e escurece as sombras.
+      this.hemi.intensity = 1.0;
       this.fog.near = 240;
       this.fog.far = 900;
     } else {
       sky.copy(NIGHT_SKY);
       // lua fixa
-      this.sun.position.set(-80, 100, -60);
+      this.sunDir.set(-80, 100, -60).normalize();
       this.sun.color.setHex(0x8a9cd8);
       this.sun.intensity = 0.35;
       this.hemi.intensity = 0.25;
@@ -1436,6 +1577,16 @@ export class GameScene {
 
   render(dt: number) {
     this.animationTime += dt;
+    if (this.hoverEnemyId !== null && this.hoverRing) {
+      const target = this.unitMeshes.get(this.hoverEnemyId);
+      if (target && target.visible) {
+        this.hoverRing.visible = true;
+        this.hoverRing.position.set(target.position.x, this.heightAt(target.position.x, target.position.z) + 0.16, target.position.z);
+        this.hoverRing.scale.setScalar(1 + Math.sin(this.animationTime * 6) * 0.08);
+      } else {
+        this.hoverRing.visible = false;
+      }
+    }
     for (let i = this.effects.length - 1; i >= 0; i--) {
       const effect = this.effects[i]!;
       effect.age += dt;
@@ -1473,7 +1624,7 @@ export class GameScene {
             : walking
               ? 'walking'
               : 'idle';
-        updateExternalAnimation(g, animation, dt);
+        updateExternalAnimation(g, animation, dt, animation === 'attack' ? (g.userData.attackScale as number | undefined) : undefined);
       }
       const swing = Math.sin(this.animationTime * (working ? 11 : 9));
       for (const [name, sign] of [['leftLeg', 1], ['rightLeg', -1]] as const) {
@@ -1522,6 +1673,7 @@ export class GameScene {
     this.unitReveal.update(this.renderer, this.camera, this.unitMeshes);
     // Atualiza a visão com as posições/facing já interpolados deste frame.
     this.updateFogVision();
+    this.updateSunFollow();
     this.renderer.render(this.scene, this.camera);
     // Sombra de guerra por cima de tudo (sem teste de profundidade): reconstrói o
     // mundo no shader e escurece o que está fora da visão do time.

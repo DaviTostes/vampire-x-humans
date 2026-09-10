@@ -7,6 +7,7 @@ import zlib from "node:zlib";
 import { WebSocketServer } from "ws";
 
 // ../../game.config.ts
+var MOVE_SPEED_SCALE = 7 / 367;
 var GAME_CONFIG = {
   match: {
     daySeconds: 60,
@@ -17,8 +18,9 @@ var GAME_CONFIG = {
   lobby: { codeLength: 5 },
   units: {
     human: {
-      hp: 100,
-      speed: 7,
+      // Spec (seção 1): Vida máxima 200, Move Speed 367 (convertido por MOVE_SPEED_SCALE).
+      hp: 200,
+      speed: Math.round(367 * MOVE_SPEED_SCALE * 10) / 10,
       carry: 10,
       // Recursos por ciclo de coleta
       gatherRate: 2.5,
@@ -40,130 +42,86 @@ var GAME_CONFIG = {
       buildRate: 1
     },
     vampire: {
-      hp: 1200,
-      speedDay: 6,
-      speedNight: 9.5,
-      attackDamage: 50,
+      // Spec (seção 13): Vida 500, Dano 5, Attack Speed 120 (máx 600), Move Speed 400.
+      // Move Speed convertido por MOVE_SPEED_SCALE; attackCooldown é o intervalo
+      // base em Attack Speed 120 (1,42s).
+      hp: 500,
+      speedDay: Math.round(400 * MOVE_SPEED_SCALE * 10) / 10,
+      speedNight: Math.round(400 * MOVE_SPEED_SCALE * 10) / 10,
+      attackDamage: 5,
       dayDamageMultiplier: 0.4,
       attackDamageBuilding: 25,
       attackRange: 2.2,
-      attackCooldown: 1.1,
-      minAttackCooldown: 0.45,
-      // Intervalo mínimo entre ataques, mesmo com muito Frenesi
-      bloodPerHit: 2,
-      // Sangue ganho por golpe acertado, contra unidades ou construções
+      attackCooldown: 1.42,
+      // Intervalo correspondente a Attack Speed 600 (1,42 × 120/600).
+      minAttackCooldown: 0.284,
+      bloodPerHit: 0,
+      // Depreciado: o sangue agora vem de `spec.bloodPerDamage` (80% do dano)
       nightRegen: 2,
       // Vida recuperada por segundo à noite
+      cryptRegen: 3e3,
+      // Vida por segundo dentro da cripta (quase instantâneo)
       cryptRadius: 14
     }
   },
   // "size" é a largura/profundidade ocupada pela construção no terreno.
+  // Progressões (níveis, custos de upgrade e pré-requisitos) ficam em `spec`.
   buildings: {
     bank: {
       hp: 500,
       size: 6,
       cost: { wood: 0, gold: 0, time: 5 },
-      maxLevel: 6,
-      goldPerCycle: 5,
-      // Mesma quantidade em todos os níveis, desde o nível 1
-      cycleSecondsByLevel: {
-        1: 5,
-        2: 4,
-        3: 3,
-        4: 2,
-        5: 1.5,
-        6: 1
-      },
-      // A chave é o nível ATUAL: 1 é o custo de ir do nível 1 para o 2.
-      upgradeCosts: {
-        1: { wood: 40, gold: 30 },
-        2: { wood: 60, gold: 60 },
-        3: { wood: 90, gold: 120 },
-        4: { wood: 130, gold: 240 },
-        5: { wood: 180, gold: 450 }
-      }
+      // nível 1 é gratuito (seção 4)
+      // Ciclo de produção CONSTANTE (não muda com o nível). Cada ciclo entrega
+      // `spec.bankLevels[nível].production` de ouro, que dobra a cada upgrade.
+      cycleSeconds: 1
     },
     taverna: {
       hp: 500,
       size: 6,
-      cost: { wood: 40, gold: 20, time: 5 },
+      cost: { wood: 0, gold: 128, time: 5 },
       recruit: { wood: 0, gold: 50, time: 2 }
     },
     wall: {
-      hp: 400,
+      hp: 30,
       size: 2,
-      cost: { wood: 15, gold: 0, time: 2 },
-      maxLevel: 3,
-      hpPerLevel: { 1: 400, 2: 800, 3: 1200 },
-      // A chave é o nível ATUAL: 1 é o custo de ir do nível 1 para o 2.
-      upgradeCosts: {
-        1: { wood: 60, gold: 20 },
-        2: { wood: 120, gold: 40 }
-      }
+      cost: { wood: 0, gold: 4, time: 2 }
     },
     tower: {
       hp: 300,
       size: 3,
-      cost: { wood: 30, gold: 40, time: 2 },
+      cost: { wood: 0, gold: 4, time: 2 },
+      // TODO(A CONFIRMAR): vida, alcance, Attack Speed, projétil e seleção de
+      // alvo não definidos; valores atuais preservados.
       range: 15,
-      damage: 10,
       cooldown: 2
     },
+    // Mercado: única construção onde se troca madeira por ouro e vice-versa.
+    // TODO(A CONFIRMAR): a spec não define custos/vida/níveis do Mercado;
+    // valores provisórios. Nível 2 é pré-requisito do Banco nível 6.
+    market: {
+      hp: 500,
+      size: 6,
+      cost: { wood: 0, gold: 64, time: 4 },
+      maxLevel: 2,
+      // Chave = nível ATUAL: 1 é o custo de ir do nível 1 para o 2.
+      upgradeCosts: { 1: { wood: 0, gold: 256 } }
+    },
+    // Mina de Ouro: construída pelo Minerador e fonte de ouro (seção 10).
+    // TODO(A CONFIRMAR): vida e tempo de obra não definidos; valor provisório.
+    goldMine: { hp: 400, size: 5, cost: { wood: 8, gold: 0, time: 3 } },
     // Estruturas especiais; keep não aparece no painel por padrão.
     keep: { hp: 1200, size: 7, cost: { wood: 150, gold: 60, time: 12 } },
     // ---- Base do Vampiro ----
     // Estrutura neutra e indestrutível. A cripta é a base e vende itens e skills.
-    crypt: { hp: 4e3, size: 8 }
+    // Ciclo de produção FIXO (como o Banco): só a quantidade por ciclo cresce
+    // com os upgrades, o intervalo entre os ticks não muda.
+    crypt: { hp: 4e3, size: 8, cycleSeconds: 1 }
   },
-  buildable: ["bank", "taverna", "wall", "tower"],
-  // Itens equipados automaticamente ao comprar com sangue. A loja só abre de dia.
-  // baseCost + costGrowth: custo do nível N = baseCost * costGrowth^(N-1). maxCount Infinity = upável sem limite.
-  vampireItems: {
-    claws: {
-      name: "Garras Sangrentas",
-      icon: "\u2694",
-      baseCost: 50,
-      costGrowth: 1.4,
-      damageBonus: 10,
-      healthBonus: 0,
-      speedBonus: 0,
-      cooldownFactor: 1,
-      maxCount: Infinity
-    },
-    heart: {
-      name: "Cora\xE7\xE3o Ancestral",
-      icon: "\u2665",
-      baseCost: 75,
-      costGrowth: 1.4,
-      damageBonus: 0,
-      healthBonus: 300,
-      speedBonus: 0,
-      cooldownFactor: 1,
-      maxCount: Infinity
-    },
-    boots: {
-      name: "Botas da N\xE9voa",
-      icon: "\u{1F97E}",
-      baseCost: 30,
-      costGrowth: 1.4,
-      damageBonus: 0,
-      healthBonus: 0,
-      speedBonus: 0.5,
-      cooldownFactor: 1,
-      maxCount: Infinity
-    },
-    frenzy: {
-      name: "Frenesi",
-      icon: "\u{1F300}",
-      baseCost: 30,
-      costGrowth: 1.4,
-      damageBonus: 0,
-      healthBonus: 0,
-      speedBonus: 0,
-      cooldownFactor: 0.93,
-      maxCount: Infinity
-    }
-  },
+  buildable: ["bank", "taverna", "wall", "tower", "goldMine", "market"],
+  // Itens do Vampiro (dano/vida/Attack Speed): ver `spec.vampireItemTiers`.
+  // Comprados com OURO na cripta. (A antiga economia de sangue por item foi
+  // substituída pela especificação; `blood` permanece só para a skill legada.)
   // Skills ativas do vampiro: compra única com sangue, depois uso com cooldown.
   vampireSkills: {
     powerStrike: {
@@ -176,7 +134,7 @@ var GAME_CONFIG = {
       description: "Dobra o dano por 8s"
     }
   },
-  // No muro, estes valores definem a troca nos dois sentidos.
+  // No Mercado, estes valores definem a troca nos dois sentidos.
   // Exemplo: wood: 20, gold: 10 => vende 20 madeira por 10 ouro e vice-versa.
   market: { wood: 10, gold: 10 },
   camera: {
@@ -213,7 +171,7 @@ var GAME_CONFIG = {
     recruitSpawnExtraRadius: 5
   },
   map: {
-    version: 4,
+    version: 5,
     // Escala global do mundo: todas as coordenadas abaixo estão em "espaço de
     // projeto" (mundo 480). `scale` reduz o mundo e as posições proporcionalmente.
     // 1 = 480×480; 0.55 ≈ 264×264. Menor = mapa mais apertado e denso.
@@ -251,8 +209,9 @@ var GAME_CONFIG = {
       noiseB: 0.05,
       bays: [{ x: -80, z: -182, r: 28 }, { x: 175, z: 130, r: 26 }]
     },
-    lakes: [{ x: -20, z: -40, rx: 12, rz: 9 }, { x: 74, z: 34, rx: 10, rz: 8 }],
-    // Sem rio: todo o interior é chão transitável (sem pontes). Lagos e mar seguem.
+    // Sem lagos nem rio: a única água é o mar em volta da ilha (a costa).
+    // Todo o interior é chão transitável (sem pontes).
+    lakes: [],
     rivers: [],
     // Vaus extras fixos (somados aos automáticos das trilhas).
     bridges: [],
@@ -282,6 +241,259 @@ var GAME_CONFIG = {
       centralGold: [{ x: -12, z: -19 }, { x: 12, z: -19 }, { x: -12, z: 19 }, { x: 12, z: 19 }],
       forestNodeSpacing: 5.5
       // Grade de árvores coletáveis; menor = floresta mais densa
+    }
+  },
+  // ==========================================================================
+  // ESPECIFICAÇÃO "HUMANO E VAMPIRO"
+  // Tabelas da especificação de implementação. Fonte de verdade a partir das
+  // etapas seguintes. Valores marcados com TODO(A CONFIRMAR) NÃO foram definidos
+  // na especificação e não devem ser preenchidos por suposição.
+  // ==========================================================================
+  spec: {
+    // ---- Atributos iniciais (seções 1 e 13) ----
+    // Observação: a spec usa números em unidade de RTS (ex.: Move Speed 367/400),
+    // diferentes da escala atual do projeto (speed 6–9.5). A conversão/adoção
+    // desses valores será tratada na etapa de atributos; aqui ficam os valores crus.
+    // Fator de conversão do Move Speed da spec para unidades do projeto.
+    moveSpeedScale: MOVE_SPEED_SCALE,
+    humanBase: {
+      maxHp: 200,
+      moveSpeed: 367
+      // TODO(A CONFIRMAR): dano base, Attack Speed, alcance e regeneração não definidos.
+    },
+    vampireBase: {
+      maxHp: 500,
+      damage: 5,
+      attackSpeed: 120,
+      attackInterval: 1.42,
+      // ~intervalo aproximado entre ataques
+      moveSpeed: 400,
+      maxAttackSpeed: 600
+      // limite absoluto: attackSpeedFinal = min(calculado, 600)
+    },
+    // ---- Habilidades do Humano (seção 2) ----
+    humanAbilities: {
+      entangle: {
+        name: "Enredar",
+        icon: "\u{1F578}",
+        duration: 4,
+        cooldown: 32,
+        // TODO(A CONFIRMAR): alcance de aplicação não definido.
+        range: null,
+        description: "O Vampiro n\xE3o pode atacar por 4s"
+      },
+      fortify: {
+        name: "Fortificar",
+        icon: "\u{1F6E1}",
+        duration: 8,
+        cooldown: 300,
+        targets: ["unit", "building"],
+        description: "Torna o alvo invulner\xE1vel por 8s"
+      },
+      teleport: {
+        name: "Teleporte",
+        icon: "\u2728",
+        maxRange: 600,
+        cooldown: 32,
+        // TODO(A CONFIRMAR): canalização, animação, interrupção e custo não definidos.
+        description: "Teleporta o Humano at\xE9 600 unidades"
+      },
+      silencer: {
+        name: "Silenciador",
+        icon: "\u{1F507}",
+        duration: 1.5,
+        cooldown: 45,
+        // TODO(A CONFIRMAR): alcance de aplicação não definido.
+        range: null,
+        description: "O Vampiro n\xE3o pode usar habilidades por 1,5s"
+      }
+    },
+    // ---- Banco (seção 4) ----
+    // Chave = nível alcançado. `upgradeCost` é o custo para chegar nesse nível
+    // (nível 1 é gratuito). `production` em gold/s. `prerequisite` para o nível.
+    bankLevels: {
+      1: { upgradeCost: null, production: 1, prerequisite: null },
+      2: { upgradeCost: { gold: 50 }, production: 2, prerequisite: { wallLevel: 1 } },
+      3: { upgradeCost: { gold: 100 }, production: 4, prerequisite: { wallLevel: 4 } },
+      4: { upgradeCost: { gold: 200 }, production: 8, prerequisite: { marketLevel: 1 } },
+      5: { upgradeCost: { gold: 400 }, production: 16, prerequisite: { wallLevel: 6 } },
+      6: { upgradeCost: { gold: 800, wood: 32 }, production: 32, prerequisite: { marketLevel: 2 } },
+      7: { upgradeCost: { gold: 1600, wood: 64 }, production: 64, prerequisite: { wallLevel: 9 } },
+      8: { upgradeCost: { gold: 3200, wood: 128 }, production: 128, prerequisite: { wallLevel: 11 } }
+    },
+    bankMaxLevel: 8,
+    // ---- Muro (seção 5) ----
+    // Chave = nível alcançado. Nível 1 é o custo de construção; os demais, o de upgrade.
+    wallLevels: {
+      1: { cost: { gold: 4 }, hp: 30 },
+      2: { cost: { gold: 8 }, hp: 60 },
+      3: { cost: { gold: 16 }, hp: 120 },
+      4: { cost: { gold: 32 }, hp: 160 },
+      5: { cost: { gold: 64 }, hp: 240 },
+      6: { cost: { gold: 128 }, hp: 480 },
+      7: { cost: { gold: 256 }, hp: 800 },
+      8: { cost: { gold: 512 }, hp: 1280 },
+      9: { cost: { gold: 1024 }, hp: 2560 },
+      10: { cost: { gold: 2048 }, hp: 5120 },
+      11: { cost: { gold: 4096, wood: 32 }, hp: 10240 }
+    },
+    wallMaxLevel: 11,
+    // ---- Torre (seção 12) ----
+    // TODO(A CONFIRMAR): vida, alcance, Attack Speed, projétil, seleção de alvo e níveis > 7.
+    towerLevels: {
+      1: { cost: { gold: 4 }, damage: 1 },
+      2: { cost: { gold: 16 }, damage: 2 },
+      3: { cost: { gold: 32 }, damage: 4 },
+      4: { cost: { gold: 64 }, damage: 8 },
+      5: { cost: { gold: 128 }, damage: 16 },
+      6: { cost: { gold: 256 }, damage: 32 },
+      7: { cost: { gold: 512, wood: 2 }, damage: 64 }
+    },
+    towerMaxLevel: 7,
+    // ---- Taverna (seção 6) ----
+    // TODO(A CONFIRMAR): custos, vida e progressão da própria Taverna não definidos.
+    tavernaMaxCount: 3,
+    // ---- Mina de Ouro (seção 10) ----
+    // TODO(A CONFIRMAR): intervalo entre coletas, capacidade, duração, limite de
+    // minas e semântica exata de "Gold Amount" (por coleta ou outra unidade).
+    goldMine: {
+      maxCount: null,
+      gatherInterval: null,
+      levels: {
+        1: { woodCost: 8, goldAmount: 4 },
+        2: { woodCost: 128, goldAmount: 32 }
+      }
+    },
+    // ---- Trabalhadores (seções 7–11) ----
+    workers: {
+      // Lenhador: reduz o intervalo entre coletas; mantém 4 por coleta.
+      // TODO(A CONFIRMAR): unidade do Gather Interval não definida no projeto.
+      lumberjack: {
+        maxCount: 20,
+        lumberAmount: 4,
+        gatherIntervalUnit: null,
+        levels: {
+          1: { goldCost: 512, gatherInterval: 8 },
+          2: { goldCost: 1024, gatherInterval: 4 },
+          3: { goldCost: 2048, gatherInterval: 2 },
+          4: { goldCost: 4096, gatherInterval: 1 }
+        }
+      },
+      // Minerador: constrói Minas de Ouro e extrai ouro delas.
+      // TODO(A CONFIRMAR): Gather Interval do Minerador não definido.
+      miner: {
+        maxCount: 15,
+        woodCost: 2,
+        gatherInterval: null
+      },
+      // Reparador: repara Muros. trainingTime 0 = instantâneo.
+      // TODO(A CONFIRMAR): significado/unidade exata de Repair Speed.
+      repairer: {
+        maxCount: 1,
+        levels: {
+          1: { goldCost: 8, repairSpeed: 4, trainingTime: 4 },
+          2: { goldCost: 96, repairSpeed: 9, trainingTime: 0 },
+          3: { goldCost: 512, repairSpeed: 12, trainingTime: 0 },
+          4: { goldCost: 1500, repairSpeed: 16, trainingTime: 0 }
+        }
+      }
+    },
+    // ---- Habilidades do Vampiro (seções 15–17) ----
+    vampireAbilities: {
+      revealArea: {
+        name: "Revelar \xC1rea",
+        icon: "\u{1F441}",
+        duration: 10,
+        usesPerNight: 1,
+        // TODO(A CONFIRMAR): raio, forma, alcance e se revela unidades invisíveis.
+        radius: null,
+        range: null
+      },
+      batForm: {
+        name: "Invisibilidade / Forma de Morcego",
+        icon: "\u{1F987}",
+        maxDuration: 15,
+        exitDuration: 1.5,
+        // TODO(A CONFIRMAR): bônus de Move Speed, invulnerabilidade durante a
+        // animação de saída e cancelamento manual antes dos 15s.
+        moveSpeedBonus: null,
+        invulnerableDuringExit: null,
+        cancellable: null
+      },
+      teleportHome: {
+        name: "Teleport para a Base",
+        icon: "\u{1F3E0}",
+        channelTime: 2.8,
+        // TODO(A CONFIRMAR): o que interrompe a canalização (dano, ataque,
+        // movimento, outra habilidade).
+        interruptedByDamage: null,
+        interruptedByAttack: null,
+        interruptedByMove: null,
+        interruptedByAbility: null
+      }
+    },
+    // ---- Cripta (seção 19) ----
+    // TODO(A CONFIRMAR): custo inicial (nível 1) e se existem níveis acima do 4.
+    crypt: {
+      maxLevel: 4,
+      // SANGUE POR CICLO (não por segundo): o ciclo é fixo em `buildings.crypt.cycleSeconds`.
+      productionByLevel: { 1: 1, 2: 2, 3: 4, 4: 8 },
+      // Custo para alcançar o nível indicado.
+      upgradeCosts: { 2: 190, 3: 320, 4: 480 },
+      initialCost: null,
+      hasLevelsAboveMax: null
+    },
+    // ---- Recompensa por dano (seção 18) ----
+    // A spec chama de "ouro", mas o Vampiro deste projeto usa apenas SANGUE.
+    bloodPerDamage: 0.8,
+    // TODO(A CONFIRMAR): política de arredondamento (floor/ceil/round/decimal).
+    roundingPolicy: {
+      policy: null
+    },
+    // ---- Itens do Vampiro (seções 20–24) ----
+    // Cada nível guarda `bonus` e `cost` em gold. `bonus: null` = A CONFIRMAR.
+    vampireItemTiers: {
+      // TODO(A CONFIRMAR): modelo cumulativo (A) ou substitutivo (B).
+      accumulation: null,
+      damage: {
+        1: { bonus: 2, cost: 100 },
+        2: { bonus: 4, cost: 200 },
+        3: { bonus: 8, cost: 400 },
+        4: { bonus: 16, cost: 800 },
+        5: { bonus: 32, cost: 1600 },
+        6: { bonus: 64, cost: 3200 },
+        7: { bonus: 128, cost: 6400 },
+        8: { bonus: 256, cost: 12800 }
+      },
+      health: {
+        1: { bonus: 250, cost: 100 },
+        2: { bonus: 500, cost: 200 },
+        3: { bonus: 1e3, cost: 400 },
+        4: { bonus: 2e3, cost: 800 },
+        5: { bonus: 4e3, cost: 1600 },
+        6: { bonus: 8e3, cost: 3200 },
+        7: { bonus: 16e3, cost: 6400 },
+        8: { bonus: 32e3, cost: 12800 }
+      },
+      // TODO(A CONFIRMAR): bônus dos níveis 3–6 não definidos; NÃO duplicar.
+      attackSpeed: {
+        1: { bonus: 20, cost: 100 },
+        2: { bonus: 40, cost: 200 },
+        3: { bonus: null, cost: 400 },
+        4: { bonus: null, cost: 800 },
+        5: { bonus: null, cost: 1600 },
+        6: { bonus: null, cost: 3200 },
+        7: { bonus: 500, cost: 6400 }
+      }
+    },
+    // ---- Limites de entidades por jogador (seção 28) ----
+    entityLimits: {
+      wall: 2,
+      taverna: 3,
+      tower: 30,
+      lumberjack: 20,
+      miner: 15,
+      repairer: 1
     }
   }
 };
@@ -319,7 +531,6 @@ var BANK = GAME_CONFIG.buildings.bank;
 var TAVERNA = GAME_CONFIG.buildings.taverna;
 var KEEP = GAME_CONFIG.buildings.keep;
 var CRYPT = GAME_CONFIG.buildings.crypt;
-var VAMPIRE_ITEMS = GAME_CONFIG.vampireItems;
 var VAMPIRE_SKILLS = GAME_CONFIG.vampireSkills;
 var RECRUIT = TAVERNA.recruit;
 var BUILDABLE = GAME_CONFIG.buildable;
@@ -327,6 +538,25 @@ var MARKET = GAME_CONFIG.market;
 var TICK_RATE = GAME_CONFIG.simulation.ticksPerSecond;
 var DT = 1 / TICK_RATE;
 var INTERACTION = GAME_CONFIG.interaction;
+var SPEC = GAME_CONFIG.spec;
+var HUMAN_SPEC = SPEC.humanBase;
+var VAMPIRE_SPEC = SPEC.vampireBase;
+var HUMAN_ABILITIES = SPEC.humanAbilities;
+var VAMPIRE_ABILITIES = SPEC.vampireAbilities;
+var SPEC_BANK_LEVELS = SPEC.bankLevels;
+var SPEC_BANK_MAX_LEVEL = SPEC.bankMaxLevel;
+var SPEC_WALL_LEVELS = SPEC.wallLevels;
+var SPEC_WALL_MAX_LEVEL = SPEC.wallMaxLevel;
+var SPEC_TOWER_LEVELS = SPEC.towerLevels;
+var SPEC_TOWER_MAX_LEVEL = SPEC.towerMaxLevel;
+var SPEC_TAVERNA_MAX_COUNT = SPEC.tavernaMaxCount;
+var SPEC_GOLD_MINE = SPEC.goldMine;
+var SPEC_WORKERS = SPEC.workers;
+var SPEC_CRYPT = SPEC.crypt;
+var SPEC_VAMPIRE_ITEM_TIERS = SPEC.vampireItemTiers;
+var SPEC_ENTITY_LIMITS = SPEC.entityLimits;
+var SPEC_BLOOD_PER_DAMAGE = SPEC.bloodPerDamage;
+var SPEC_ROUNDING_POLICY = SPEC.roundingPolicy;
 var TERRAIN_MAX_SLOPE = 0.06;
 var BUILD_COSTS = Object.fromEntries(
   Object.entries(GAME_CONFIG.buildings).filter(([, b]) => "cost" in b).map(([kind, b]) => [kind, "cost" in b ? b.cost : void 0])
@@ -334,18 +564,69 @@ var BUILD_COSTS = Object.fromEntries(
 var BUILDING_SIZE = Object.fromEntries(
   Object.entries(GAME_CONFIG.buildings).map(([kind, b]) => [kind, b.size])
 );
-var BUILD_MAX_LEVEL = BANK.maxLevel;
-var BANK_UPGRADE_COST = BANK.upgradeCosts;
-var WALL_MAX_LEVEL = WALL.maxLevel;
-var WALL_UPGRADE_COST = WALL.upgradeCosts;
-function wallMaxHp(level) {
-  return WALL.hpPerLevel[Math.min(WALL.maxLevel, Math.max(1, Math.floor(level)))];
+var BUILD_MAX_LEVEL = GAME_CONFIG.spec.bankMaxLevel;
+var WALL_MAX_LEVEL = GAME_CONFIG.spec.wallMaxLevel;
+var TOWER_MAX_LEVEL = GAME_CONFIG.spec.towerMaxLevel;
+function clampLevel(level, max) {
+  return Math.min(max, Math.max(1, Math.floor(level)));
 }
-function bankProduction() {
-  return BANK.goldPerCycle;
+var MARKET_MAX_LEVEL = GAME_CONFIG.buildings.market.maxLevel;
+function marketUpgradeCost(level) {
+  return GAME_CONFIG.buildings.market.upgradeCosts[level] ?? null;
 }
-function bankCycleSeconds(level) {
-  return BANK.cycleSecondsByLevel[Math.min(BANK.maxLevel, Math.max(1, Math.floor(level)))];
+function bankProduction(level = 1) {
+  return GAME_CONFIG.spec.bankLevels[clampLevel(level, BUILD_MAX_LEVEL)].production;
+}
+var BANK_CYCLE_SECONDS = GAME_CONFIG.buildings.bank.cycleSeconds;
+var CRYPT_CYCLE_SECONDS = GAME_CONFIG.buildings.crypt.cycleSeconds;
+function cryptProduction(level = 1) {
+  return SPEC_CRYPT.productionByLevel[clampLevel(level, SPEC_CRYPT.maxLevel)] ?? 0;
+}
+function towerDamage(level = 1) {
+  return GAME_CONFIG.spec.towerLevels[clampLevel(level, TOWER_MAX_LEVEL)].damage;
+}
+function workerTrainCost(role) {
+  const w = GAME_CONFIG.spec.workers;
+  if (role === "miner") return { wood: w.miner.woodCost };
+  if (role === "lumberjack") return { gold: w.lumberjack.levels[1].goldCost };
+  return { gold: w.repairer.levels[1].goldCost };
+}
+function workerMaxLevel(role) {
+  const w = GAME_CONFIG.spec.workers;
+  if (role === "lumberjack") return Object.keys(w.lumberjack.levels).length;
+  if (role === "repairer") return Object.keys(w.repairer.levels).length;
+  return 1;
+}
+function workerUpgradeCost(role, level) {
+  const next = level + 1;
+  const w = GAME_CONFIG.spec.workers;
+  if (role === "lumberjack") {
+    const e = w.lumberjack.levels[next];
+    return e ? { gold: e.goldCost } : null;
+  }
+  if (role === "repairer") {
+    const e = w.repairer.levels[next];
+    return e ? { gold: e.goldCost } : null;
+  }
+  return null;
+}
+function lumberjackGatherRate(level) {
+  const cfg = GAME_CONFIG.spec.workers.lumberjack;
+  const entry = cfg.levels[clampLevel(level, workerMaxLevel("lumberjack"))];
+  return cfg.lumberAmount / entry.gatherInterval;
+}
+function repairerStats(level) {
+  const cfg = GAME_CONFIG.spec.workers.repairer;
+  return cfg.levels[clampLevel(level, workerMaxLevel("repairer"))];
+}
+function repairerTrainingTime(level) {
+  return repairerStats(level).trainingTime;
+}
+function minerGoldRate(mineLevel) {
+  const mine = GAME_CONFIG.spec.goldMine;
+  const entry = mine.levels[clampLevel(mineLevel, Object.keys(mine.levels).length)];
+  const interval = mine.gatherInterval ?? GAME_CONFIG.spec.workers.miner.gatherInterval ?? 1;
+  return entry.goldAmount / interval;
 }
 
 // ../shared/src/mapgen.ts
@@ -353,6 +634,10 @@ var S = (value) => value * MAP_SCALE;
 var MAP_SEED = GAME_CONFIG.map.version;
 var HUMAN_SPAWNS = GAME_CONFIG.map.humanSpawns.map((p) => ({ x: S(p.x), z: S(p.z) }));
 var CRYPT_POSITION = { x: S(GAME_CONFIG.map.crypt.x), z: S(GAME_CONFIG.map.crypt.z) };
+var CRYPT_FOREST_CLEARANCE = S(44);
+function withinCryptClearance(x, z) {
+  return Math.hypot(x - CRYPT_POSITION.x, z - CRYPT_POSITION.z) < CRYPT_FOREST_CLEARANCE;
+}
 var COMPOUNDS = GAME_CONFIG.map.refuges.map((c) => ({
   ...c,
   x: Math.round(S(c.x)),
@@ -697,7 +982,7 @@ function isForestAt(x, z) {
   if (nearCompound(x, z, S(5))) return false;
   if (nearMountain(x, z, S(2))) return false;
   if (ROCK_FORMATIONS.some((f) => ((x - f.x) / (f.rx * 1.08)) ** 2 + ((z - f.z) / (f.rz * 1.08)) ** 2 < 1)) return false;
-  if (Math.hypot(x - CRYPT_POSITION.x, z - CRYPT_POSITION.z) < S(30)) return false;
+  if (withinCryptClearance(x, z)) return false;
   if (Math.hypot(x, z) < S(16)) return false;
   return true;
 }
@@ -721,8 +1006,22 @@ var RESOURCE_PLACEMENTS = [
   ...GAME_CONFIG.map.resources.centralWoodX.flatMap((x) => GAME_CONFIG.map.resources.centralWoodZ.map((z) => ({ kind: "wood", x: S(x), z: S(z) }))).filter((p) => distanceToTrails(p.x, p.z) >= S(5.5)),
   ...BASE_TREES,
   ...FOREST_WOOD_NODES
-].filter((n) => !isWaterTile(n.x, n.z));
+].filter((n) => !isWaterTile(n.x, n.z) && !withinCryptClearance(n.x, n.z));
+var MAP_CACHE = /* @__PURE__ */ new Map();
+function cloneMap(map) {
+  return {
+    seed: map.seed,
+    tiles: map.tiles,
+    height: map.height.slice(),
+    water: map.water.slice(),
+    bridge: map.bridge.slice(),
+    forest: map.forest.slice(),
+    obstacles: map.obstacles.map((o) => ({ ...o }))
+  };
+}
 function generateMap(_seed = MAP_SEED) {
+  const cached = MAP_CACHE.get(_seed);
+  if (cached) return cloneMap(cached);
   const n = WORLD.tiles;
   const height = new Float32Array(n * n);
   const water = new Uint8Array(n * n);
@@ -765,19 +1064,15 @@ function generateMap(_seed = MAP_SEED) {
     }
     if (isBridgeAtWorld(wx, wz)) bridge[i] = 1;
   }
-  return { seed: MAP_SEED, tiles: n, height, water, bridge, forest, obstacles: [...NATURAL_BLOCKERS, ...ROCK_OBSTACLES, ...BASE_ROCKS].map((o) => ({ ...o })) };
+  const map = { seed: MAP_SEED, tiles: n, height, water, bridge, forest, obstacles: [...NATURAL_BLOCKERS, ...ROCK_OBSTACLES, ...BASE_ROCKS].map((o) => ({ ...o })) };
+  MAP_CACHE.set(_seed, map);
+  return cloneMap(map);
 }
 function tileToWorld(tx) {
   return (tx - WORLD.tiles / 2) * WORLD.tileSize + WORLD.tileSize / 2;
 }
 function worldToTile(wx) {
   return Math.floor((wx + WORLD.half) / WORLD.tileSize);
-}
-function isWaterAt(map, wx, wz) {
-  const tx = worldToTile(wx), tz = worldToTile(wz);
-  if (tx < 0 || tz < 0 || tx >= map.tiles || tz >= map.tiles) return true;
-  const i = tz * map.tiles + tx;
-  return map.water[i] === 1 && map.bridge[i] !== 1;
 }
 
 // ../shared/src/state.ts
@@ -814,6 +1109,16 @@ function createGameState(names, _seed = MAP_SEED, playerIds = Array.from({ lengt
       dead: false
     };
   });
+  const nodes = RESOURCE_PLACEMENTS.map((node, i) => ({
+    id: 200 + i,
+    ...node,
+    amount: node.kind === "wood" ? 600 : 2e3,
+    maxAmount: node.kind === "wood" ? 600 : 2e3
+  }));
+  let nextId = 1;
+  for (const u of units) if (u.id >= nextId) nextId = u.id + 1;
+  for (const n of nodes) if (n.id >= nextId) nextId = n.id + 1;
+  if (100 >= nextId) nextId = 101;
   return {
     tick: 0,
     time: 0,
@@ -823,7 +1128,7 @@ function createGameState(names, _seed = MAP_SEED, playerIds = Array.from({ lengt
     result: null,
     players: createPlayers(names, ids),
     units,
-    vampire: { blood: 0, items: {}, skills: {} },
+    vampire: { blood: 0, items: {}, skills: {}, revealUses: 1 },
     seed: MAP_SEED,
     buildings: [
       {
@@ -841,12 +1146,8 @@ function createGameState(names, _seed = MAP_SEED, playerIds = Array.from({ lengt
         attackCd: 0
       }
     ],
-    nodes: RESOURCE_PLACEMENTS.map((node, i) => ({
-      id: 200 + i,
-      ...node,
-      amount: node.kind === "wood" ? 600 : 2e3,
-      maxAmount: node.kind === "wood" ? 600 : 2e3
-    }))
+    nodes,
+    nextId
   };
 }
 
@@ -856,11 +1157,11 @@ var SIZE = WORLD.tiles * WORLD.tileSize;
 var BUCKET_SIZE = 8;
 var BUCKET_COUNT = Math.ceil(SIZE / BUCKET_SIZE);
 var PATH_STEPS_PER_TICK = 512;
+var PATH_MS_PER_TICK = 12;
 function distanceToTarget(p, target, half = 0) {
-  return Math.hypot(
-    Math.max(0, Math.abs(p.x - target.x) - half),
-    Math.max(0, Math.abs(p.z - target.z) - half)
-  );
+  const dx = Math.max(0, Math.abs(p.x - target.x) - half);
+  const dz = Math.max(0, Math.abs(p.z - target.z) - half);
+  return Math.sqrt(dx * dx + dz * dz);
 }
 var Navigation = class {
   constructor(state, map) {
@@ -870,18 +1171,35 @@ var Navigation = class {
   state;
   map;
   routes = /* @__PURE__ */ new Map();
-  signature = "";
+  bCount = 0;
+  bIdSum = 0;
+  nCount = 0;
+  nIdSum = 0;
   grids = /* @__PURE__ */ new Map();
-  colliders = /* @__PURE__ */ new Map();
+  colliders = [];
   searches = [];
   searchBudget = PATH_STEPS_PER_TICK;
+  searchStart = 0;
   indexed = false;
+  separationBuckets = /* @__PURE__ */ new Map();
   pathPool = [];
   pathGen = 0;
+  invTile = 1 / WORLD.tileSize;
   refresh() {
-    const signature = this.state.buildings.map((b) => `${b.id}:${b.kind}:${b.x}:${b.z}`).join("|") + "/" + this.state.nodes.filter((n) => n.amount > 0).map((n) => n.id).join(",");
-    if (signature !== this.signature) {
-      this.signature = signature;
+    let bCount = 0, bIdSum = 0, nCount = 0, nIdSum = 0;
+    for (const b of this.state.buildings) {
+      bCount++;
+      bIdSum += b.id;
+    }
+    for (const n of this.state.nodes) if (n.amount > 0) {
+      nCount++;
+      nIdSum += n.id;
+    }
+    if (bCount !== this.bCount || bIdSum !== this.bIdSum || nCount !== this.nCount || nIdSum !== this.nIdSum) {
+      this.bCount = bCount;
+      this.bIdSum = bIdSum;
+      this.nCount = nCount;
+      this.nIdSum = nIdSum;
       for (const route of this.routes.values()) route.search?.return([]);
       this.routes.clear();
       this.grids.clear();
@@ -898,6 +1216,7 @@ var Navigation = class {
       }
     }
     this.searchBudget = PATH_STEPS_PER_TICK;
+    this.searchStart = performance.now();
     this.advanceSearches();
   }
   acquirePathBuffers() {
@@ -920,7 +1239,7 @@ var Navigation = class {
     this.pathPool.push(buffers);
   }
   rebuildColliders() {
-    this.colliders.clear();
+    this.colliders.length = 0;
     const add = (c) => {
       const minX = Math.max(0, Math.floor((c.x - c.halfX + WORLD.half) / BUCKET_SIZE));
       const maxX = Math.min(BUCKET_COUNT - 1, Math.floor((c.x + c.halfX + WORLD.half) / BUCKET_SIZE));
@@ -928,8 +1247,8 @@ var Navigation = class {
       const maxZ = Math.min(BUCKET_COUNT - 1, Math.floor((c.z + c.halfZ + WORLD.half) / BUCKET_SIZE));
       for (let z = minZ; z <= maxZ; z++) for (let x = minX; x <= maxX; x++) {
         const key = z * BUCKET_COUNT + x;
-        let bucket = this.colliders.get(key);
-        if (!bucket) this.colliders.set(key, bucket = []);
+        let bucket = this.colliders[key];
+        if (!bucket) this.colliders[key] = bucket = [];
         bucket.push(c);
       }
     };
@@ -949,6 +1268,7 @@ var Navigation = class {
   }
   advanceSearches() {
     while (this.searchBudget > 0 && this.searches.length) {
+      if ((this.searchBudget & 31) === 0 && performance.now() - this.searchStart > PATH_MS_PER_TICK) break;
       const route = this.searches.shift();
       if (!route.search) continue;
       this.searchBudget--;
@@ -964,12 +1284,14 @@ var Navigation = class {
   }
   /** Altura do terreno (unidades de mapa) por interpolação bilinear. */
   groundHeight(x, z) {
-    const n = this.map.tiles;
-    const gx = Math.max(0, Math.min(n - 1.0001, (x + WORLD.half) / WORLD.tileSize));
-    const gz = Math.max(0, Math.min(n - 1.0001, (z + WORLD.half) / WORLD.tileSize));
+    const n = this.map.tiles, height = this.map.height, half = WORLD.half, ts = WORLD.tileSize;
+    const gx = Math.max(0, Math.min(n - 1.0001, (x + half) / ts));
+    const gz = Math.max(0, Math.min(n - 1.0001, (z + half) / ts));
     const tx = Math.floor(gx), tz = Math.floor(gz), fx = gx - tx, fz = gz - tz;
-    const h = (dx, dz) => this.map.height[Math.min(n - 1, tz + dz) * n + Math.min(n - 1, tx + dx)] ?? 0;
-    return (h(0, 0) * (1 - fx) + h(1, 0) * fx) * (1 - fz) + (h(0, 1) * (1 - fx) + h(1, 1) * fx) * fz;
+    const x1 = Math.min(n - 1, tx + 1), z1 = Math.min(n - 1, tz + 1);
+    const h00 = height[tz * n + tx] ?? 0, h10 = height[tz * n + x1] ?? 0;
+    const h01 = height[z1 * n + tx] ?? 0, h11 = height[z1 * n + x1] ?? 0;
+    return (h00 * (1 - fx) + h10 * fx) * (1 - fz) + (h01 * (1 - fx) + h11 * fx) * fz;
   }
   /** Só a falésia (inclinação acima do limite) bloqueia; o platô é andável. */
   tooSteep(x, z) {
@@ -985,14 +1307,25 @@ var Navigation = class {
   }
   canStand(u, x, z) {
     const r = UNIT_RADIUS;
-    if (!Number.isFinite(x) || !Number.isFinite(z) || Math.abs(x) + r >= WORLD.half || Math.abs(z) + r >= WORLD.half) return false;
-    for (const dx of [-r, 0, r]) {
-      for (const dz of [-r, 0, r]) if (isWaterAt(this.map, x + dx, z + dz)) return false;
+    const half = WORLD.half;
+    if (!Number.isFinite(x) || !Number.isFinite(z) || Math.abs(x) + r >= half || Math.abs(z) + r >= half) return false;
+    const map = this.map, n = map.tiles, water = map.water, bridge = map.bridge, inv = this.invTile;
+    const bx = (x + half) * inv, bz = (z + half) * inv, ro = r * inv;
+    for (let i = -1; i <= 1; i++) {
+      const tx = Math.floor(bx + i * ro);
+      if (tx < 0 || tx >= n) return false;
+      for (let j = -1; j <= 1; j++) {
+        const tz = Math.floor(bz + j * ro);
+        if (tz < 0 || tz >= n) return false;
+        const idx = tz * n + tx;
+        if (water[idx] === 1 && bridge[idx] !== 1) return false;
+      }
     }
     if (this.tooSteep(x, z)) return false;
     if (!this.indexed) this.rebuildColliders();
-    const key = Math.floor((z + WORLD.half) / BUCKET_SIZE) * BUCKET_COUNT + Math.floor((x + WORLD.half) / BUCKET_SIZE);
-    for (const c of this.colliders.get(key) ?? []) {
+    const key = Math.floor((z + half) / BUCKET_SIZE) * BUCKET_COUNT + Math.floor((x + half) / BUCKET_SIZE);
+    const bucket = this.colliders[key];
+    if (bucket) for (const c of bucket) {
       if (c.kind === "crypt" && u.kind === "vampire") continue;
       if (c.kind === "wall" && u.kind === "worker") continue;
       const dx = x - c.x, dz = z - c.z;
@@ -1001,9 +1334,13 @@ var Navigation = class {
     return true;
   }
   clearSegment(u, a, b) {
-    const steps = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.z - a.z) / 0.25));
+    return this.clearSegmentXZ(u, a.x, a.z, b.x, b.z);
+  }
+  clearSegmentXZ(u, ax, az, bx, bz) {
+    const dx = bx - ax, dz = bz - az;
+    const steps = Math.max(1, Math.ceil(Math.sqrt(dx * dx + dz * dz) / 0.25));
     for (let i = 1; i <= steps; i++) {
-      if (!this.canStand(u, a.x + (b.x - a.x) * i / steps, a.z + (b.z - a.z) * i / steps)) return false;
+      if (!this.canStand(u, ax + dx * i / steps, az + dz * i / steps)) return false;
     }
     return true;
   }
@@ -1023,9 +1360,6 @@ var Navigation = class {
       }
     }
   }
-  point(index) {
-    return { x: index % SIZE - WORLD.half + 0.5, z: Math.floor(index / SIZE) - WORLD.half + 0.5 };
-  }
   *findPath(u, goal) {
     const buffers = this.acquirePathBuffers();
     try {
@@ -1037,8 +1371,9 @@ var Navigation = class {
       }
       const walkable = (index) => {
         if (!grid[index]) {
-          const p = this.point(index);
-          grid[index] = this.canStand(u, p.x, p.z) ? 1 : 2;
+          const px = index % SIZE - WORLD.half + 0.5;
+          const pz = (index / SIZE | 0) - WORLD.half + 0.5;
+          grid[index] = this.canStand(u, px, pz) ? 1 : 2;
         }
         return grid[index] === 1;
       };
@@ -1049,7 +1384,10 @@ var Navigation = class {
       for (let z = Math.max(0, Math.floor(goal.z - reach + WORLD.half)); z < SIZE && z <= goal.z + reach + WORLD.half; z++) {
         for (let x = Math.max(0, Math.floor(goal.x - reach + WORLD.half)); x < SIZE && x <= goal.x + reach + WORLD.half; x++) {
           const id = z * SIZE + x;
-          if (distanceToTarget(this.point(id), goal, goal.half) <= goal.range + 1e-3 && walkable(id)) reachableGoal = true;
+          const px = x - WORLD.half + 0.5, pz = z - WORLD.half + 0.5;
+          const ddx = Math.max(0, Math.abs(px - goal.x) - goal.half);
+          const ddz = Math.max(0, Math.abs(pz - goal.z) - goal.half);
+          if (Math.sqrt(ddx * ddx + ddz * ddz) <= goal.range + 1e-3 && walkable(id)) reachableGoal = true;
         }
       }
       if (!reachableGoal) return [];
@@ -1080,7 +1418,13 @@ var Navigation = class {
         }
         return first.id;
       };
-      const heuristic = (id) => Math.max(0, distanceToTarget(this.point(id), goal, goal.half) - goal.range);
+      const heuristic = (id) => {
+        const px = id % SIZE - WORLD.half + 0.5;
+        const pz = (id / SIZE | 0) - WORLD.half + 0.5;
+        const ddx = Math.max(0, Math.abs(px - goal.x) - goal.half);
+        const ddz = Math.max(0, Math.abs(pz - goal.z) - goal.half);
+        return Math.max(0, Math.sqrt(ddx * ddx + ddz * ddz) - goal.range);
+      };
       stamp[start] = gen;
       costs[start] = 0;
       parent[start] = -1;
@@ -1094,11 +1438,15 @@ var Navigation = class {
         closed[current] = 1;
         if (heuristic(current) <= 1e-3 && walkable(current)) {
           const path2 = [];
-          for (let id = current; id !== start; id = parent[id]) path2.push(this.point(id));
+          for (let id = current; id !== start; id = parent[id]) {
+            path2.push({ x: id % SIZE - WORLD.half + 0.5, z: (id / SIZE | 0) - WORLD.half + 0.5 });
+          }
           path2.reverse();
           return path2;
         }
-        const cx = current % SIZE, cz = Math.floor(current / SIZE);
+        const cx = current % SIZE, cz = current / SIZE | 0;
+        const cwx = current === start ? u.x : cx - WORLD.half + 0.5;
+        const cwz = current === start ? u.z : cz - WORLD.half + 0.5;
         for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
           if (!dx && !dz) continue;
           const x = cx + dx, z = cz + dz;
@@ -1106,7 +1454,7 @@ var Navigation = class {
           const next = z * SIZE + x;
           if (stamp[next] === gen && closed[next] || !walkable(next)) continue;
           if (dx && dz && (!walkable(cz * SIZE + x) || !walkable(z * SIZE + cx))) continue;
-          if (!this.clearSegment(u, current === start ? u : this.point(current), this.point(next))) continue;
+          if (!this.clearSegmentXZ(u, cwx, cwz, x - WORLD.half + 0.5, z - WORLD.half + 0.5)) continue;
           const cost = costs[current] + (dx && dz ? Math.SQRT2 : 1);
           if (stamp[next] === gen && cost >= costs[next]) continue;
           stamp[next] = gen;
@@ -1146,7 +1494,8 @@ var Navigation = class {
     let budget = speed * dt;
     while (budget > 0 && route.points.length) {
       const next = route.points[0];
-      const distance = Math.hypot(next.x - u.x, next.z - u.z);
+      const ddx = next.x - u.x, ddz = next.z - u.z;
+      const distance = Math.sqrt(ddx * ddx + ddz * ddz);
       const step2 = Math.min(distance, budget);
       const p = distance < 1e-3 ? next : { x: u.x + (next.x - u.x) * step2 / distance, z: u.z + (next.z - u.z) * step2 / distance };
       if (!this.clearSegment(u, u, p)) {
@@ -1170,23 +1519,54 @@ var Navigation = class {
     this.routes.delete(id);
   }
   separate(units) {
+    const count = units.length;
+    if (count < 2) return;
+    const sep = INTERACTION.unitSeparation;
+    const cell = sep;
+    const cols = Math.ceil(WORLD.half * 2 / cell) + 1;
+    const colOf = (x) => Math.max(0, Math.min(cols - 1, Math.floor((x + WORLD.half) / cell)));
+    const rowOf = (z) => Math.max(0, Math.min(cols - 1, Math.floor((z + WORLD.half) / cell)));
+    const buckets = this.separationBuckets;
     for (let pass = 0; pass < 3; pass++) {
-      for (let i = 0; i < units.length; i++) for (let j = i + 1; j < units.length; j++) {
-        const a = units[i], b = units[j];
-        const dx = b.x - a.x, dz = b.z - a.z;
-        const d = Math.hypot(dx, dz);
-        if (d >= INTERACTION.unitSeparation) continue;
-        const nx = d > 1e-3 ? dx / d : 1, nz = d > 1e-3 ? dz / d : 0;
-        const push = (INTERACTION.unitSeparation - d) / 2;
-        const ax = a.x - nx * push, az = a.z - nz * push;
-        const bx = b.x + nx * push, bz = b.z + nz * push;
-        if (this.canStand(a, ax, az)) {
-          a.x = ax;
-          a.z = az;
-        }
-        if (this.canStand(b, bx, bz)) {
-          b.x = bx;
-          b.z = bz;
+      buckets.clear();
+      for (let i = 0; i < count; i++) {
+        const u = units[i];
+        const key = rowOf(u.z) * cols + colOf(u.x);
+        const bucket = buckets.get(key);
+        if (bucket) bucket.push(i);
+        else buckets.set(key, [i]);
+      }
+      for (let i = 0; i < count; i++) {
+        const a = units[i];
+        const cx = colOf(a.x), cz = rowOf(a.z);
+        for (let dz = -1; dz <= 1; dz++) {
+          const nz = cz + dz;
+          if (nz < 0 || nz >= cols) continue;
+          for (let dx = -1; dx <= 1; dx++) {
+            const nx = cx + dx;
+            if (nx < 0 || nx >= cols) continue;
+            const bucket = buckets.get(nz * cols + nx);
+            if (!bucket) continue;
+            for (const j of bucket) {
+              if (j <= i) continue;
+              const b = units[j];
+              const ddx = b.x - a.x, ddz = b.z - a.z;
+              const d = Math.sqrt(ddx * ddx + ddz * ddz);
+              if (d >= sep) continue;
+              const nxv = d > 1e-3 ? ddx / d : 1, nzv = d > 1e-3 ? ddz / d : 0;
+              const push = (sep - d) / 2;
+              const ax = a.x - nxv * push, az = a.z - nzv * push;
+              const bx = b.x + nxv * push, bz = b.z + nzv * push;
+              if (this.canStand(a, ax, az)) {
+                a.x = ax;
+                a.z = az;
+              }
+              if (this.canStand(b, bx, bz)) {
+                b.x = bx;
+                b.z = bz;
+              }
+            }
+          }
         }
       }
     }
@@ -1235,29 +1615,59 @@ function canPlaceBuilding(map, state, kind, x, z) {
 }
 
 // ../shared/src/vampire-items.ts
-function vampireItemBonuses(items = {}) {
-  let damage = 0, health = 0, moveSpeed = 0, cooldownMult = 1;
-  for (const id of Object.keys(VAMPIRE_ITEMS)) {
-    const count = items[id] ?? 0;
-    if (!count) continue;
-    const item = VAMPIRE_ITEMS[id];
-    damage += item.damageBonus * count;
-    health += item.healthBonus * count;
-    moveSpeed += item.speedBonus * count;
-    cooldownMult *= Math.pow(item.cooldownFactor, count);
+var VAMPIRE_ITEM_IDS = ["damage", "health", "attackSpeed"];
+var VAMPIRE_ITEM_INFO = {
+  damage: { name: "L\xE2mina Sangrenta", icon: "\u2694", description: "Aumenta o dano do Vampiro" },
+  health: { name: "Cora\xE7\xE3o Ancestral", icon: "\u2665", description: "Aumenta a vida m\xE1xima" },
+  attackSpeed: { name: "\xCDmpeto Sanguin\xE1rio", icon: "\u{1F300}", description: `Aumenta a velocidade de ataque (m\xE1x. ${VAMPIRE_SPEC.maxAttackSpeed})` }
+};
+function tiers(id) {
+  return SPEC_VAMPIRE_ITEM_TIERS[id];
+}
+function vampireItemNextLevel(id, owned) {
+  const next = owned + 1;
+  const tier = tiers(id)[next];
+  if (!tier || tier.bonus == null) return null;
+  return next;
+}
+function vampireItemCost(id, owned) {
+  const next = vampireItemNextLevel(id, owned);
+  return next == null ? null : tiers(id)[next].cost;
+}
+function singleBonus(id, level) {
+  if (level <= 0) return 0;
+  return tiers(id)[level]?.bonus ?? 0;
+}
+function vampireItemBonus(id, level) {
+  if (SPEC_VAMPIRE_ITEM_TIERS.accumulation === "cumulative") {
+    let total = 0;
+    for (let l = 1; l <= level; l++) total += singleBonus(id, l);
+    return total;
   }
-  return { damage, health, moveSpeed, cooldownMult };
+  return singleBonus(id, level);
 }
-function vampireItemCost(itemId, owned) {
-  const item = VAMPIRE_ITEMS[itemId];
-  return Math.floor(item.baseCost * Math.pow(item.costGrowth, owned));
+function vampireItemBonuses(items = {}) {
+  let damage = 0, health = 0, attackSpeed = 0;
+  for (const id of VAMPIRE_ITEM_IDS) {
+    const level = items[id] ?? 0;
+    if (!level) continue;
+    const value = vampireItemBonus(id, level);
+    if (id === "damage") damage += value;
+    else if (id === "health") health += value;
+    else attackSpeed += value;
+  }
+  return { damage, health, attackSpeed };
 }
-function vampireEffectiveSpeed(phase, items = {}) {
-  const base = phase === "night" ? VAMPIRE.speedNight : VAMPIRE.speedDay;
-  return base + vampireItemBonuses(items).moveSpeed;
+function vampireAttackSpeed(items = {}) {
+  return Math.min(VAMPIRE_SPEC.attackSpeed + vampireItemBonuses(items).attackSpeed, VAMPIRE_SPEC.maxAttackSpeed);
+}
+function vampireEffectiveSpeed(phase, _items = {}) {
+  return phase === "night" ? VAMPIRE.speedNight : VAMPIRE.speedDay;
 }
 function vampireEffectiveCooldown(items = {}) {
-  return Math.max(VAMPIRE.minAttackCooldown, VAMPIRE.attackCooldown * vampireItemBonuses(items).cooldownMult);
+  const speed = vampireAttackSpeed(items);
+  const ratio = VAMPIRE_SPEC.attackSpeed / Math.max(1, speed);
+  return Math.max(VAMPIRE.minAttackCooldown, VAMPIRE.attackCooldown * ratio);
 }
 function vampireSkillMultiplier(skills = {}) {
   for (const id of Object.keys(VAMPIRE_SKILLS)) {
@@ -1274,13 +1684,23 @@ function vampireShopAccess(phase, vampire, crypt) {
 }
 
 // ../shared/src/sim.ts
+function buildTickIndex(s) {
+  const units = /* @__PURE__ */ new Map();
+  for (const u of s.units) units.set(u.id, u);
+  const buildings = /* @__PURE__ */ new Map();
+  for (const b of s.buildings) buildings.set(b.id, b);
+  const nodes = /* @__PURE__ */ new Map();
+  for (const n of s.nodes) nodes.set(n.id, n);
+  return { units, buildings, nodes };
+}
 function createSession(names, seed, playerIds) {
   const state = createGameState(names, seed, playerIds);
   const map = generateMap(seed);
   return { state, map, commandSeq: {}, navigation: new Navigation(state, map) };
 }
 function dist(ax, az, bx, bz) {
-  return Math.hypot(ax - bx, az - bz);
+  const dx = ax - bx, dz = az - bz;
+  return Math.sqrt(dx * dx + dz * dz);
 }
 function unitById(s, id) {
   return s.units.find((u) => u.id === id && !u.dead);
@@ -1289,11 +1709,9 @@ function buildingById(s, id) {
   return s.buildings.find((b) => b.id === id);
 }
 function nextEntityId(s) {
-  let max = 1e3;
-  for (const b of s.buildings) if (b.id > max) max = b.id;
-  for (const u of s.units) if (u.id > max) max = u.id;
-  for (const n of s.nodes) if (n.id > max) max = n.id;
-  return max + 1;
+  const id = s.nextId ?? 1001;
+  s.nextId = id + 1;
+  return id;
 }
 function buildingHalf(b) {
   return BUILDING_SIZE[b.kind] / 2;
@@ -1301,38 +1719,175 @@ function buildingHalf(b) {
 function canPlace(session, kind, x, z) {
   return canPlaceBuilding(session.map, session.state, kind, x, z);
 }
+function meetsPrerequisite(state, playerId, prereq) {
+  if (!prereq) return true;
+  if (prereq.wallLevel !== void 0) {
+    return state.buildings.some((b) => b.owner === playerId && b.kind === "wall" && b.done && b.level >= prereq.wallLevel);
+  }
+  if (prereq.marketLevel !== void 0) {
+    return state.buildings.some((b) => b.owner === playerId && b.kind === "market" && b.done && b.level >= prereq.marketLevel);
+  }
+  return true;
+}
+function canPay(p, cost) {
+  return !!cost && p.wood >= (cost.wood ?? 0) && p.gold >= (cost.gold ?? 0);
+}
+function pay(p, cost) {
+  p.wood -= cost.wood ?? 0;
+  p.gold -= cost.gold ?? 0;
+}
+function tryUpgradeBuilding(s, playerId, b) {
+  if (!b.done) return false;
+  if (b.kind !== "crypt" && b.owner !== playerId) return false;
+  const p = s.players.find((pl) => pl.id === playerId);
+  if (!p) return false;
+  const next = b.level + 1;
+  if (b.kind === "bank") {
+    const level = GAME_CONFIG.spec.bankLevels[next];
+    if (!level || !canPay(p, level.upgradeCost) || !meetsPrerequisite(s, playerId, level.prerequisite)) return false;
+    pay(p, level.upgradeCost);
+    b.level = next;
+    b.goldAcc = 0;
+    return true;
+  }
+  if (b.kind === "wall") {
+    const level = GAME_CONFIG.spec.wallLevels[next];
+    if (!level || !canPay(p, level.cost)) return false;
+    pay(p, level.cost);
+    const oldMax = b.maxHp;
+    b.level = next;
+    b.maxHp = level.hp;
+    b.hp = Math.min(b.maxHp, b.hp + (b.maxHp - oldMax));
+    return true;
+  }
+  if (b.kind === "tower") {
+    const level = GAME_CONFIG.spec.towerLevels[next];
+    if (!level || !canPay(p, level.cost)) return false;
+    pay(p, level.cost);
+    b.level = next;
+    return true;
+  }
+  if (b.kind === "market") {
+    if (b.level >= MARKET_MAX_LEVEL) return false;
+    const cost = marketUpgradeCost(b.level);
+    if (!cost || !canPay(p, cost)) return false;
+    pay(p, cost);
+    b.level = next;
+    return true;
+  }
+  if (b.kind === "crypt") {
+    if (playerId !== VAMPIRE_PLAYER_ID) return false;
+    const cost = SPEC_CRYPT.upgradeCosts[next];
+    if (cost == null || s.vampire.blood < cost) return false;
+    s.vampire.blood -= cost;
+    b.level = next;
+    b.goldAcc = 0;
+    return true;
+  }
+  return false;
+}
+function playerWorkerLevel(s, owner, role) {
+  const p = s.players.find((pl) => pl.id === owner);
+  return Math.max(1, p?.workerLevels?.[role] ?? 1);
+}
+function canGatherRole(role, resource) {
+  if (role === "lumberjack") return resource === "wood";
+  if (role === "miner") return resource === "gold";
+  return false;
+}
+function canRepairRole(role) {
+  return role === void 0 || role === "repairer";
+}
+function canBuildKind(u, kind) {
+  if (kind === "goldMine") return u.workerRole === "miner";
+  return u.hero === true;
+}
+function countRole(s, owner, role) {
+  return s.units.filter((u) => !u.dead && u.owner === owner && u.kind === "worker" && u.workerRole === role).length;
+}
+function vampireStatus(s, status) {
+  return s.vampire.statuses?.[status] ?? 0;
+}
+function setVampireStatus(s, status, duration) {
+  s.vampire.statuses = { ...s.vampire.statuses ?? {}, [status]: Math.max(vampireStatus(s, status), duration) };
+}
+function vampireCanAttack(s) {
+  return vampireStatus(s, "entangled") <= 0;
+}
+function vampireCanCast(s) {
+  return vampireStatus(s, "silenced") <= 0;
+}
+function vampireInBatForm(s) {
+  return vampireStatus(s, "batForm") > 0 || vampireStatus(s, "exitingBatForm") > 0;
+}
+function vampireInvulnerable(s) {
+  return vampireStatus(s, "batForm") > 0;
+}
+function clearVampireStatus(s, status) {
+  if (s.vampire.statuses) delete s.vampire.statuses[status];
+}
+var DEFAULT_REVEAL_RADIUS = 30;
+function vampireBasePosition(s) {
+  const crypt = s.buildings.find((b) => b.kind === "crypt" && b.done);
+  if (crypt) return { x: crypt.x, z: crypt.z };
+  return {
+    x: CRYPT_POSITION.x + GAME_CONFIG.map.vampireSpawnOffset.x * MAP_SCALE,
+    z: CRYPT_POSITION.z + GAME_CONFIG.map.vampireSpawnOffset.z * MAP_SCALE
+  };
+}
+function roundBlood(value) {
+  const policy = SPEC_ROUNDING_POLICY.policy;
+  if (policy === "ceil") return Math.ceil(value);
+  if (policy === "round") return Math.round(value);
+  if (policy === "none") return value;
+  return Math.floor(value);
+}
+function creditVampireBloodFromDamage(s, damage) {
+  s.vampire.blood += roundBlood(damage * SPEC_BLOOD_PER_DAMAGE);
+}
+function buyVampireItem(s, owner, itemId) {
+  const owned = s.vampire.items[itemId] ?? 0;
+  const next = vampireItemNextLevel(itemId, owned);
+  if (next == null) return false;
+  const cost = vampireItemCost(itemId, owned);
+  if (cost == null || s.vampire.blood < cost) return false;
+  s.vampire.blood -= cost;
+  s.vampire.items[itemId] = next;
+  const vampire = s.units.find((u) => u.kind === "vampire" && u.owner === owner && !u.dead);
+  if (vampire && itemId === "health") {
+    const delta = vampireItemBonus("health", next) - vampireItemBonus("health", owned);
+    vampire.maxHp += delta;
+    vampire.hp = Math.min(vampire.maxHp, vampire.hp + delta);
+  }
+  return true;
+}
+function completeVampireTeleport(s) {
+  const vampire = s.units.find((u) => u.kind === "vampire" && !u.dead);
+  if (vampire) {
+    const base = vampireBasePosition(s);
+    vampire.x = base.x;
+    vampire.z = base.z;
+    vampire.order = null;
+    vampire.gatherNodeId = null;
+  }
+  clearVampireStatus(s, "channelingTeleport");
+}
 function applyCommand(session, playerId, cmd) {
   const s = session.state;
   if (s.result) return;
   switch (cmd.type) {
     case "buyVampireItem": {
-      if (playerId !== VAMPIRE_PLAYER_ID || !Object.hasOwn(VAMPIRE_ITEMS, cmd.itemId)) return;
+      if (playerId !== VAMPIRE_PLAYER_ID || !VAMPIRE_ITEM_IDS.includes(cmd.itemId)) return;
       const vampire = s.units.find((u) => u.kind === "vampire" && u.owner === playerId && !u.dead);
       const crypt = buildingById(s, cmd.cryptId);
-      if (vampireShopAccess(s.phase, vampire, crypt) || !vampire) return;
-      const item = VAMPIRE_ITEMS[cmd.itemId];
-      const count = s.vampire.items[cmd.itemId] ?? 0;
-      const cost = vampireItemCost(cmd.itemId, count);
-      if (count >= item.maxCount || s.vampire.blood < cost) return;
-      s.vampire.blood -= cost;
-      s.vampire.items[cmd.itemId] = count + 1;
-      vampire.maxHp += item.healthBonus;
-      vampire.hp = Math.min(vampire.maxHp, vampire.hp + item.healthBonus);
+      if (!vampire || vampireShopAccess(s.phase, vampire, crypt)) return;
+      buyVampireItem(s, playerId, cmd.itemId);
       break;
     }
     case "upgradeVampireItem": {
-      if (playerId !== VAMPIRE_PLAYER_ID || !Object.hasOwn(VAMPIRE_ITEMS, cmd.itemId)) return;
-      const vampire = s.units.find((u) => u.kind === "vampire" && u.owner === playerId && !u.dead);
-      if (!vampire) return;
-      const item = VAMPIRE_ITEMS[cmd.itemId];
-      const count = s.vampire.items[cmd.itemId] ?? 0;
-      if (count < 1 || count >= item.maxCount) return;
-      const cost = vampireItemCost(cmd.itemId, count);
-      if (s.vampire.blood < cost) return;
-      s.vampire.blood -= cost;
-      s.vampire.items[cmd.itemId] = count + 1;
-      vampire.maxHp += item.healthBonus;
-      vampire.hp = Math.min(vampire.maxHp, vampire.hp + item.healthBonus);
+      if (playerId !== VAMPIRE_PLAYER_ID || !VAMPIRE_ITEM_IDS.includes(cmd.itemId)) return;
+      if ((s.vampire.items[cmd.itemId] ?? 0) < 1) return;
+      buyVampireItem(s, playerId, cmd.itemId);
       break;
     }
     case "buyVampireSkill": {
@@ -1352,9 +1907,40 @@ function applyCommand(session, playerId, cmd) {
       const vampire = s.units.find((u) => u.kind === "vampire" && u.owner === playerId && !u.dead);
       const state = s.vampire.skills[cmd.skillId];
       if (!vampire || !state || state.cd > 0) return;
+      if (!vampireCanCast(s)) return;
       const skill = VAMPIRE_SKILLS[cmd.skillId];
       state.buff = skill.duration;
       state.cd = skill.cooldown;
+      break;
+    }
+    case "castVampireAbility": {
+      if (playerId !== VAMPIRE_PLAYER_ID) return;
+      const vampire = s.units.find((u) => u.kind === "vampire" && u.owner === playerId && !u.dead);
+      if (!vampire || !Object.hasOwn(VAMPIRE_ABILITIES, cmd.ability)) return;
+      if (!vampireCanCast(s)) return;
+      if (cmd.ability === "revealArea") {
+        if (s.phase !== "night" || (s.vampire.revealUses ?? 0) <= 0) return;
+        if (!Number.isFinite(cmd.x) || !Number.isFinite(cmd.z)) return;
+        const ability = VAMPIRE_ABILITIES.revealArea;
+        s.vampire.reveal = {
+          x: cmd.x,
+          z: cmd.z,
+          remaining: ability.duration,
+          radius: ability.radius ?? DEFAULT_REVEAL_RADIUS
+        };
+        s.vampire.revealUses = (s.vampire.revealUses ?? 0) - 1;
+      } else if (cmd.ability === "batForm") {
+        if (vampireInBatForm(s)) {
+          if (VAMPIRE_ABILITIES.batForm.cancellable === true) clearVampireStatus(s, "batForm");
+          return;
+        }
+        setVampireStatus(s, "batForm", VAMPIRE_ABILITIES.batForm.maxDuration);
+      } else if (cmd.ability === "teleportHome") {
+        if (vampireStatus(s, "channelingTeleport") > 0) return;
+        setVampireStatus(s, "channelingTeleport", VAMPIRE_ABILITIES.teleportHome.channelTime);
+      } else {
+        return;
+      }
       break;
     }
     case "admin": {
@@ -1372,6 +1958,7 @@ function applyCommand(session, playerId, cmd) {
       } else if (cmd.action === "phase" && (cmd.phase === "day" || cmd.phase === "night")) {
         s.phase = cmd.phase;
         s.phaseTime = cmd.phase === "day" ? DAY_LENGTH : NIGHT_LENGTH;
+        if (cmd.phase === "night") s.vampire.revealUses = 1;
       } else if (cmd.action === "heal") {
         for (const unit of s.units) if (unit.owner === playerId && !unit.dead) unit.hp = unit.maxHp;
       }
@@ -1391,10 +1978,12 @@ function applyCommand(session, playerId, cmd) {
     }
     case "gather": {
       const node = s.nodes.find((n) => n.id === cmd.nodeId && n.amount > 0);
-      if (!node) return;
+      const mine = node ? void 0 : s.buildings.find((b) => b.id === cmd.nodeId && b.kind === "goldMine" && b.done && b.hp > 0 && b.owner === playerId);
+      if (!node && !mine) return;
+      const resource = node ? node.kind : "gold";
       for (const uid of cmd.ids) {
         const u = unitById(s, uid);
-        if (u && u.owner === playerId && u.kind === "worker") {
+        if (u && u.owner === playerId && u.kind === "worker" && canGatherRole(u.workerRole, resource)) {
           u.order = { t: "gather", targetId: cmd.nodeId };
           u.gatherNodeId = cmd.nodeId;
         }
@@ -1417,10 +2006,12 @@ function applyCommand(session, playerId, cmd) {
       if (!BUILDABLE.includes(cmd.kind)) return;
       const p = s.players.find((pl) => pl.id === playerId);
       if (!p || p.role !== "human") return;
-      const builders = s.units.filter((u) => !u.dead && u.owner === playerId && u.kind === "worker" && cmd.ids.includes(u.id));
+      const builders = s.units.filter((u) => !u.dead && u.owner === playerId && u.kind === "worker" && cmd.ids.includes(u.id) && canBuildKind(u, cmd.kind));
       if (!builders.length) return;
       const cost = BUILD_COSTS[cmd.kind];
       if (!cost) return;
+      const limit = SPEC_ENTITY_LIMITS[cmd.kind];
+      if (limit !== void 0 && s.buildings.filter((b2) => b2.owner === playerId && b2.kind === cmd.kind).length >= limit) return;
       if (p.wood < cost.wood || p.gold < cost.gold) return;
       if (!canPlace(session, cmd.kind, cmd.x, cmd.z)) return;
       p.wood -= cost.wood;
@@ -1430,7 +2021,9 @@ function applyCommand(session, playerId, cmd) {
         taverna: TAVERNA.hp,
         wall: WALL.hp,
         tower: TOWER.hp,
-        keep: KEEP.hp
+        keep: KEEP.hp,
+        goldMine: GAME_CONFIG.buildings.goldMine.hp,
+        market: GAME_CONFIG.buildings.market.hp
       };
       const b = {
         id: nextEntityId(s),
@@ -1443,14 +2036,14 @@ function applyCommand(session, playerId, cmd) {
         level: 1,
         progress: 0,
         done: false,
-        builderId: cmd.ids[0] ?? null,
+        builderId: builders[0].id,
         goldAcc: 0,
         attackCd: 0
       };
       s.buildings.push(b);
       for (const uid of cmd.ids) {
         const u = unitById(s, uid);
-        if (u && u.owner === playerId && u.kind === "worker") {
+        if (u && u.owner === playerId && u.kind === "worker" && canBuildKind(u, cmd.kind)) {
           u.order = { t: "build", targetId: b.id };
           u.gatherNodeId = null;
         }
@@ -1461,11 +2054,26 @@ function applyCommand(session, playerId, cmd) {
       const site = buildingById(s, cmd.targetId);
       if (!site || site.done || site.owner !== playerId) return;
       for (const u of s.units) {
-        if (!u.dead && u.owner === playerId && u.kind === "worker" && cmd.ids.includes(u.id)) {
+        if (!u.dead && u.owner === playerId && u.kind === "worker" && cmd.ids.includes(u.id) && canBuildKind(u, site.kind)) {
           u.order = { t: "build", targetId: site.id };
           u.gatherNodeId = null;
         }
       }
+      break;
+    }
+    case "demolish": {
+      const p = s.players.find((pl) => pl.id === playerId);
+      if (!p || p.role !== "human") return;
+      const b = buildingById(s, cmd.targetId);
+      if (!b || b.owner !== playerId) return;
+      for (const u of s.units) {
+        if (u.dead || u.owner !== playerId) continue;
+        if (u.order?.targetId === b.id || u.gatherNodeId === b.id) {
+          u.order = null;
+          u.gatherNodeId = null;
+        }
+      }
+      s.buildings = s.buildings.filter((bb) => bb.id !== b.id);
       break;
     }
     case "repair": {
@@ -1474,7 +2082,7 @@ function applyCommand(session, playerId, cmd) {
       if (wall.hp >= wall.maxHp) return;
       let any = false;
       for (const u of s.units) {
-        if (!u.dead && u.owner === playerId && u.kind === "worker" && cmd.ids.includes(u.id)) {
+        if (!u.dead && u.owner === playerId && u.kind === "worker" && cmd.ids.includes(u.id) && canRepairRole(u.workerRole)) {
           u.order = { t: "repair", targetId: wall.id };
           u.gatherNodeId = null;
           any = true;
@@ -1484,47 +2092,74 @@ function applyCommand(session, playerId, cmd) {
       break;
     }
     case "upgrade": {
-      const p = s.players.find((pl) => pl.id === playerId);
       const b = buildingById(s, cmd.targetId);
-      if (!p || !b || b.owner !== playerId || !b.done) return;
-      if (b.kind === "bank") {
-        if (b.level >= BUILD_MAX_LEVEL) return;
-        const cost = BANK_UPGRADE_COST[b.level];
-        if (!cost) return;
-        if (p.wood < cost.wood || p.gold < cost.gold) return;
-        p.wood -= cost.wood;
-        p.gold -= cost.gold;
-        b.level++;
-        b.goldAcc = 0;
-      } else if (b.kind === "wall") {
-        if (b.level >= WALL_MAX_LEVEL) return;
-        const cost = WALL_UPGRADE_COST[b.level];
-        if (!cost) return;
-        if (p.wood < cost.wood || p.gold < cost.gold) return;
-        p.wood -= cost.wood;
-        p.gold -= cost.gold;
-        const oldMax = b.maxHp;
-        b.level++;
-        b.maxHp = wallMaxHp(b.level);
-        b.hp = Math.min(b.maxHp, b.hp + (b.maxHp - oldMax));
-      } else return;
+      if (b) tryUpgradeBuilding(s, playerId, b);
       break;
     }
     case "recruit": {
       const player = s.players.find((p) => p.id === playerId && p.role === "human");
       const tavern = buildingById(s, cmd.targetId);
       if (!player || !tavern || tavern.owner !== playerId || tavern.kind !== "taverna" || !tavern.done || tavern.recruitment) return;
-      if (player.gold < RECRUIT.gold || player.wood < RECRUIT.wood) return;
-      player.gold -= RECRUIT.gold;
-      player.wood -= RECRUIT.wood;
-      tavern.recruitment = { remaining: RECRUIT.time, total: RECRUIT.time };
+      const role = cmd.role ?? "lumberjack";
+      if (role !== "lumberjack" && role !== "miner" && role !== "repairer") return;
+      if (countRole(s, playerId, role) >= SPEC_ENTITY_LIMITS[role]) return;
+      const cost = workerTrainCost(role);
+      if (player.gold < (cost.gold ?? 0) || player.wood < (cost.wood ?? 0)) return;
+      player.gold -= cost.gold ?? 0;
+      player.wood -= cost.wood ?? 0;
+      const time = role === "repairer" ? repairerTrainingTime(playerWorkerLevel(s, playerId, "repairer")) : RECRUIT.time;
+      tavern.recruitment = { remaining: time, total: time, role };
+      break;
+    }
+    case "upgradeWorker": {
+      const player = s.players.find((p) => p.id === playerId && p.role === "human");
+      const tavern = buildingById(s, cmd.targetId);
+      if (!player || !tavern || tavern.owner !== playerId || tavern.kind !== "taverna" || !tavern.done) return;
+      const role = cmd.role;
+      if (role !== "lumberjack" && role !== "miner" && role !== "repairer") return;
+      const level = playerWorkerLevel(s, playerId, role);
+      if (level >= workerMaxLevel(role)) return;
+      const cost = workerUpgradeCost(role, level);
+      if (!cost || player.gold < (cost.gold ?? 0) || player.wood < (cost.wood ?? 0)) return;
+      player.gold -= cost.gold ?? 0;
+      player.wood -= cost.wood ?? 0;
+      player.workerLevels = { ...player.workerLevels ?? {}, [role]: level + 1 };
+      break;
+    }
+    case "castHumanAbility": {
+      const player = s.players.find((p) => p.id === playerId && p.role === "human");
+      const hero = s.units.find((u) => u.owner === playerId && u.kind === "worker" && u.hero && !u.dead);
+      if (!player || !hero || !Object.hasOwn(HUMAN_ABILITIES, cmd.ability)) return;
+      if ((player.abilityCooldowns?.[cmd.ability] ?? 0) > 0) return;
+      const ability = HUMAN_ABILITIES[cmd.ability];
+      const vampire = s.units.find((u) => u.kind === "vampire" && !u.dead);
+      const inRange = (target) => ability.range == null || dist(hero.x, hero.z, target.x, target.z) <= ability.range;
+      if (cmd.ability === "entangle" || cmd.ability === "silencer") {
+        if (!vampire || cmd.targetId !== vampire.id || !inRange(vampire)) return;
+        setVampireStatus(s, cmd.ability === "entangle" ? "entangled" : "silenced", ability.duration ?? 0);
+      } else if (cmd.ability === "fortify") {
+        const target = unitById(s, cmd.targetId ?? -1) ?? buildingById(s, cmd.targetId ?? -1);
+        if (!target || target.owner !== playerId) return;
+        target.fortify = Math.max(target.fortify ?? 0, ability.duration ?? 0);
+      } else if (cmd.ability === "teleport") {
+        if (!Number.isFinite(cmd.x) || !Number.isFinite(cmd.z)) return;
+        if (dist(hero.x, hero.z, cmd.x, cmd.z) > (ability.maxRange ?? 0)) return;
+        if (!session.navigation.canStand(hero, cmd.x, cmd.z)) return;
+        hero.x = cmd.x;
+        hero.z = cmd.z;
+        hero.order = null;
+        hero.gatherNodeId = null;
+      } else {
+        return;
+      }
+      player.abilityCooldowns = { ...player.abilityCooldowns ?? {}, [cmd.ability]: ability.cooldown };
       break;
     }
     case "market": {
       const p = s.players.find((pl) => pl.id === playerId);
       if (!p || p.role !== "human") return;
-      const wall = buildingById(s, cmd.targetId);
-      if (!wall || wall.kind !== "wall" || wall.owner !== playerId || !wall.done) return;
+      const market = buildingById(s, cmd.targetId);
+      if (!market || market.kind !== "market" || market.owner !== playerId || !market.done) return;
       if (!Number.isSafeInteger(cmd.amount) || cmd.amount <= 0) return;
       const selling = cmd.trade === "woodToGold";
       if (!selling && cmd.trade !== "goldToWood") return;
@@ -1547,6 +2182,7 @@ function updatePhase(s, dt) {
   if (s.phase === "day") {
     s.phase = "night";
     s.phaseTime = NIGHT_LENGTH;
+    s.vampire.revealUses = 1;
   } else {
     s.phase = "day";
     s.phaseTime = DAY_LENGTH;
@@ -1557,7 +2193,9 @@ function updatePhase(s, dt) {
   }
 }
 function vampireSpeed(s) {
-  return vampireEffectiveSpeed(s.phase, s.vampire.items);
+  const base = vampireEffectiveSpeed(s.phase, s.vampire.items);
+  const bonus = vampireInBatForm(s) ? VAMPIRE_ABILITIES.batForm.moveSpeedBonus ?? 0 : 0;
+  return base + bonus;
 }
 function vampireOutsideCrypt(s) {
   if (s.phase === "night") return false;
@@ -1567,32 +2205,40 @@ function vampireOutsideCrypt(s) {
   if (!vamp) return false;
   return dist(vamp.x, vamp.z, crypt.x, crypt.z) > CRYPT_RADIUS;
 }
-function updateGather(s, nav, u, dt) {
+function updateGather(s, nav, u, dt, index) {
   const stats = workerStats(u);
-  const node = s.nodes.find((n) => n.id === u.gatherNodeId && n.amount > 0);
-  if (!node) {
+  const rawNode = index.nodes.get(u.gatherNodeId ?? -1);
+  const node = rawNode && rawNode.amount > 0 ? rawNode : void 0;
+  const rawMine = node ? void 0 : index.buildings.get(u.gatherNodeId ?? -1);
+  const mine = rawMine && rawMine.kind === "goldMine" && rawMine.done && rawMine.hp > 0 && rawMine.owner === u.owner ? rawMine : void 0;
+  if (!node && !mine) {
     u.order = null;
     u.gatherNodeId = null;
     u.carrying = 0;
     u.carryRes = null;
     return;
   }
-  if (nav.move(u, node.x, node.z, stats.speed, dt, node.kind === "wood" ? INTERACTION.woodGatherRange : INTERACTION.goldGatherRange)) {
-    u.activity = "gathering";
-    u.carryRes = node.kind;
-    u.carrying += stats.gatherRate * dt;
-    const whole = Math.floor(u.carrying + 1e-9);
-    if (whole > 0) {
-      const p = s.players.find((pl) => pl.id === u.owner);
-      if (p) p[node.kind] = Math.round((p[node.kind] + whole) * 1e6) / 1e6;
-      u.carrying -= whole;
-    }
+  const resource = node ? node.kind : "gold";
+  const target = node ?? mine;
+  const range = resource === "wood" ? INTERACTION.woodGatherRange : INTERACTION.goldGatherRange;
+  const half = mine ? buildingHalf(mine) : 0;
+  if (!nav.move(u, target.x, target.z, stats.speed, dt, range, half)) return;
+  u.activity = "gathering";
+  u.carryRes = resource;
+  const rate = u.workerRole === "lumberjack" && resource === "wood" ? lumberjackGatherRate(playerWorkerLevel(s, u.owner, "lumberjack")) : u.workerRole === "miner" && mine ? minerGoldRate(mine.level) : stats.gatherRate;
+  u.carrying += rate * dt;
+  const whole = Math.floor(u.carrying + 1e-9);
+  if (whole > 0) {
+    const p = s.players.find((pl) => pl.id === u.owner);
+    if (p) p[resource] = Math.round((p[resource] + whole) * 1e6) / 1e6;
+    u.carrying -= whole;
   }
 }
-function updateAttackOrder(s, nav, u, dt) {
+function updateAttackOrder(s, nav, u, dt, index) {
   const stats = workerStats(u);
-  const targetUnit = unitById(s, u.order?.targetId ?? -1);
-  const targetBuilding = buildingById(s, u.order?.targetId ?? -1);
+  const rawUnit = index.units.get(u.order?.targetId ?? -1);
+  const targetUnit = rawUnit && !rawUnit.dead ? rawUnit : void 0;
+  const targetBuilding = index.buildings.get(u.order?.targetId ?? -1);
   const tx = targetUnit ? targetUnit.x : targetBuilding?.x;
   const tz = targetUnit ? targetUnit.z : targetBuilding?.z;
   if (tx === void 0 || tz === void 0) {
@@ -1615,10 +2261,12 @@ function updateAttackOrder(s, nav, u, dt) {
   if (u.attackCd > 0) return;
   u.attackCd = u.kind === "vampire" ? vampireEffectiveCooldown(s.vampire.items) : stats.attackCooldown;
   if (targetUnit) {
+    if ((targetUnit.fortify ?? 0) > 0) return;
+    if (targetUnit.kind === "vampire" && vampireInvulnerable(s)) return;
     const vampireDamage = (VAMPIRE.attackDamage + vampireItemBonuses(s.vampire.items).damage) * vampireSkillMultiplier(s.vampire.skills);
     const dmg = u.kind === "vampire" ? vampireDamage * (s.phase === "night" ? 1 : VAMPIRE.dayDamageMultiplier) : stats.attackDamage;
     targetUnit.hp -= dmg;
-    if (u.kind === "vampire") s.vampire.blood += VAMPIRE.bloodPerHit;
+    if (u.kind === "vampire") creditVampireBloodFromDamage(s, dmg);
     if (targetUnit.hp <= 0) {
       targetUnit.dead = true;
       if (targetUnit.kind === "vampire") {
@@ -1626,18 +2274,20 @@ function updateAttackOrder(s, nav, u, dt) {
       }
     }
   } else if (targetBuilding) {
+    if ((targetBuilding.fortify ?? 0) > 0) return;
     const dmg = u.kind === "vampire" ? (VAMPIRE.attackDamageBuilding + vampireItemBonuses(s.vampire.items).damage) * vampireSkillMultiplier(s.vampire.skills) : stats.attackDamage;
     targetBuilding.hp -= dmg;
-    if (u.kind === "vampire") s.vampire.blood += VAMPIRE.bloodPerHit;
+    if (u.kind === "vampire") creditVampireBloodFromDamage(s, dmg);
     if (targetBuilding.hp <= 0) {
       if (targetBuilding.kind === "crypt") return;
       s.buildings = s.buildings.filter((b) => b.id !== targetBuilding.id);
+      index.buildings.delete(targetBuilding.id);
     }
   }
 }
-function updateBuild(s, nav, u, dt) {
+function updateBuild(s, nav, u, dt, index) {
   const stats = workerStats(u);
-  const site = buildingById(s, u.order?.targetId ?? -1);
+  const site = index.buildings.get(u.order?.targetId ?? -1);
   if (!site || site.done) {
     u.order = null;
     return;
@@ -1651,12 +2301,17 @@ function updateBuild(s, nav, u, dt) {
     site.progress = 1;
     site.done = true;
     site.hp = site.maxHp;
-    u.order = null;
+    if (site.kind === "goldMine" && u.workerRole === "miner") {
+      u.order = { t: "gather", targetId: site.id };
+      u.gatherNodeId = site.id;
+    } else {
+      u.order = null;
+    }
   }
 }
-function updateRepair(s, nav, u, dt) {
+function updateRepair(s, nav, u, dt, index) {
   const stats = workerStats(u);
-  const wall = buildingById(s, u.order?.targetId ?? -1);
+  const wall = index.buildings.get(u.order?.targetId ?? -1);
   if (!wall || !wall.done || wall.kind !== "wall" || wall.hp >= wall.maxHp) {
     u.order = null;
     return;
@@ -1679,19 +2334,47 @@ function clampVampireToCrypt(s) {
     vamp.z = crypt.z + dz / d * CRYPT_RADIUS;
   }
 }
-function updateUnits(session, dt) {
+function updateUnits(session, dt, index) {
   const s = session.state;
   const nav = session.navigation;
   nav.refresh();
   const vampOut = vampireOutsideCrypt(s);
+  for (const p of s.players) {
+    if (!p.abilityCooldowns) continue;
+    for (const key of Object.keys(p.abilityCooldowns)) {
+      p.abilityCooldowns[key] = Math.max(0, (p.abilityCooldowns[key] ?? 0) - dt);
+    }
+  }
   for (const u of s.units) {
     if (u.dead) continue;
     u.activity = "idle";
     nav.recover(u);
     u.attackCd = Math.max(0, u.attackCd - dt);
+    if ((u.fortify ?? 0) > 0) u.fortify = Math.max(0, (u.fortify ?? 0) - dt);
     const canAct = !(u.kind === "vampire" && vampOut);
-    if (u.kind === "vampire" && s.phase === "night") {
-      u.hp = Math.min(u.maxHp, u.hp + VAMPIRE.nightRegen * dt);
+    const canAttackStatus = u.kind !== "vampire" || vampireCanAttack(s);
+    if (u.kind === "vampire") {
+      const wasBatForm = vampireStatus(s, "batForm") > 0;
+      const wasChanneling = vampireStatus(s, "channelingTeleport") > 0;
+      if (s.vampire.statuses) {
+        for (const key of Object.keys(s.vampire.statuses)) {
+          s.vampire.statuses[key] = Math.max(0, (s.vampire.statuses[key] ?? 0) - dt);
+        }
+      }
+      if (wasBatForm && vampireStatus(s, "batForm") <= 0) {
+        setVampireStatus(s, "exitingBatForm", VAMPIRE_ABILITIES.batForm.exitDuration);
+      }
+      if (wasChanneling && vampireStatus(s, "channelingTeleport") <= 0) {
+        completeVampireTeleport(s);
+      }
+      if (s.vampire.reveal) {
+        s.vampire.reveal.remaining -= dt;
+        if (s.vampire.reveal.remaining <= 0) s.vampire.reveal = null;
+      }
+    }
+    if (u.kind === "vampire") {
+      if (!vampOut) u.hp = Math.min(u.maxHp, u.hp + VAMPIRE.cryptRegen * dt);
+      else if (s.phase === "night") u.hp = Math.min(u.maxHp, u.hp + VAMPIRE.nightRegen * dt);
     }
     if (u.kind === "vampire") {
       for (const id of Object.keys(s.vampire.skills)) {
@@ -1712,16 +2395,16 @@ function updateUnits(session, dt) {
         }
         break;
       case "gather":
-        updateGather(s, nav, u, dt);
+        updateGather(s, nav, u, dt, index);
         break;
       case "attack":
-        if (canAct) updateAttackOrder(s, nav, u, dt);
+        if (canAct && canAttackStatus) updateAttackOrder(s, nav, u, dt, index);
         break;
       case "build":
-        updateBuild(s, nav, u, dt);
+        updateBuild(s, nav, u, dt, index);
         break;
       case "repair":
-        updateRepair(s, nav, u, dt);
+        updateRepair(s, nav, u, dt, index);
         break;
       case "upgrade":
         u.order = null;
@@ -1733,19 +2416,27 @@ function updateUnits(session, dt) {
 }
 function updateEconomy(s, dt) {
   for (const b of s.buildings) {
-    if (b.kind === "bank" && b.done) {
-      const cycleSeconds = bankCycleSeconds(b.level);
+    if ((b.fortify ?? 0) > 0) b.fortify = Math.max(0, (b.fortify ?? 0) - dt);
+    if (!b.done) continue;
+    if (b.kind === "bank") {
       b.goldAcc += dt;
-      if (b.goldAcc + 1e-7 >= cycleSeconds) {
-        const cycles = Math.floor((b.goldAcc + 1e-7) / cycleSeconds);
-        const whole = cycles * bankProduction();
-        const p = s.players.find((pl) => pl.id === b.owner);
-        if (p) {
-          p.gold += whole;
-          b.goldProduced = (b.goldProduced ?? 0) + whole;
-        }
-        b.goldAcc = Math.max(0, b.goldAcc - cycles * cycleSeconds);
+      if (b.goldAcc + 1e-9 < BANK_CYCLE_SECONDS) continue;
+      const cycles = Math.floor((b.goldAcc + 1e-9) / BANK_CYCLE_SECONDS);
+      const whole = cycles * bankProduction(b.level);
+      b.goldAcc -= cycles * BANK_CYCLE_SECONDS;
+      const p = s.players.find((pl) => pl.id === b.owner);
+      if (p) {
+        p.gold += whole;
+        b.goldProduced = (b.goldProduced ?? 0) + whole;
       }
+    } else if (b.kind === "crypt") {
+      b.goldAcc += dt;
+      if (b.goldAcc + 1e-9 < CRYPT_CYCLE_SECONDS) continue;
+      const cycles = Math.floor((b.goldAcc + 1e-9) / CRYPT_CYCLE_SECONDS);
+      const whole = cycles * cryptProduction(b.level);
+      b.goldAcc -= cycles * CRYPT_CYCLE_SECONDS;
+      s.vampire.blood += whole;
+      b.goldProduced = (b.goldProduced ?? 0) + whole;
     }
   }
 }
@@ -1772,6 +2463,7 @@ function updateRecruitment(session, dt) {
       id: nextEntityId(s),
       kind: "worker",
       hero: false,
+      workerRole: tavern.recruitment.role ?? "lumberjack",
       owner: tavern.owner,
       ...spawn,
       hp: PEON.hp,
@@ -1795,9 +2487,11 @@ function updateTowers(s, dt) {
     b.attackCd = Math.max(0, b.attackCd - dt);
     if (dist(b.x, b.z, vamp.x, vamp.z) > TOWER.range) continue;
     if (b.attackCd > 0) continue;
+    if (vampireInvulnerable(s)) continue;
     b.attackCd = TOWER.cooldown;
-    vamp.hp -= TOWER.damage;
-    b.lastShot = { tick: s.tick, targetId: vamp.id, x: vamp.x, z: vamp.z, damage: TOWER.damage };
+    const damage = towerDamage(b.level);
+    vamp.hp -= damage;
+    b.lastShot = { tick: s.tick, targetId: vamp.id, x: vamp.x, z: vamp.z, damage };
     if (vamp.hp <= 0) {
       vamp.dead = true;
       s.result = { winner: "human", reason: "As defesas da vila destru\xEDram o vampiro!" };
@@ -1829,8 +2523,9 @@ function step(session, commands) {
     s.tick++;
     return;
   }
+  const index = buildTickIndex(s);
   updatePhase(s, DT);
-  updateUnits(session, DT);
+  updateUnits(session, DT, index);
   updateEconomy(s, DT);
   updateRecruitment(session, DT);
   updateTowers(s, DT);
@@ -1838,7 +2533,7 @@ function step(session, commands) {
   s.time += DT;
   s.tick++;
 }
-function makeSnapshot(s) {
+function makeSnapshot(s, includeNodes = true) {
   return {
     practice: s.practice ?? false,
     tick: s.tick,
@@ -1851,6 +2546,7 @@ function makeSnapshot(s) {
       id: u.id,
       kind: u.kind,
       hero: u.hero,
+      workerRole: u.workerRole,
       owner: u.owner,
       x: Math.round(u.x * 100) / 100,
       z: Math.round(u.z * 100) / 100,
@@ -1877,18 +2573,23 @@ function makeSnapshot(s) {
       lastShot: b.lastShot ? { ...b.lastShot } : void 0,
       recruitment: b.recruitment ? { ...b.recruitment } : null
     })),
-    nodes: s.nodes.filter((n) => n.amount > 0),
+    nodes: includeNodes ? s.nodes.filter((n) => n.amount > 0) : [],
     players: s.players.map((p) => ({
       id: p.id,
       wood: Math.floor(p.wood),
       gold: Math.floor(p.gold),
-      alive: p.alive
+      alive: p.alive,
+      workerLevels: p.workerLevels ? { ...p.workerLevels } : void 0,
+      abilityCooldowns: p.abilityCooldowns ? Object.fromEntries(Object.entries(p.abilityCooldowns).map(([k, v]) => [k, Math.round(v * 10) / 10])) : void 0
     })),
     blood: s.vampire.blood,
     vampireItems: { ...s.vampire.items },
     vampireSkills: Object.fromEntries(
       Object.entries(s.vampire.skills).map(([id, v]) => [id, { cd: Math.round(v.cd * 10) / 10, buff: Math.round(v.buff * 10) / 10 }])
-    )
+    ),
+    vampireStatuses: s.vampire.statuses ? Object.fromEntries(Object.entries(s.vampire.statuses).map(([k, v]) => [k, Math.round((v ?? 0) * 10) / 10])) : void 0,
+    vampireReveal: s.vampire.reveal ? { ...s.vampire.reveal, remaining: Math.round(s.vampire.reveal.remaining * 10) / 10 } : null,
+    vampireRevealUses: s.vampire.revealUses ?? 0
   };
 }
 
@@ -1972,8 +2673,14 @@ function startRoom(room, requesterId) {
     c.playerId = c.role === "vampire" ? VAMPIRE_PLAYER_ID : humanId++;
     names[c.playerId] = c.name;
   }
-  room.session = createSession(names, room.seed, room.clients.map((c) => c.playerId));
-  room.session.state.practice = room.clients.length === 1;
+  const playerIds = room.clients.map((c) => c.playerId);
+  const solo = room.clients.length === 1;
+  if (solo && room.clients[0].role === "vampire") {
+    playerIds.push(0);
+    names[0] = "Humano (treino)";
+  }
+  room.session = createSession(names, room.seed, playerIds);
+  room.session.state.practice = solo;
   room.nodeAmounts.clear();
   for (const node of room.session.state.nodes) room.nodeAmounts.set(node.id, node.amount);
   room.status = "playing";
@@ -2007,7 +2714,7 @@ function stepRoom(room) {
   room.queue = [];
   room.cmdCount.clear();
   step(room.session, commands);
-  const snap = makeSnapshot(room.session.state);
+  const snap = makeSnapshot(room.session.state, false);
   snap.nodes = void 0;
   const payload = JSON.stringify({ type: "snap", snap });
   for (const c of room.clients) {
@@ -2020,9 +2727,28 @@ function stepRoom(room) {
   }
   if (room.session.state.result) {
     room.status = "ended";
+    room.endedAt = Date.now();
     const res = JSON.stringify({ type: "result", result: room.session.state.result });
     for (const c of room.clients) {
       if (c.ws.readyState === 1) c.ws.send(res);
+    }
+  }
+}
+var ENDED_ROOM_TTL_MS = 5 * 6e4;
+function purgeRooms(now = Date.now()) {
+  for (const [code, room] of rooms) {
+    if (room.clients.length === 0) {
+      rooms.delete(code);
+      continue;
+    }
+    if (room.status === "ended" && room.endedAt !== void 0 && now - room.endedAt > ENDED_ROOM_TTL_MS) {
+      for (const c of room.clients) {
+        try {
+          c.ws.close(1e3, "partida encerrada");
+        } catch {
+        }
+      }
+      rooms.delete(code);
     }
   }
 }
@@ -2199,6 +2925,19 @@ var server = http.createServer((req, res) => {
 var wss = new WebSocketServer({ server, maxPayload: 64 * 1024 });
 var clientRoom = /* @__PURE__ */ new Map();
 var alive = /* @__PURE__ */ new WeakSet();
+var joinAttempts = /* @__PURE__ */ new WeakMap();
+var JOIN_ATTEMPT_LIMIT = 20;
+var JOIN_WINDOW_MS = 1e4;
+function allowJoinAttempt(ws) {
+  const now = Date.now();
+  const record = joinAttempts.get(ws);
+  if (!record || now > record.resetAt) {
+    joinAttempts.set(ws, { count: 1, resetAt: now + JOIN_WINDOW_MS });
+    return true;
+  }
+  record.count++;
+  return record.count <= JOIN_ATTEMPT_LIMIT;
+}
 wss.on("connection", (ws) => {
   alive.add(ws);
   ws.on("pong", () => alive.add(ws));
@@ -2216,6 +2955,11 @@ wss.on("connection", (ws) => {
     if (!msg || typeof msg !== "object") return;
     const error = (message) => ws.send(JSON.stringify({ type: "error", message }));
     if (msg.type === "create") {
+      if (!allowJoinAttempt(ws)) {
+        error("Muitas tentativas. Aguarde alguns segundos.");
+        ws.close(1008, "rate limit");
+        return;
+      }
       if (clientRoom.has(ws)) {
         error("Saia da sala atual antes de criar outra");
         return;
@@ -2228,6 +2972,11 @@ wss.on("connection", (ws) => {
       return;
     }
     if (msg.type === "join") {
+      if (!allowJoinAttempt(ws)) {
+        error("Muitas tentativas. Aguarde alguns segundos.");
+        ws.close(1008, "rate limit");
+        return;
+      }
       if (clientRoom.has(ws)) {
         error("Voc\xEA j\xE1 est\xE1 em uma sala");
         return;
@@ -2346,6 +3095,7 @@ var tickTimer = setInterval(() => {
     }
   }
   const elapsed = performance.now() - started;
+  purgeRooms();
   if (elapsed > TICK_MS && started - lastSlowTickLog >= 5e3) {
     lastSlowTickLog = started;
     console.warn(`[vampire] tick lento: ${elapsed.toFixed(1)}ms (limite ${TICK_MS.toFixed(1)}ms); sala ${slowestRoom}: ${slowestMs.toFixed(1)}ms`);

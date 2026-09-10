@@ -274,6 +274,37 @@ function roof(g: THREE.Object3D, width: number, depth: number, rise: number, y: 
     [x + side * width / 2, y - 0.03, z + front * (depth / 2 + 0.04)], [x, y + rise + 0.09, z + front * (depth / 2 + 0.04)], 0.15, P.woodLight);
   box(g, 0.2, 0.15, depth + 0.2, P.iron, x, y + rise + 0.08, z);
 }
+/** Telhado de duas águas com paleta de telhas customizável (ex.: azul do Mercado). */
+function coloredRoof(g: THREE.Object3D, width: number, depth: number, rise: number, y: number, x = 0, z = 0,
+  tiles = ['#2f4d9e', '#274089', '#3557ad', '#223a7d']) {
+  // A base usa uma cor própria (fora da paleta das telhas) para que só as
+  // telhas recebam polygonOffset e vençam o z-fighting contra a base.
+  const base = polygon(g, [[-width / 2, 0], [width / 2, 0], [0, rise]], depth, '#1b2c5c', x, y, z);
+  base.receiveShadow = true;
+  for (const face of [-1, 1]) {
+    polygon(g, [[-width / 2 + 0.13, 0.03], [width / 2 - 0.13, 0.03], [0, rise - 0.13]], 0.035, '#1c2f63',
+      x, y, z + face * (depth / 2 + 0.05));
+  }
+  const slope = Math.hypot(width / 2, rise), angle = Math.atan2(rise, width / 2);
+  const rows = Math.max(3, Math.ceil(slope / 0.55)), columns = Math.max(3, Math.ceil(depth / 0.62));
+  for (const side of [-1, 1]) for (let row = 0; row < rows; row++) for (let col = 0; col < columns; col++) {
+    const t = (row + 0.5) / rows;
+    // Folga maior acima da base evita z-fighting entre a telha e o prisma.
+    const tile = box(g, slope / rows + 0.065, 0.065, depth / columns - 0.025,
+      tiles[(row * 13 + col * 17 + col * row + (side + 1)) % tiles.length]!,
+      x + side * width / 2 * (1 - t), y + rise * t + 0.12,
+      z - depth / 2 + depth / columns * (col + 0.5));
+    tile.rotation.z = -side * angle;
+    // Empurra as telhas para a frente da base (correção definitiva de z-fighting).
+    const tileMat = tile.material as THREE.Material;
+    tileMat.polygonOffset = true; tileMat.polygonOffsetFactor = -2; tileMat.polygonOffsetUnits = -2;
+  }
+  for (const front of [-1, 1]) for (const side of [-1, 1]) beam(g,
+    [x + side * width / 2, y - 0.03, z + front * (depth / 2 + 0.04)],
+    [x, y + rise + 0.09, z + front * (depth / 2 + 0.04)], 0.15, P.woodLight);
+  box(g, 0.2, 0.15, depth + 0.2, P.iron, x, y + rise + 0.08, z);
+}
+
 function masonry(g: THREE.Object3D, w: number, h: number, d: number, x = 0, y = 0, z = 0) {
   box(g, w, h, d, P.mortar, x, y + h / 2, z);
   const rows = Math.ceil(h / 0.45), cols = Math.ceil(w / 0.85);
@@ -320,7 +351,28 @@ function timberHall(g: THREE.Object3D, w: number, h: number, d: number, x = 0, z
 }
 
 export function createBuildingModel(kind: BuildingKind, owner: number, done: boolean, level = 1): THREE.Group {
-  const g = new THREE.Group(), size = BUILDING_SIZE[kind];
+  const g = new THREE.Group();
+  // Modelo GLB externo substitui o procedural quando disponível (ex.: Mina de Ouro).
+  const external = assetRegistry.buildingTemplate(kind);
+  if (external) {
+    // Encaixa a maior extensão horizontal no footprint da construção.
+    external.updateMatrixWorld(true);
+    const raw = new THREE.Box3().setFromObject(external).getSize(new THREE.Vector3());
+    const horizontal = Math.max(raw.x, raw.z);
+    if (horizontal > 1e-6) external.scale.multiplyScalar(BUILDING_SIZE[kind] / horizontal);
+    // Multiplicador específico do asset (ex.: o portão do muro é baixo e estreito).
+    const extraScale = external.userData.buildingScale as number | undefined;
+    if (extraScale && extraScale !== 1) external.scale.multiplyScalar(extraScale);
+    external.updateMatrixWorld(true);
+    external.position.y -= new THREE.Box3().setFromObject(external).min.y;
+    g.add(external);
+    if (!done) g.traverse(o => { if (o instanceof THREE.Mesh) o.castShadow = false; });
+    g.updateMatrixWorld(true);
+    const bounds = new THREE.Box3().setFromObject(g);
+    g.userData.healthBarHeight = Number.isFinite(bounds.max.y) ? bounds.max.y + 0.5 : 5;
+    return g;
+  }
+  const size = BUILDING_SIZE[kind];
   const baseSize = kind === 'crypt' ? 8 : kind === 'wall' ? 2 : kind === 'tower' ? 3 : kind === 'keep' ? 7 : 6;
   const team = PLAYER_COLORS[owner % PLAYER_COLORS.length] ?? PLAYER_COLORS[0]!;
   if (kind === 'wall') {
@@ -405,6 +457,50 @@ export function createBuildingModel(kind: BuildingKind, owner: number, done: boo
     lantern(g, -1.65, 1.7, w / 2 + 0.17); lantern(g, 1.65, 1.7, w / 2 + 0.17);
     banner(g, team, 0.64, 1.45, -w / 2 + 0.46, 2.85, w / 2 + 0.15);
     const seal = cylinder(g, 0.37, 0.37, 0.09, P.gold, 0, 3.24, w / 2 + 0.18, 12); seal.rotation.x = Math.PI / 2;
+  } else if (kind === 'market') {
+    // Casa de enxaimel com telhado azul, chaminé de pedra, toldos azuis sobre
+    // as bancas, mercadorias e estandarte (referência: mercado.jpeg).
+    const BLUE = '#2f4d9e', AWNING = '#2b57b8', BANNER = '#1f3f9e';
+    // Pátio pavimentado.
+    box(g, 5.5, 0.14, 5.1, '#6d7173', 0, 0.07);
+    // Corpo principal de enxaimel (fundos).
+    timberHall(g, 3.6, 3.0, 3.4, 0, -0.5);
+    // Telhado levemente afundado nas paredes (2,9 < 3,0) para evitar z-fighting
+    // entre a base do telhado e o topo das paredes.
+    coloredRoof(g, 4.2, 4.0, 2.2, 2.9, 0, -0.5);
+    // Chaminé de pedra.
+    masonry(g, 0.85, 4.6, 0.85, -1.45, 0, -1.7);
+    box(g, 1.05, 0.24, 1.05, P.stoneDark, -1.45, 4.72, -1.7);
+    // Entrada em arco e degraus.
+    masonry(g, 2.2, 0.24, 0.85, 0, 0, 1.72);
+    door(g, 0, 0.4, 1.35, 1.5, 2.1, true);
+    archedWindow(g, 0, 2.55, 1.36, 0.72, 1.0);
+    // Emblema de moeda no frontão.
+    mesh(g, new THREE.CylinderGeometry(0.44, 0.44, 0.1, 16), P.gold, 0, 3.7, 1.42).rotation.x = Math.PI / 2;
+    mesh(g, new THREE.TorusGeometry(0.44, 0.05, 6, 16), P.gold, 0, 3.7, 1.47);
+    // Estandarte azul com flor-de-lis dourada.
+    banner(g, BANNER, 0.8, 2.0, -1.15, 3.0, 1.44);
+    polygon(g, [[0, 0.3], [0.14, 0.06], [0.34, 0.02], [0.16, -0.12], [0.22, -0.34], [0, -0.2], [-0.22, -0.34], [-0.16, -0.12], [-0.34, 0.02], [-0.14, 0.06]], 0.03, P.gold, -1.15, 2.05, 1.47);
+    // Bancas laterais com toldo azul.
+    for (const side of [-1, 1] as const) {
+      const sx = side * 2.25;
+      for (const z of [-1.3, 1.15]) beam(g, [sx, 0.3, z], [sx, 2.5, z], 0.15, P.woodLight);
+      const awning = box(g, 1.6, 0.09, 3.0, AWNING, sx, 2.52, -0.1);
+      awning.rotation.z = side * 0.16;
+      for (const z of [-1.45, 1.3]) box(g, 1.7, 0.12, 0.12, AWNING, sx, 2.44, z);
+      crate(g, sx, 0.28, 0.7, 0.72);
+      crate(g, sx, 0.28, -0.35, 0.6);
+      const goods: Array<[number, string]> = [[-0.26, '#d9b25a'], [0, '#b5423a'], [0.26, '#5c7a3a']];
+      for (const [dx, color] of goods) ellipsoid(g, 0.15, 0.1, 0.15, color, sx + dx, 1.12, 0.7);
+      for (const [dx, color] of goods) ellipsoid(g, 0.13, 0.09, 0.13, color, sx + dx, 0.98, -0.35);
+      barrel(g, sx - side * 0.1, 0.28, -1.55, 0.4);
+    }
+    // Sacos de grãos.
+    ellipsoid(g, 0.32, 0.4, 0.32, '#c9b487', 2.75, 0.42, 1.75);
+    ellipsoid(g, 0.27, 0.34, 0.27, '#c9b487', -2.7, 0.36, 1.6);
+    // Lanternas.
+    lantern(g, -1.7, 1.65, 1.5);
+    lantern(g, 1.7, 1.65, 1.5);
   } else if (kind === 'crypt') {
     // A cripta é a base do Vampiro: plataforma, obeliscos de brasa e poço de sangue.
     masonry(g, 8.6, 0.5, 8.6, 0, -0.4);
@@ -445,6 +541,47 @@ export function createBuildingModel(kind: BuildingKind, owner: number, done: boo
     for (const x of [-4.3, 4.3]) for (const z of [-4.3, 4.3]) {
       mesh(g, new THREE.SphereGeometry(0.24, 6, 5), '#cfc6b0', x, 0.4, z).scale.set(1, 0.8, 1);
     }
+  } else if (kind === 'goldMine') {
+    // Mina de Ouro: morro rochoso, entrada escorada de madeira, trilhos e
+    // carrinho com ouro, com veios dourados na pedra.
+    box(g, 4.6, 0.18, 4.4, '#5b5f60', 0, 0.09);
+    // Morro rochoso em várias pedras.
+    const rocks: Array<[number, number, number, number]> = [
+      [-1.7, -0.7, -0.5, 1.35], [1.6, -0.6, -0.6, 1.25], [0.1, -1.0, 0.05, 1.7],
+      [-1.0, -0.2, 1.2, 1.0], [1.05, -0.15, 1.15, 0.95], [0.15, -0.2, 1.9, 1.15],
+      [-1.5, 1.1, 0.2, 1.0], [1.45, 1.15, 0.15, 0.95], [0.1, 1.9, -0.2, 1.25],
+      [-0.55, 1.4, 1.15, 0.8], [0.6, 1.45, 1.1, 0.78],
+    ];
+    const rockColors = [P.stoneDark, P.stone, '#4f565b', '#596066'];
+    rocks.forEach(([x, y, z, r], i) => {
+      mesh(g, new THREE.DodecahedronGeometry(r, 0), rockColors[i % rockColors.length]!, x, y + r * 0.55, z);
+    });
+    // Entrada escura (galeria).
+    polygon(g, [[-0.92, 0], [0.92, 0], [0.92, 1.5], [0, 2.0], [-0.92, 1.5]], 0.4, '#0c0e11', 0, 0, 1.95);
+    // Pórtico de madeira.
+    for (const x of [-1.0, 1.0]) beam(g, [x, 0, 2.0], [x, 2.5, 2.0], 0.22, P.woodLight);
+    box(g, 2.5, 0.24, 0.34, P.wood, 0, 2.6, 2.0);
+    beam(g, [-1.0, 2.5, 1.95], [0, 3.05, 1.95], 0.15, P.woodDark);
+    beam(g, [1.0, 2.5, 1.95], [0, 3.05, 1.95], 0.15, P.woodDark);
+    beam(g, [-1.0, 1.5, 2.0], [0.95, 0.3, 2.0], 0.11, P.woodDark);
+    // Vigas de escoramento dentro da entrada.
+    box(g, 1.9, 0.16, 0.24, P.woodDark, 0, 1.0, 1.55);
+    box(g, 1.9, 0.16, 0.24, P.woodDark, 0, 1.7, 1.7);
+    // Trilhos e dormentes.
+    for (const rx of [-0.34, 0.34]) box(g, 0.08, 0.07, 1.9, P.iron, rx, 0.16, 2.9);
+    for (let i = 0; i < 4; i++) box(g, 1.05, 0.07, 0.16, P.woodDark, 0, 0.11, 2.15 + i * 0.5);
+    // Carrinho de mina com ouro.
+    box(g, 1.0, 0.5, 0.66, P.wood, 0, 0.45, 3.05);
+    for (const x of [-0.5, 0.5]) mesh(g, new THREE.CylinderGeometry(0.22, 0.22, 0.1, 10), P.iron, x, 0.24, 3.05).rotation.z = Math.PI / 2;
+    for (const [x, y, z] of [[-0.28, 0.75, 3.0], [0, 0.82, 3.1], [0.26, 0.74, 3.02], [0.05, 0.72, 2.9]] as const) {
+      mesh(g, new THREE.OctahedronGeometry(0.16, 0), P.gold, x, y, z);
+    }
+    // Veios de ouro na rocha.
+    for (const [x, y, z] of [[-1.35, 0.9, 1.35], [1.25, 0.85, 1.3], [-0.15, 1.7, 1.95], [0.35, 2.3, 0.55], [-1.6, 0.4, -0.1]] as const) {
+      mesh(g, new THREE.OctahedronGeometry(0.22, 0), P.gold, x, y, z);
+    }
+    // Lanterna na entrada.
+    lantern(g, -1.35, 1.5, 2.15);
   }
   if (!done) g.traverse(o => { if (o instanceof THREE.Mesh) { o.material = material('#96836b'); o.castShadow = false; } });
   g.scale.set(size / baseSize, 1, size / baseSize);

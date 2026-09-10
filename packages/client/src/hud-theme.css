@@ -13,7 +13,7 @@
 .vxh-hud, .vxh-hud *, .vxh-hud *::before, .vxh-hud *::after { box-sizing: border-box; }
 
 .vxh-bottom { height: 236px; left: 16px; right: 16px; bottom: 16px; gap: 14px;
-  grid-template-columns: 230px 184px minmax(300px,1fr) 240px;
+  grid-template-columns: 230px 184px minmax(280px,1fr) 300px;
   grid-template-areas: "map portrait commands sheet"; }
 
 /* Recesso escuro onde ficam mapa, retrato, atributos e comandos. */
@@ -87,6 +87,10 @@
   background: radial-gradient(ellipse at 50% 18%, #232936, #10141c 80%); }
 .vxh-panel > .vxh-btn.active { border-color: var(--stone-edge); color: #ffb9b9;
   box-shadow: inset 0 0 0 2px #7c2a33, inset 0 0 0 3px #0b0e15, inset 0 0 18px #8e2a35, inset 0 -8px 14px rgba(0,0,0,.5); }
+.vxh-panel > .vxh-btn.vxh-danger { color: #e8a2a2; }
+.vxh-panel > .vxh-btn.vxh-danger:hover:not(:disabled) { color: #ffd0d0;
+  box-shadow: inset 0 0 0 2px #a8323f, inset 0 0 0 3px #0b0e15, inset 0 0 18px rgba(168,50,63,.35),
+    inset 0 -8px 14px rgba(0,0,0,.5); }
 .vxh-card-art { display: block; width: 100%; height: 78px; flex-shrink: 0; }
 .vxh-card-art svg { display: block; height: 100%; width: 100%; }
 .vxh-card-art img { display: block; height: 100%; width: 100%; object-fit: contain; }
@@ -96,14 +100,39 @@
 .vxh-panel > span { flex: 1; align-self: center; font-size: 12px; line-height: 1.6; color: #a89a78; font-style: italic;
   text-align: center; letter-spacing: .4px; text-shadow: 0 1px 1px #000; }
 
+/* Habilidades: dentro da ficha (painel da direita), abaixo dos atributos. */
+.vxh-abilities-block { flex: 0 0 auto; margin-top: 10px; padding-top: 8px; border-top: 1px solid #3a342a; }
+.vxh-abilities-block[hidden] { display: none; }
+.vxh-abilities-heading { display: flex; align-items: center; justify-content: center; height: 22px; flex-shrink: 0;
+  margin-bottom: 6px; color: var(--gold-hi); font-size: 10px; letter-spacing: 2px; white-space: nowrap;
+  border: 1px solid var(--stone-edge); border-radius: 2px;
+  background: linear-gradient(180deg, rgba(48,53,62,.9), rgba(14,16,21,.9)); text-shadow: 0 1px 2px #000; }
+.vxh-abilities-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.vxh-abilities-grid > .vxh-btn { position: relative; min-width: 0; aspect-ratio: 1; padding: 5px; font-size: 12px;
+  display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 2px; border-radius: 3px;
+  border: 1px solid var(--stone-edge); color: var(--parch); font-weight: 600; line-height: 1.05;
+  background: radial-gradient(ellipse at 50% 18%, var(--slot-hi), #131824 78%);
+  box-shadow: inset 0 0 0 2px #4a5573, inset 0 0 0 3px #0b0e15, inset 0 2px 0 rgba(190,205,230,.18),
+    inset 0 -8px 14px rgba(0,0,0,.5); }
+.vxh-abilities-grid > .vxh-btn:hover:not(:disabled) { color: var(--gold-hi);
+  box-shadow: inset 0 0 0 2px var(--gold), inset 0 0 0 3px #0b0e15, inset 0 0 14px rgba(201,168,106,.25); }
+.vxh-abilities-grid > .vxh-btn:disabled { border-color: #232830; color: #8f96a0;
+  background: radial-gradient(ellipse at 50% 18%, #232936, #10141c 80%); }
+.vxh-abilities-grid > .vxh-btn.active { color: #ffb9b9;
+  box-shadow: inset 0 0 0 2px #7c2a33, inset 0 0 0 3px #0b0e15, inset 0 0 14px #8e2a35; }
+.vxh-abilities-grid .vxh-card-art { flex: 1; min-height: 0; height: auto; width: 100%; }
+.vxh-abilities-grid .vxh-btn small { display: none; }
+.vxh-abilities-grid .vxh-hotkey { font-size: 9px; padding: 0 3px; }
+
 /* Ficha de atributos. */
-.vxh-sheet { grid-area: sheet; padding: 12px; overflow-y: auto; pointer-events: auto;
-  scrollbar-width: thin; scrollbar-color: #8b6b3f #0b1119; }
+.vxh-sheet { grid-area: sheet; padding: 12px; overflow: hidden; pointer-events: auto;
+  display: flex; flex-direction: column; min-height: 0; }
+.vxh-sheet-heading { flex: 0 0 auto; }
 .vxh-sheet-heading { font-size: 10px; letter-spacing: 2px; text-align: center; color: #e4cf94;
   padding: 3px; margin-bottom: 9px; border: 1px solid var(--stone-edge); border-radius: 2px;
   background: linear-gradient(180deg, rgba(48,53,62,.9), rgba(14,16,21,.9));
   box-shadow: inset 0 1px 0 rgba(255,255,255,.07); }
-.vxh-selinfo { font: 12px/1.5 Georgia,serif; color: #c9c2b1; }
+.vxh-selinfo { font: 12px/1.5 Georgia,serif; color: #c9c2b1; flex: 1 1 auto; min-height: 0; overflow: hidden; }
 .vxh-selinfo b { display: block; font-size: 16px; margin-bottom: 5px; color: #edd49d; }
 .vxh-activity { color: #e4c579; margin-top: 6px; }
 .vxh-progress { height: 8px; background: #080b10; border: 1px solid #3a3f47; margin: 6px 0;
@@ -164,15 +193,14 @@
 .vxh-hud .vxh-admin summary { color: #eed29b; }
 
 @media(max-width: 1200px) {
-  .vxh-bottom { grid-template-columns: 180px 154px minmax(250px,1fr) 190px; gap: 10px; height: 218px; }
+  .vxh-bottom { grid-template-columns: 180px 154px minmax(230px,1fr) 240px; gap: 10px; height: 218px; }
   .vxh-portrait-art { width: 87px; }
   .vxh-card-art { height: 60px; }
   .vxh-commands-heading { font-size: 9px; letter-spacing: 2px; }
   .vxh-crest { right: 6px; width: 28px; }
 }
 @media(max-width: 900px) {
-  .vxh-bottom { grid-template-columns: 154px 130px minmax(0,1fr); grid-template-areas: "map portrait commands"; }
-  .vxh-sheet { display: none; }
+  .vxh-bottom { grid-template-columns: 150px 124px minmax(0,1fr) 220px; grid-template-areas: "map portrait commands sheet"; }
   .vxh-crest { width: 22px; height: 46px; right: 4px; }
   .vxh-crest span { font-size: 19px; }
   .vxh-portrait { padding: 9px 6px; }
@@ -180,7 +208,9 @@
 }
 @media(max-width: 600px) {
   .vxh-bottom { left: 8px; right: 8px; bottom: 8px; height: 184px; gap: 8px;
-    grid-template-columns: 110px 100px minmax(0,1fr); }
+    grid-template-columns: 108px 96px minmax(0,1fr) 170px; }
+  .vxh-abilities-heading { font-size: 8px; letter-spacing: 0; }
+  .vxh-abilities-grid { gap: 4px; }
   .vxh-portrait-art { width: 66px; }
   .vxh-portrait .name { font-size: 12px; }
   .vxh-mapframe { padding: 6px 6px 22px; margin-top: 0; }
@@ -196,6 +226,28 @@
   .vxh-hud .vxh-admin { top: 118px; right: 8px; }
 }
 
+/* Cursor temático nos elementos clicáveis da HUD. */
+.vxh-hud .vxh-btn:not(:disabled),
+.vxh-hud .vxh-quit,
+.vxh-hud .vxh-hero,
+.vxh-hud summary,
+.vxh-hud .vxh-admin button { cursor: var(--vxh-cursor-point), pointer; }
+
+/* Avisos globais: quando um humano tomba, todos veem o aviso. */
+.vxh-feed { position: absolute; top: 56px; left: 50%; transform: translateX(-50%);
+  display: flex; flex-direction: column; align-items: center; gap: 6px; pointer-events: none; z-index: 40; }
+.vxh-toast { padding: 6px 16px; border: 1px solid #0a0c10; border-radius: 3px; color: #ffd9dc;
+  font: 650 14px 'Palatino Linotype','Book Antiqua',Palatino,Georgia,serif; letter-spacing: .5px; white-space: nowrap;
+  background: linear-gradient(180deg, rgba(64,20,27,.95), rgba(24,8,12,.95));
+  box-shadow: inset 0 0 0 2px #6e3a41, inset 0 1px 0 rgba(255,255,255,.08), 0 5px 14px #000b;
+  text-shadow: 0 1px 2px #000; animation: vxh-toast 5s ease forwards; }
+@keyframes vxh-toast {
+  0% { opacity: 0; transform: translateY(-8px) scale(.96); }
+  10%, 74% { opacity: 1; transform: none; }
+  100% { opacity: 0; transform: translateY(-8px) scale(.98); }
+}
+@media (prefers-reduced-motion: reduce) { .vxh-toast { animation-name: none; opacity: 1; } }
+
 /* Retratos: cantos suaves e vinheta para fundir a foto com o fundo do HUD. */
 .vxh-portrait-img {
   border-radius: 4px;
@@ -207,3 +259,14 @@
   -webkit-mask-image: radial-gradient(128% 128% at 50% 45%, #000 56%, rgba(0,0,0,0) 100%);
   mask-image: radial-gradient(128% 128% at 50% 45%, #000 56%, rgba(0,0,0,0) 100%);
 }
+
+/* Tooltip: descreve a habilidade ao passar o mouse (botões só têm o ícone). */
+.vxh-tip { position: fixed; z-index: 60; max-width: 240px; padding: 8px 10px; pointer-events: none;
+  border: 1px solid #08090c; border-radius: 4px;
+  background: linear-gradient(180deg, rgba(30,34,42,.98), rgba(10,13,18,.98));
+  box-shadow: inset 0 0 0 2px #3a3f47, inset 0 0 0 3px #10131a, 0 10px 26px #000d; }
+.vxh-tip[hidden] { display: none; }
+.vxh-tip-title { font: 700 13px Georgia,serif; color: var(--gold-hi); margin-bottom: 3px;
+  letter-spacing: .4px; text-shadow: 0 1px 2px #000; }
+.vxh-tip-body { font-size: 12px; line-height: 1.4; color: #c9c2b1; }
+.vxh-tip-body[hidden] { display: none; }
