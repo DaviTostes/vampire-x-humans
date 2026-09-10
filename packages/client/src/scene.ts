@@ -8,6 +8,7 @@ import {
   TOWER,
   COMPOUNDS,
   compoundEntrance,
+  CRYPT_POSITION,
   type BuildingKind,
   WORLD,
   generateMap,
@@ -234,6 +235,28 @@ export class GameScene {
     ring.rotation.x = -Math.PI / 2;
     ring.position.y = 3.08;
     this.scene.add(ring);
+    // Base do vampiro: piso sombrio e círculo rúnico. O terreno sobe perto da
+    // borda norte, então cada vértice acompanha a altura para o círculo fechar.
+    const drape = (geo: THREE.BufferGeometry, lift: number) => {
+      const pos = geo.attributes.position as THREE.BufferAttribute;
+      for (let i = 0; i < pos.count; i++) {
+        pos.setY(i, this.heightAt(CRYPT_POSITION.x + pos.getX(i), CRYPT_POSITION.z + pos.getZ(i)) + lift);
+      }
+      pos.needsUpdate = true;
+      geo.computeVertexNormals();
+    };
+    const baseGeo = new THREE.RingGeometry(0.02, 16, 64, 8);
+    baseGeo.rotateX(-Math.PI / 2);
+    drape(baseGeo, 0.02);
+    const base = new THREE.Mesh(baseGeo, new THREE.MeshLambertMaterial({ color: 0x2a2130 }));
+    base.position.set(CRYPT_POSITION.x, 0, CRYPT_POSITION.z);
+    this.scene.add(base);
+    const runeGeo = new THREE.RingGeometry(14.2, 14.6, 64, 1);
+    runeGeo.rotateX(-Math.PI / 2);
+    drape(runeGeo, 0.05);
+    const rune = new THREE.Mesh(runeGeo, new THREE.MeshBasicMaterial({ color: 0x8e2a35 }));
+    rune.position.set(CRYPT_POSITION.x, 0, CRYPT_POSITION.z);
+    this.scene.add(rune);
   }
 
   /** altura do terreno em coordenadas de mundo */
@@ -493,6 +516,10 @@ export class GameScene {
       case 'keep': return 10.2;
       case 'taverna': return 8.2;
       case 'crypt': return 11.5;
+      case 'forge': return 6.6;
+      case 'relic': return 8.4;
+      case 'mist': return 7.2;
+      case 'shrine': return 7.4;
       default: return 8;
     }
   }
@@ -712,7 +739,9 @@ export class GameScene {
     }
     for (let i = 0; i < this.torches.length; i++) {
       const pl = this.torches[i]!;
-      const b = [...this.buildingMeshes.values()].filter((g) => g.userData.done && g.userData.kind !== 'crypt');
+      // Tochas da vila: nunca nas estruturas da base do vampiro.
+      const b = [...this.buildingMeshes.values()].filter((g) => g.userData.done &&
+        !['crypt', 'forge', 'relic', 'mist', 'shrine'].includes(g.userData.kind));
       if (b.length === 0) continue;
       const target = b[i % b.length]!;
       pl.position.set(target.position.x, this.heightAt(target.position.x, target.position.z) + 4, target.position.z);

@@ -105,36 +105,36 @@ O Vampiro recebe ordens de movimento e ataque como as outras unidades. À noite,
 
 **Inspeção:** um jogador humano pode clicar no Vampiro para consultar sua vida, sangue, dano e ação atual no HUD. Inspecionar uma unidade de outro jogador não permite controlá-la.
 
-### Itens do Vampiro: loja da cripta
+### Base do Vampiro: cripta e lojas
 
-Durante o **dia**, o Vampiro pode trocar sangue por equipamento na cripta.
+Durante o **dia**, o Vampiro pode trocar sangue por equipamento na sua base, ao norte do vale. A base reúne a **Cripta** e quatro lojas: cada item é comprado na sua própria loja, com um visual próprio.
 
 1. Acumule sangue acertando ataques.
-2. Durante o dia, aproxime o Vampiro da cripta.
-3. Clique na cripta para abrir sua loja no HUD.
+2. Durante o dia, aproxime o Vampiro da loja desejada.
+3. Clique na estrutura para abrir a loja no HUD.
 4. Escolha o item. O sangue é descontado e o equipamento fica ativo imediatamente.
 
-| Item | Preço | Efeito |
-|---|---:|---|
-| Garras Sangrentas | 50 de sangue | +10 de dano contra unidades e construções |
-| Coração Ancestral | 75 de sangue | +300 de vida máxima |
-| Botas da Névoa | 30 de sangue, +40% por nível | +0,5 de velocidade de movimento por nível, sem limite |
-| Frenesi | 30 de sangue, +40% por nível | Ataques ~7% mais rápidos por nível (mínimo 0,45s), sem limite |
+| Loja | Item | Preço | Efeito |
+|---|---:|---|---|
+| Forja de Sangue | Garras Sangrentas | 50 de sangue, +40% por nível | +10 de dano por nível contra unidades e construções, sem limite |
+| Relicário Ancestral | Coração Ancestral | 75 de sangue, +40% por nível | +300 de vida máxima por nível, sem limite |
+| Portal da Névoa | Botas da Névoa | 30 de sangue, +40% por nível | +0,5 de velocidade de movimento por nível, sem limite |
+| Santuário do Frenesi | Frenesi | 30 de sangue, +40% por nível | Ataques ~7% mais rápidos por nível (mínimo 0,45s), sem limite |
 
 ### Skill do Vampiro: Golpe Sombrio
 
-- Na cripta, durante o dia, o Vampiro pode desbloquear o **Golpe Sombrio** por 80 de sangue.
+- **Apenas as skills são compradas na cripta.** Durante o dia, o Vampiro desbloqueia o **Golpe Sombrio** por 80 de sangue.
 - Depois de desbloqueada, a skill aparece no painel do vampiro e pode ser ativada **a qualquer hora**, sem custo extra.
 - Ao ativar, o dano dobra por 8 segundos, com 50 segundos de recarga.
 
-- A loja só atende o Vampiro, durante o dia e até 3 unidades da borda da cripta.
-- Garras e Coração podem ser comprados uma vez por partida; Botas e Frenesi não têm limite, mas cada nível custa mais que o anterior.
-- Depois da primeira compra na cripta, Botas e Frenesi podem ser upados **a qualquer hora pelo painel do vampiro**, sem voltar à cripta.
-- Os itens equipados aparecem na ficha do Vampiro e no painel da cripta.
+- As lojas só atendem o Vampiro durante o dia, em qualquer ponto da região da base.
+- Cada item só pode ser comprado na sua loja específica. Todos os itens são **infinitos**: podem ser comprados quantas vezes o sangue permitir, e cada nível custa mais que o anterior.
+- Depois da primeira compra de um item, ele pode ser upado **a qualquer hora pelo painel do vampiro**, sem voltar à base.
+- Os itens equipados aparecem na ficha do Vampiro e no painel da base.
 - As Garras também recebem o modificador de dano diurno nos ataques contra unidades.
 - O Coração soma seu bônus à vida atual e à máxima, preservando o dano já sofrido; não é uma cura completa.
 - Os itens permanecem ativos durante a noite. Uma nova partida começa com o inventário vazio.
-- Preços, bônus, limites de cópias e distância de compra podem ser ajustados na configuração do jogo.
+- Preços, bônus, lojas e distância de compra podem ser ajustados na configuração do jogo.
 
 ---
 
@@ -165,7 +165,7 @@ O Vale da Vigília é um **mapa fixo**, com a mesma disposição em todas as par
 ### Elementos principais
 
 - **Praça central:** ponto de partida dos Humanos.
-- **Cripta:** região inicial do Vampiro.
+- **Base do Vampiro:** a Cripta e as quatro lojas, ao norte do vale.
 - **Florestas e árvores de coleta:** fontes de madeira.
 - **Minas (12):** 4 na praça central e 1 exposta fora da entrada de cada refúgio — ouro exige sair das muralhas.
 - **Lagos e rochedos:** obstáculos que influenciam movimento e construção.

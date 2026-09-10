@@ -6,6 +6,10 @@
  * Depois de editar, inicie uma nova sala. Em produção, gere um novo build.
  */
 export type BuildKind = 'bank' | 'taverna' | 'wall' | 'tower' | 'keep';
+// Lojas do vampiro: cada item tem sua própria loja, com modelo próprio.
+export type VampireItemShopKind = 'forge' | 'relic' | 'mist' | 'shrine';
+// Estruturas neutras do vampiro. A cripta é a base e vende apenas skills.
+export type VampireBuildingKind = 'crypt' | VampireItemShopKind;
 export type VampireItemId = 'claws' | 'heart' | 'boots' | 'frenzy';
 export type VampireSkillId = 'powerStrike';
 export interface RefugeConfig {
@@ -96,27 +100,38 @@ export const GAME_CONFIG = {
     },
     // Estruturas especiais; keep não aparece no painel por padrão.
     keep: { hp: 1200, size: 7, cost: { wood: 150, gold: 60, time: 12 } },
-    crypt: { hp: 4000, size: 8 },
+
+    // ---- Base do Vampiro ----
+    // Estruturas neutras e indestrutíveis. shopRange é a distância (além da
+    // borda) em que o Vampiro precisa estar para comprar naquela loja.
+    // A cripta é a base e vende apenas skills; cada item tem sua própria loja.
+    crypt: { hp: 4000, size: 8, shopRange: 3 },
+    forge: { hp: 1400, size: 5, shopRange: 3 },   // Garras Sangrentas
+    relic: { hp: 1400, size: 5, shopRange: 3 },   // Coração Ancestral
+    mist: { hp: 1400, size: 5, shopRange: 3 },    // Botas da Névoa
+    shrine: { hp: 1400, size: 5, shopRange: 3 },  // Frenesi
   },
   buildable: ['bank', 'taverna', 'wall', 'tower'] as BuildKind[],
 
-  // Itens equipados automaticamente ao comprar com sangue. A loja só abre de dia.
+  // Itens equipados automaticamente ao comprar com sangue. As lojas só abrem de dia.
+  // As lojas só atendem durante o dia e perto da respectiva estrutura.
   // baseCost + costGrowth: custo do nível N = baseCost * costGrowth^(N-1). maxCount Infinity = upável sem limite.
+  // shop indica em qual estrutura da base o item é comprado.
   vampireItems: {
     claws: {
-      name: 'Garras Sangrentas', icon: '⚔',
-      baseCost: 50, costGrowth: 1, damageBonus: 10, healthBonus: 0, speedBonus: 0, cooldownFactor: 1, maxCount: 1,
+      name: 'Garras Sangrentas', icon: '⚔', shop: 'forge' as const,
+      baseCost: 50, costGrowth: 1.4, damageBonus: 10, healthBonus: 0, speedBonus: 0, cooldownFactor: 1, maxCount: Infinity,
     },
     heart: {
-      name: 'Coração Ancestral', icon: '♥',
-      baseCost: 75, costGrowth: 1, damageBonus: 0, healthBonus: 300, speedBonus: 0, cooldownFactor: 1, maxCount: 1,
+      name: 'Coração Ancestral', icon: '♥', shop: 'relic' as const,
+      baseCost: 75, costGrowth: 1.4, damageBonus: 0, healthBonus: 300, speedBonus: 0, cooldownFactor: 1, maxCount: Infinity,
     },
     boots: {
-      name: 'Botas da Névoa', icon: '🥾',
+      name: 'Botas da Névoa', icon: '🥾', shop: 'mist' as const,
       baseCost: 30, costGrowth: 1.4, damageBonus: 0, healthBonus: 0, speedBonus: 0.5, cooldownFactor: 1, maxCount: Infinity,
     },
     frenzy: {
-      name: 'Frenesi', icon: '🌀',
+      name: 'Frenesi', icon: '🌀', shop: 'shrine' as const,
       baseCost: 30, costGrowth: 1.4, damageBonus: 0, healthBonus: 0, speedBonus: 0, cooldownFactor: 0.93, maxCount: Infinity,
     },
   },
@@ -167,6 +182,14 @@ export const GAME_CONFIG = {
     // Um ponto para cada vaga humana. Adicionar/remover pontos altera as vagas da sala.
     humanSpawns: [{ x: -3, z: -3 }, { x: 3, z: -3 }, { x: -3, z: 3 }, { x: 3, z: 3 }],
     crypt: { x: 0, z: -127 },
+    // Lojas da base do vampiro, ao redor da cripta e dentro do raio de
+    // confinamento diurno (cryptRadius). Cada item é comprado na sua loja.
+    vampireShops: [
+      { kind: 'forge', x: -8, z: -134 },
+      { kind: 'relic', x: 8, z: -134 },
+      { kind: 'mist', x: -11, z: -127 },
+      { kind: 'shrine', x: 11, z: -127 },
+    ] as Array<{ kind: VampireItemShopKind; x: number; z: number }>,
     vampireSpawnOffset: { x: 0, z: 6 },
     refugeWalls: { thickness: 3.2, entranceWidth: 3, height: 5.5 },
     refuges: [

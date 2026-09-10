@@ -2,8 +2,8 @@
 import { GAME_CONFIG } from '../../../game.config.js';
 export { GAME_CONFIG } from '../../../game.config.js';
 export type { BuildKind } from '../../../game.config.js';
-export type { VampireItemId, VampireSkillId } from '../../../game.config.js';
-import type { BuildKind } from '../../../game.config.js';
+export type { VampireItemId, VampireSkillId, VampireItemShopKind, VampireBuildingKind } from '../../../game.config.js';
+import type { BuildKind, VampireBuildingKind } from '../../../game.config.js';
 
 export const WORLD = {
   get tiles() { return GAME_CONFIG.map.tiles; },
@@ -31,6 +31,16 @@ export const KEEP = GAME_CONFIG.buildings.keep;
 export const CRYPT = GAME_CONFIG.buildings.crypt;
 export const VAMPIRE_ITEMS = GAME_CONFIG.vampireItems;
 export const VAMPIRE_SKILLS = GAME_CONFIG.vampireSkills;
+// Posições das lojas da base do vampiro, definidas no mapa.
+export const VAMPIRE_SHOPS = GAME_CONFIG.map.vampireShops;
+// Toda estrutura em que o vampiro pode comprar algo (base + lojas de itens).
+export const VAMPIRE_SHOP_KINDS: Array<VampireBuildingKind> = [
+  'crypt', ...VAMPIRE_SHOPS.map((s) => s.kind),
+];
+export function vampireShopRange(kind: VampireBuildingKind): number {
+  const building = GAME_CONFIG.buildings[kind] as { shopRange?: number } | undefined;
+  return building?.shopRange ?? 3;
+}
 export const RECRUIT = TAVERNA.recruit;
 export const BUILDABLE = GAME_CONFIG.buildable;
 export const MARKET = GAME_CONFIG.market;
@@ -43,7 +53,7 @@ export const BUILD_COSTS = Object.fromEntries(
 ) as Record<BuildKind, { wood: number; gold: number; time: number }>;
 export const BUILDING_SIZE = Object.fromEntries(
   Object.entries(GAME_CONFIG.buildings).map(([kind, b]) => [kind, b.size]),
-) as Record<BuildKind | 'crypt', number>;
+) as Record<BuildKind | VampireBuildingKind, number>;
 export const BUILD_MAX_LEVEL = BANK.maxLevel;
 export const BANK_UPGRADE_COST = BANK.upgradeCosts;
 export const WALL_MAX_LEVEL = WALL.maxLevel;

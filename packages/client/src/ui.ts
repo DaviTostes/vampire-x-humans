@@ -35,15 +35,26 @@ import { commandArt, factionCrest } from './hud-icons.js';
 import { VAMPIRE_ITEMS, VAMPIRE_SKILLS, vampireEffectiveCooldown, vampireEffectiveSpeed, vampireItemBonuses, vampireItemCost, vampireShopAccess, vampireSkillMultiplier, type VampireItemId, type VampireSkillId } from '@vampire/shared';
 
 const BUILDING_NAMES: Record<BuildingKind, string> = {
-  keep: 'Sede da vila', bank: 'Banco', taverna: 'Taverna', wall: 'Muro', tower: 'Torre', crypt: 'Cripta',
+  keep: 'Sede da vila', bank: 'Banco', taverna: 'Taverna', wall: 'Muro', tower: 'Torre',
+  crypt: 'Cripta do Vampiro',
+  forge: 'Forja de Sangue', relic: 'Relicário Ancestral', mist: 'Portal da Névoa', shrine: 'Santuário do Frenesi',
 };
 const BUILDING_HELP: Record<BuildingKind, string> = {
   keep: 'Base principal da vila.',
   bank: `Gera ${BANK.goldPerCycle} de ouro por ciclo desde o nível 1. As melhorias reduzem o intervalo.`,
   taverna: 'Recruta Peões auxiliares para coletar e construir.',
   wall: 'Humanos atravessam; o vampiro precisa destruí-lo. Selecione para comprar e vender recursos.', tower: 'Ataca o vampiro automaticamente quando ele entra no alcance.',
-  crypt: 'Refúgio e loja do Vampiro. Troque sangue por itens durante o dia.',
+  crypt: 'Base do Vampiro. Desbloqueie skills e consulte o inventário.',
+  forge: 'Loja das Garras Sangrentas: aumente o dano contra unidades e construções.',
+  relic: 'Loja do Coração Ancestral: aumente a vida máxima do Vampiro.',
+  mist: 'Loja das Botas da Névoa: aumente a velocidade de movimento.',
+  shrine: 'Loja do Frenesi: acelere os ataques do Vampiro.',
 };
+// Itens vendidos em cada estrutura da base (a cripta vende skills).
+const SHOP_ITEMS = (Object.keys(VAMPIRE_ITEMS) as VampireItemId[]);
+function itemsForShop(kind: BuildingKind): VampireItemId[] {
+  return SHOP_ITEMS.filter(id => VAMPIRE_ITEMS[id].shop === kind);
+}
 
 const CSS = `
 .vxh-hud { position: fixed; inset: 0; pointer-events: none; z-index: 20;
@@ -274,7 +285,7 @@ export class Hud {
       if (b.dataset.market) this.net.command({ type: 'market', targetId: Number(b.dataset.marketTarget), trade: b.dataset.market as 'woodToGold' | 'goldToWood', amount: b.dataset.market === 'woodToGold' ? MARKET.wood : MARKET.gold });
       if (b.dataset.upgrade) this.net.command({ type: 'upgrade', ids: [], targetId: Number(b.dataset.upgrade) });
       if (b.dataset.recruit) this.net.command({ type: 'recruit', targetId: Number(b.dataset.recruit) });
-      if (b.dataset.vampireItem) this.net.command({ type: 'buyVampireItem', cryptId: Number(b.dataset.crypt), itemId: b.dataset.vampireItem as VampireItemId });
+      if (b.dataset.vampireItem) this.net.command({ type: 'buyVampireItem', shopId: Number(b.dataset.shop), itemId: b.dataset.vampireItem as VampireItemId });
       if (b.dataset.vampireSkillBuy) this.net.command({ type: 'buyVampireSkill', cryptId: Number(b.dataset.crypt), skillId: b.dataset.vampireSkillBuy as VampireSkillId });
       if (b.dataset.vampireSkillCast) this.net.command({ type: 'castVampireSkill', skillId: b.dataset.vampireSkillCast as VampireSkillId });
       if (b.dataset.vampireItemUp) this.net.command({ type: 'upgradeVampireItem', itemId: b.dataset.vampireItemUp as VampireItemId });
@@ -344,10 +355,11 @@ export class Hud {
         this.selInfo.innerHTML += `<div>Alcance: ${TOWER.range} · Dano: ${TOWER.damage} / ${TOWER.cooldown}s</div>
           <div class="vxh-activity">${!building.done ? 'Aguardando conclusão da obra' : vampire ? `Alvo: Vampiro — ${vampire.hp}/${vampire.maxHp} HP` : 'Sem alvo no alcance'}</div>`;
       }
-      if (building.kind === 'crypt') {
+      if (building.kind === 'crypt' || itemsForShop(building.kind).length > 0) {
         const vampire = snap.units.find(u => u.kind === 'vampire');
         if (isVamp) {
-          const shopAccess = vampireShopAccess(snap.phase, vampire, building);
+          const base = snap.buildings.find(b => b.kind === 'crypt');
+          const shopAccess = vampireShopAccess(snap.phase, vampire, building, base);
           if (shopAccess) this.selInfo.innerHTML += `<div class="vxh-activity">${shopAccess}</div>`;
           this.selInfo.innerHTML += `<div>Sangue disponível: ${snap.blood}</div>${this.inventoryMarkup(snap)}`;
         }
@@ -451,9 +463,26 @@ export class Hud {
         html = `<button class="vxh-btn ${!busy && !afford ? 'vxh-unavailable' : ''}" data-recruit="${building.id}" title="${!afford ? shortageText(RECRUIT) : 'Recrutar um Peão auxiliar'}" ${busy || !afford ? 'disabled' : ''}>
           ${busy ? 'Recrutando…' : 'Recrutar Peão'}<small>${costMarkup(RECRUIT)}</small><small>${RECRUIT.time}s</small></button>`;
       } else if (building.kind === 'crypt' && isVamp) {
+        // A cripta é a base: apenas skills são compradas aqui.
         const vampire = snap.units.find(u => u.kind === 'vampire' && u.owner === myId);
-        const access = vampireShopAccess(snap.phase, vampire, building);
-        for (const id of Object.keys(VAMPIRE_ITEMS) as VampireItemId[]) {
+        const access = vampireShopAccess(snap.phase, vampire, building, building);
+        for (const id of Object.keys(VAMPIRE_SKILLS) as VampireSkillId[]) {
+          const skill = VAMPIRE_SKILLS[id];
+          const unlocked = !!snap.vampireSkills?.[id];
+          const afford = snap.blood >= skill.unlockCost;
+          const reason = access ?? (unlocked ? 'Skill desbloqueada — use pelo painel do vampiro' : !afford ? `Faltam ${skill.unlockCost - snap.blood} de sangue` : 'Desbloquear skill');
+          html += `<button class="vxh-btn vxh-item-button" data-vampire-skill-buy="${id}" data-crypt="${building.id}" title="${reason}" ${access || unlocked || !afford ? 'disabled' : ''}>
+            ${commandArt(id)}${skill.name}<small>${skill.description}</small>
+            ${unlocked ? '<small class="vxh-item-equipped">✓ Desbloqueada</small>' : `<small class="vxh-item-price"><span class="vxh-resource-cost ${afford ? '' : 'vxh-resource-missing'}">${skill.unlockCost}🩸</span></small>`}</button>`;
+        }
+        if (!html) html = '<span>Nenhuma skill disponível.</span>';
+        if (access) html += `<span>${access}</span>`;
+      } else if (isVamp && itemsForShop(building.kind).length > 0) {
+        // Cada item é comprado na sua própria loja, com visual e painel próprios.
+        const vampire = snap.units.find(u => u.kind === 'vampire' && u.owner === myId);
+        const base = snap.buildings.find(b => b.kind === 'crypt');
+        const access = vampireShopAccess(snap.phase, vampire, building, base);
+        for (const id of itemsForShop(building.kind)) {
           const item = VAMPIRE_ITEMS[id];
           const count = snap.vampireItems?.[id] ?? 0;
           const cost = vampireItemCost(id, count);
@@ -464,18 +493,9 @@ export class Hud {
             item.speedBonus ? `+${item.speedBonus} veloc.` : '',
             item.cooldownFactor < 1 ? `ataque ${Math.round((1 - item.cooldownFactor) * 100)}% mais rápido` : ''].filter(Boolean).join(' · ');
           const level = item.maxCount === Infinity ? `<small>Nv ${count} → ${count + 1}</small>` : '';
-          html += `<button class="vxh-btn vxh-item-button" data-vampire-item="${id}" data-crypt="${building.id}" title="${reason}" ${access || full || !afford ? 'disabled' : ''}>
+          html += `<button class="vxh-btn vxh-item-button" data-vampire-item="${id}" data-shop="${building.id}" title="${reason}" ${access || full || !afford ? 'disabled' : ''}>
             ${commandArt(id)}${item.name}<small>${bonuses}</small>${level}
             ${full ? '<small class="vxh-item-equipped">✓ Equipado</small>' : `<small class="vxh-item-price"><span class="vxh-resource-cost ${afford ? '' : 'vxh-resource-missing'}">${cost}🩸</span></small>`}</button>`;
-        }
-        for (const id of Object.keys(VAMPIRE_SKILLS) as VampireSkillId[]) {
-          const skill = VAMPIRE_SKILLS[id];
-          const unlocked = !!snap.vampireSkills?.[id];
-          const afford = snap.blood >= skill.unlockCost;
-          const reason = access ?? (unlocked ? 'Skill desbloqueada — use pelo painel do vampiro' : !afford ? `Faltam ${skill.unlockCost - snap.blood} de sangue` : 'Desbloquear skill');
-          html += `<button class="vxh-btn vxh-item-button" data-vampire-skill-buy="${id}" data-crypt="${building.id}" title="${reason}" ${access || unlocked || !afford ? 'disabled' : ''}>
-            ${commandArt(id)}${skill.name}<small>${skill.description}</small>
-            ${unlocked ? '<small class="vxh-item-equipped">✓ Desbloqueada</small>' : `<small class="vxh-item-price"><span class="vxh-resource-cost ${afford ? '' : 'vxh-resource-missing'}">${skill.unlockCost}🩸</span></small>`}</button>`;
         }
         if (access) html += `<span>${access}</span>`;
       } else if (building.owner === myId && building.kind === 'wall' && building.done) {
@@ -505,9 +525,9 @@ export class Hud {
           html += `<button class="vxh-btn" data-vampire-skill-cast="${id}" title="${skill.description} — clique para ativar">${commandArt(id)}${skill.name}<small>${skill.description}</small></button>`;
         }
       }
-      for (const id of ['boots', 'frenzy'] as VampireItemId[]) {
+      for (const id of SHOP_ITEMS) {
         const count = snap.vampireItems?.[id] ?? 0;
-        if (!count) continue; // primeira compra é na loja da cripta
+        if (!count) continue; // primeira compra é na loja do item
         const item = VAMPIRE_ITEMS[id];
         const cost = vampireItemCost(id, count);
         const afford = snap.blood >= cost;

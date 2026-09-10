@@ -13,8 +13,9 @@ O arquivo possui comentários em português para ajudar nas alterações.
 | Vida, velocidade, coleta, dano e construção do Humano | `units.human` |
 | Os mesmos atributos, mas apenas dos Peões | `units.peon` |
 | Vida, velocidade, dano, regeneração e sangue do Vampiro | `units.vampire` |
-| Preços em sangue, nomes, bônus e limite de cópias dos itens | `vampireItems` |
-| Distância para comprar na loja da cripta | `buildings.crypt.shopRange` |
+| Preços em sangue, nomes, bônus, loja e limite de cópias dos itens | `vampireItems` |
+| Distância extra para comprar ao encostar na loja (fora da base) | `buildings.<loja>.shopRange` |
+| Posição das lojas da base do Vampiro | `map.vampireShops` |
 | Custo, tempo, vida e espaço ocupado por uma construção | `buildings.<nome>` |
 | Ouro por ciclo, intervalo de cada nível e melhorias do Banco | `buildings.bank` |
 | Custo e tempo de recrutamento de Peões | `buildings.taverna.recruit` |

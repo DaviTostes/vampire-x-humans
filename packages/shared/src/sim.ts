@@ -46,6 +46,7 @@ import { canPlaceBuilding } from './placement.js';
 import {
   vampireItemBonuses,
   vampireItemCost,
+  vampireItemShop,
   vampireEffectiveCooldown,
   vampireEffectiveSpeed,
   vampireShopAccess,
@@ -109,8 +110,13 @@ export function applyCommand(session: Session, playerId: number, cmd: Command): 
     case 'buyVampireItem': {
       if (playerId !== VAMPIRE_PLAYER_ID || !Object.hasOwn(VAMPIRE_ITEMS, cmd.itemId)) return;
       const vampire = s.units.find(u => u.kind === 'vampire' && u.owner === playerId && !u.dead);
-      const crypt = buildingById(s, cmd.cryptId);
-      if (vampireShopAccess(s.phase, vampire, crypt) || !vampire) return;
+      if (!vampire) return;
+      // Cada item só pode ser comprado na sua própria loja.
+      const shop = buildingById(s, cmd.shopId);
+      if (!shop || shop.kind !== vampireItemShop(cmd.itemId)) return;
+      // A cripta define a área da base em que todas as lojas atendem.
+      const crypt = s.buildings.find(b => b.kind === 'crypt');
+      if (vampireShopAccess(s.phase, vampire, shop, crypt)) return;
       const item = VAMPIRE_ITEMS[cmd.itemId];
       const count = s.vampire.items[cmd.itemId] ?? 0;
       const cost = vampireItemCost(cmd.itemId, count);
@@ -141,8 +147,10 @@ export function applyCommand(session: Session, playerId: number, cmd: Command): 
     case 'buyVampireSkill': {
       if (playerId !== VAMPIRE_PLAYER_ID || !Object.hasOwn(VAMPIRE_SKILLS, cmd.skillId)) return;
       const vampire = s.units.find(u => u.kind === 'vampire' && u.owner === playerId && !u.dead);
+      // Skills são desbloqueadas apenas na cripta (a base do vampiro).
       const crypt = buildingById(s, cmd.cryptId);
-      if (vampireShopAccess(s.phase, vampire, crypt) || !vampire) return;
+      if (!vampire || !crypt || crypt.kind !== 'crypt') return;
+      if (vampireShopAccess(s.phase, vampire, crypt, crypt)) return;
       const skill = VAMPIRE_SKILLS[cmd.skillId];
       if (s.vampire.skills[cmd.skillId] || s.vampire.blood < skill.unlockCost) return;
       s.vampire.blood -= skill.unlockCost;

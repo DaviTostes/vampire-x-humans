@@ -58,7 +58,7 @@ export const FOREST_WOOD_NODES = (() => {
       const x = Math.round((gx + jx) * 2) / 2, z = Math.round((gz + jz) * 2) / 2;
       if (!FOREST_PATCHES.some(p => ((x - p.x) / p.rx) ** 2 + ((z - p.z) / p.rz) ** 2 < 1)) continue;
       if (GAME_CONFIG.map.lakes.some(p => ((x - p.x) / p.rx) ** 2 + ((z - p.z) / p.rz) ** 2 < 1)) continue;
-      if (Math.hypot(CRYPT_POSITION.x - x, CRYPT_POSITION.z - z) < 12) continue;
+      if (Math.hypot(CRYPT_POSITION.x - x, CRYPT_POSITION.z - z) < 18) continue;
       if (COMPOUNDS.some(c => Math.abs(c.x - x) < c.width / 2 + 3 && Math.abs(c.z - z) < c.depth / 2 + 3)) continue;
       pts.push({ kind: 'wood', x, z });
     }
@@ -101,7 +101,17 @@ export function generateMap(_seed = MAP_SEED): GameMap {
     const wx = tileToWorld(x), wz = tileToWorld(z), i = z * n + x;
     // Praça e recintos planos; elevações somente nas bordas do vale.
     const edge = Math.max(0, Math.max(Math.abs(wx), Math.abs(wz)) - (WORLD.half - 17));
-    height[i] = (3 + edge * 0.6) / 14;
+    let h = (3 + edge * 0.6) / 14;
+    // Planalto plano para a base do vampiro: sem isso o anel da base subiria a
+    // encosta norte. Raio plano + transição suave até o relevo natural.
+    const baseDistance = Math.hypot(wx - CRYPT_POSITION.x, wz - CRYPT_POSITION.z);
+    const FLAT_RADIUS = 17, BLEND = 7;
+    if (baseDistance < FLAT_RADIUS + BLEND) {
+      const t = baseDistance <= FLAT_RADIUS ? 0 : (baseDistance - FLAT_RADIUS) / BLEND;
+      const smooth = t * t * (3 - 2 * t);
+      h = h * smooth + (3 / 14) * (1 - smooth);
+    }
+    height[i] = h;
     // Dois lagos laterais ao caminho para a cripta.
     if (GAME_CONFIG.map.lakes.some(p => ((wx - p.x) / p.rx) ** 2 + ((wz - p.z) / p.rz) ** 2 < 1)) water[i] = 1;
     if (FOREST_PATCHES.some(p => ((wx - p.x) / p.rx) ** 2 + ((wz - p.z) / p.rz) ** 2 < 1)) forest[i] = 0.8;

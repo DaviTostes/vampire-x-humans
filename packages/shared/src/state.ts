@@ -1,6 +1,6 @@
-import { DAY_LENGTH, START_RESOURCES, VAMPIRE, WORKER, CRYPT, GAME_CONFIG, MAX_PLAYERS, VAMPIRE_PLAYER_ID } from './constants.js';
+import { DAY_LENGTH, START_RESOURCES, VAMPIRE, WORKER, CRYPT, GAME_CONFIG, MAX_PLAYERS, VAMPIRE_PLAYER_ID, VAMPIRE_SHOPS } from './constants.js';
 import { CRYPT_POSITION, HUMAN_SPAWNS, MAP_SEED, RESOURCE_PLACEMENTS } from './mapgen.js';
-import type { GameState, PlayerState, Unit } from './types.js';
+import type { Building, GameState, PlayerState, Unit } from './types.js';
 
 export function createPlayers(names: string[], ids = Array.from({ length: MAX_PLAYERS }, (_, i) => i)): PlayerState[] {
   return ids.map(id => ({ id, name: names[id] ?? (id === VAMPIRE_PLAYER_ID ? 'Vampiro' : `Humano ${id + 1}`),
@@ -20,8 +20,15 @@ export function createGameState(names: string[], _seed = MAP_SEED, playerIds = A
   return {
     tick: 0, time: 0, phase: 'day', phaseTime: DAY_LENGTH, day: 1, result: null,
     players: createPlayers(names, ids), units, vampire: { blood: 0, items: {}, skills: {} }, seed: MAP_SEED,
-    buildings: [{ id: 100, kind: 'crypt', owner: -1, ...CRYPT_POSITION, hp: CRYPT.hp, maxHp: CRYPT.hp,
-      level: 1, progress: 1, done: true, builderId: null, goldAcc: 0, attackCd: 0 }],
+    buildings: [
+      { id: 100, kind: 'crypt', owner: -1, ...CRYPT_POSITION, hp: CRYPT.hp, maxHp: CRYPT.hp,
+        level: 1, progress: 1, done: true, builderId: null, goldAcc: 0, attackCd: 0 },
+      ...VAMPIRE_SHOPS.map((shop, i): Building => {
+        const config = GAME_CONFIG.buildings[shop.kind];
+        return { id: 101 + i, kind: shop.kind, owner: -1, x: shop.x, z: shop.z, hp: config.hp, maxHp: config.hp,
+          level: 1, progress: 1, done: true, builderId: null, goldAcc: 0, attackCd: 0 };
+      }),
+    ],
     nodes: RESOURCE_PLACEMENTS.map((node, i) => ({ id: 200 + i, ...node,
       amount: node.kind === 'wood' ? 600 : 2000, maxAmount: node.kind === 'wood' ? 600 : 2000 })),
   };
