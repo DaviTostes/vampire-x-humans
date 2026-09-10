@@ -170,7 +170,7 @@ export class Navigation {
       }
     }
     if (!reachableGoal) return [];
-    const costs = new Float64Array(SIZE * SIZE).fill(Infinity);
+    const costs = new Float32Array(SIZE * SIZE).fill(Infinity);
     const parent = new Int32Array(SIZE * SIZE).fill(-1);
     const closed = new Uint8Array(SIZE * SIZE);
     // Min-heap para manter a busca limitada mesmo em mapas com rios e muros longos.

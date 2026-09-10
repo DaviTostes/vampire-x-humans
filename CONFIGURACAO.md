@@ -24,7 +24,7 @@ O arquivo possui comentários em português para ajudar nas alterações.
 | Quantidades de madeira e ouro trocadas no Muro | `market` |
 | Zoom, inclinação, campo de visão e velocidade da câmera | `camera` |
 | Quantidade padrão e limite de recursos do painel Admin | `admin` |
-| Tamanho do mapa, refúgios, florestas, lagos e recursos | `map` |
+| Tamanho do mapa, refúgios, florestas, lagos, rios, pontes, relevo e recursos | `map` |
 | Pontos iniciais e quantidade de vagas de Humanos | `map.humanSpawns` |
 | Tamanho do código de convite | `lobby.codeLength` |
 | Distâncias de interação e colisão | `interaction` |
@@ -88,6 +88,8 @@ A venda usa 20 de madeira e entrega 10 de ouro; a compra faz a operação invers
 ### Ajustar o mapa e as vagas
 
 O mapa continua fixo. Alterar `tiles` ou `tileSize` muda suas dimensões; as posições dos refúgios e recursos permanecem nas coordenadas indicadas no arquivo.
+
+`map.coast` define o contorno e a inclinação da ilha. `rivers` e `lakes` desenham a água; as trilhas abrem corredores na floresta e geram pontes ao cruzar rios. `meadows` abre clareiras extras. `resources.forestNodeSpacing` controla a densidade da floresta. Os refúgios são reentrâncias rochosas assimétricas: `facing` define a única passagem para o muro e `refugeWalls` ajusta o sopé e a altura inicial das encostas.
 
 Cada entrada em `map.humanSpawns` representa uma vaga humana. O lobby acrescenta uma vaga de Vampiro automaticamente. Ajuste os pontos de início e os refúgios para acomodar o número de jogadores desejado.
 

@@ -18,7 +18,7 @@ export function canPlaceBuilding(map: GameMap, state: PlacementState, kind: Buil
   // Verifica toda a área, inclusive água entre os cantos da construção.
   for (let tx = worldToTile(x - half); tx <= worldToTile(x + half); tx++) {
     for (let tz = worldToTile(z - half); tz <= worldToTile(z + half); tz++) {
-      if (tx < 0 || tz < 0 || tx >= map.tiles || tz >= map.tiles || map.water[tz * map.tiles + tx] === 1) return false;
+      if (tx < 0 || tz < 0 || tx >= map.tiles || tz >= map.tiles || map.water[tz * map.tiles + tx] === 1 || map.bridge[tz * map.tiles + tx] === 1) return false;
     }
   }
   for (const obstacle of map.obstacles) {

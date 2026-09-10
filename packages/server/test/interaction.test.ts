@@ -329,24 +329,26 @@ test('muro na única entrada deixa humano passar, mas vampiro só entra após de
   const session = createSession([], 1);
   const compound = COMPOUNDS[1]!;
   const door = compoundEntrance(compound);
+  const length = Math.hypot(door.x - compound.x, door.z - compound.z);
+  const out = { x: (door.x - compound.x) / length, z: (door.z - compound.z) / length };
   const worker = session.state.units[0]!;
   const vampire = session.state.units[4]!;
   const wall = building(1001, 'wall', door.x, door.z);
   session.state.buildings.push(wall);
   session.state.phase = 'night';
-  Object.assign(worker, { x: door.x, z: door.z + 5 });
-  Object.assign(vampire, { x: door.x + 0.1, z: door.z + 8 });
+  Object.assign(worker, { x: door.x + out.x * 5, z: door.z + out.z * 5 });
+  Object.assign(vampire, { x: door.x + out.x * 8, z: door.z + out.z * 8 });
   applyCommand(session, 0, { type: 'move', ids: [worker.id], x: compound.x, z: compound.z });
   applyCommand(session, 4, { type: 'move', ids: [vampire.id], x: compound.x, z: compound.z });
   advance(session, 6);
   assert.ok(Math.hypot(worker.x - compound.x, worker.z - compound.z) < 1);
-  assert.ok(vampire.z > door.z);
+  assert.ok((vampire.x - door.x) * out.x + (vampire.z - door.z) * out.z > 0);
   applyCommand(session, 4, { type: 'attack', ids: [vampire.id], targetId: wall.id });
   advance(session, 28);
   assert.ok(!session.state.buildings.includes(wall));
   applyCommand(session, 4, { type: 'move', ids: [vampire.id], x: compound.x, z: compound.z + 3 });
   advance(session, 6);
-  assert.ok(vampire.z < door.z);
+  assert.ok((vampire.x - door.x) * out.x + (vampire.z - door.z) * out.z < 0);
 });
 
 test('comandos não permitem controlar outros jogadores nem atacar aliados', () => {

@@ -20,6 +20,8 @@ import {
   BUILD_MAX_LEVEL,
   bankProduction,
   bankCycleSeconds,
+  BRIDGES,
+  distanceToTrails,
   type BuildingKind,
   type BuildKind,
   type Snapshot,
@@ -582,6 +584,8 @@ export class Hud {
           let r: number, g: number, b: number;
           if (map.water[i]) {
             r = 30; g = 60; b = 110;
+          } else if (distanceToTrails(tx * WORLD.tileSize - WORLD.half, tz * WORLD.tileSize - WORLD.half) < 3.5) {
+            r = 165; g = 141; b = 99;
           } else if ((map.forest[i] ?? 0) > 0.5) {
             r = 24; g = 48; b = 43;
           } else if (h > 0.62) {
@@ -604,8 +608,14 @@ export class Hud {
       ((x + W / 2) / W) * S,
       ((z + W / 2) / W) * S,
     ];
+    // Pontes: vaus fixos sobre a água.
+    ctx.fillStyle = '#7a5f3e';
+    for (const b of BRIDGES) {
+      const [x, z] = toMap(b.x - b.width / 2, b.z - b.depth / 2);
+      ctx.fillRect(x, z, Math.max(1, b.width / W * S), Math.max(1, b.depth / W * S));
+    }
     // Paredes permanentes e passagens dos recintos fazem parte do mapa tático.
-    ctx.fillStyle = '#89949b';
+    ctx.fillStyle = '#687166';
     for (const wall of map.obstacles) {
       const [x, z] = toMap(wall.x - wall.width / 2, wall.z - wall.depth / 2);
       ctx.fillRect(x, z, Math.max(1, wall.width / W * S), Math.max(1, wall.depth / W * S));
@@ -614,7 +624,8 @@ export class Hud {
     for (const nd of snap.nodes) {
       const [mx, mz] = toMap(nd.x, nd.z);
       ctx.fillStyle = nd.kind === 'gold' ? '#e8c83a' : '#2d5a2d';
-      ctx.fillRect(mx - 1, mz - 1, 3, 3);
+      const size = nd.kind === 'gold' ? 3 : 1;
+      ctx.fillRect(mx - size / 2, mz - size / 2, size, size);
     }
     // prédios
     for (const b of snap.buildings) {

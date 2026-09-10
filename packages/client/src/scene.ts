@@ -8,6 +8,10 @@ import {
   TOWER,
   COMPOUNDS,
   compoundEntrance,
+  BRIDGES,
+  BRIDGE_Y,
+  distanceToTrails,
+  isBridgeAtWorld,
   CRYPT_POSITION,
   type BuildingKind,
   WORLD,
@@ -15,7 +19,7 @@ import {
   type GameMap,
   type Snapshot,
 } from '@vampire/shared';
-import { createBuildingModel, createUnitModel, createResourceModel, orientEntranceWall, createPineCanopyGeometry, createRockGeometry, createLanternModel } from './models.js';
+import { createBuildingModel, createUnitModel, createResourceModel, orientEntranceWall, createPineCanopyGeometry, createMountainGeometry, createRockGeometry, createLanternModel } from './models.js';
 import { RTS_CAMERA } from './camera.js';
 import { UnitReveal } from './unit-reveal.js';
 import { updateExternalAnimation } from './assets/asset-registry.js';
@@ -44,6 +48,7 @@ export class GameScene {
   private torches: THREE.PointLight[] = [];
   private raycaster = new THREE.Raycaster();
   private terrain!: THREE.Mesh;
+  private bridgeDecks: THREE.Mesh[] = [];
   private buildingSelection: THREE.LineLoop | null = null;
   private towerRanges = new Map<'placement' | 'selection', THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>>();
   private mapOccluders: THREE.Mesh[] = [];
@@ -66,14 +71,14 @@ export class GameScene {
       RTS_CAMERA.fov,
       container.clientWidth / container.clientHeight,
       1,
-      600,
+      1200,
     );
     const initialDistance = RTS_CAMERA.distance * RTS_CAMERA.initialZoom;
     const groundHeight = this.heightAt(0, 0);
     this.camera.position.set(0, groundHeight + initialDistance * RTS_CAMERA.elevation, initialDistance * RTS_CAMERA.depth);
     this.camera.lookAt(0, groundHeight, 0);
 
-    this.fog = new THREE.Fog(0x8a9db8, 120, 400);
+    this.fog = new THREE.Fog(0x8a9db8, 240, 900);
     this.scene.fog = this.fog;
 
     this.hemi = new THREE.HemisphereLight(0xbfd4ff, 0x3a4a33, 0.9);
@@ -114,6 +119,8 @@ export class GameScene {
     const cDry = new THREE.Color('#65654b');
     const cRock = new THREE.Color('#65717a');
     const cSand = new THREE.Color('#7a7864');
+    const cTrail = new THREE.Color('#a58d63');
+    const cClearing = new THREE.Color('#757858');
     const tmp = new THREE.Color();
 
     for (let iy = 0; iy <= seg; iy++) {
@@ -123,16 +130,32 @@ export class GameScene {
         const tz = Math.min(n - 1, iy);
         const i = tz * n + tx;
         const h = this.map.height[i] ?? 0;
-        const y = this.map.water[i] ? 1 : h * 14;
+        const y = this.map.bridge[i] ? BRIDGE_Y : this.map.water[i] ? 1 : h * 14;
         pos.setY(vi, y);
-        if (this.map.water[i]) tmp.copy(cSand).lerp(cRock, 0.2);
-        else if (h > 0.62) tmp.copy(cRock);
-        else tmp.copy(cGrass).lerp(cDry, (h - 0.22) * 1.5);
+        // Faixa de areia acompanhando o litoral.
+        let beach = false;
+        if (!this.map.water[i]) {
+          for (let dz2 = -2; dz2 <= 2 && !beach; dz2++) for (let dx2 = -2; dx2 <= 2; dx2++) {
+            const nx2 = tx + dx2, nz2 = tz + dz2;
+            if (nx2 < 0 || nz2 < 0 || nx2 >= n || nz2 >= n || this.map.water[nz2 * n + nx2]) { beach = true; break; }
+          }
+        }
+        if (this.map.water[i] || beach) tmp.copy(cSand).lerp(cRock, 0.2);
+        else if (h > 0.42) tmp.copy(cDry).lerp(cRock, Math.min(1, (h - 0.42) * 3.5));
+        else tmp.copy(cGrass).lerp(cDry, Math.max(0, (h - 0.2) * 1.6));
         // Clareiras suaves na própria terra, sem pisos quadrados destacados.
         const wx = tx * WORLD.tileSize - WORLD.half, wz = tz * WORLD.tileSize - WORLD.half;
         for (const c of COMPOUNDS) {
           const d = Math.hypot((wx - c.x) / (c.width * 0.55), (wz - c.z) / (c.depth * 0.55));
           if (d < 1.3) tmp.lerp(new THREE.Color('#72774b'), Math.max(0, 1 - d / 1.3) * 0.4);
+        }
+        if (!this.map.water[i]) {
+          const distance = distanceToTrails(wx, wz);
+          const edge = 2.1 + Math.sin(wx * 0.31 + wz * 0.27) * 0.2;
+          const trail = THREE.MathUtils.smoothstep(edge + 1.4 - distance, 0, 1.4);
+          const clearing = Math.max(0, 1 - Math.hypot(wx, wz) / (13 + Math.sin(Math.atan2(wz, wx) * 3) * 2));
+          tmp.lerp(cClearing, clearing * 0.8);
+          tmp.lerp(cTrail, trail * (0.85 + Math.sin(wx * 1.2 + wz * 0.8) * 0.08));
         }
         colors[vi * 3] = tmp.r;
         colors[vi * 3 + 1] = tmp.g;
@@ -162,80 +185,77 @@ export class GameScene {
   }
 
   private buildFixedMap() {
-    const stone = new THREE.MeshLambertMaterial({ color: 0x465366 });
-    const addBox = (x: number, z: number, w: number, d: number, h: number, mat: THREE.Material, base = 3) => {
-      const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
-      mesh.position.set(x, base + h / 2, z);
-      this.unitReveal.apply(mesh);
-      this.scene.add(mesh);
-      return mesh;
-    };
-    // Trilhas gastas e esparsas, em vez de avenidas retas até bases artificiais.
+    // Um lampião baixo sinaliza a passagem entre as encostas.
     for (const c of COMPOUNDS) {
       const door = compoundEntrance(c);
-      const length = Math.hypot(door.x, door.z);
-      for (let d = 12; d < length; d += 4) {
-        const t = d / length;
-        const patch = new THREE.Mesh(new THREE.CircleGeometry(1.5, 7), new THREE.MeshLambertMaterial({ color: '#817355', transparent: true, opacity: 0.14 }));
-        patch.rotation.x = -Math.PI / 2;
-        patch.position.set(door.x * t + Math.sin(d * 0.13), 3.04, door.z * t);
-        patch.scale.set(1, 1.8, 1);
-        this.scene.add(patch);
-      }
-      for (const side of [-1, 1]) {
-        const horizontal = c.facing === 'north' || c.facing === 'south';
-        const x = door.x + (horizontal ? side * 2.2 : 0);
-        const z = door.z + (horizontal ? 0 : side * 2.2);
-        addBox(x, z, 0.3, 0.3, 3, new THREE.MeshLambertMaterial({ color: 0x3c2c25 }));
-        const lamp = createLanternModel();
-        lamp.position.set(x, 5.25, z + 0.18);
-        this.scene.add(lamp);
-      }
+      const horizontal = c.facing === 'north' || c.facing === 'south';
+      const x = door.x + (horizontal ? 2.8 : 0), z = door.z + (horizontal ? 0 : 2.8);
+      const lamp = createLanternModel();
+      lamp.position.set(x, this.heightAt(x, z) + 1.2, z);
+      this.scene.add(lamp);
     }
-    const rockTransforms: THREE.Matrix4[] = [], rockColors: THREE.Color[] = [];
+    const mountainTransforms: THREE.Matrix4[][] = Array.from({ length: 4 }, () => []);
     const rockDummy = new THREE.Object3D();
     const mossTransforms: THREE.Matrix4[] = [];
-    for (const wall of this.map.obstacles) {
-      const horizontal = wall.width > wall.depth;
-      const length = Math.max(wall.width, wall.depth);
-      // Maciço rochoso contínuo, coberto por blocos facetados e musgo.
-      this.mapOccluders.push(addBox(wall.x, wall.z, wall.width, wall.depth, 2.1, stone));
-      const count = Math.ceil(length / 3);
-      const step = length / count;
-      for (let i = 0; i < count; i++) {
-        const pos = -length / 2 + step * (i + 0.5);
-        const height = 4.3 + (Math.sin(i * 2.7 + wall.x) + 1) * 1.8;
-        rockDummy.scale.set(horizontal ? step * 0.65 : wall.width / 2, height / 2, horizontal ? wall.depth / 2 : step * 0.65);
-        rockDummy.position.set(wall.x + (horizontal ? pos : 0), 3 + height / 2, wall.z + (horizontal ? 0 : pos));
-        rockDummy.rotation.set(0, 0, 0);
-        rockDummy.updateMatrix(); rockTransforms.push(rockDummy.matrix.clone());
-        rockColors.push(new THREE.Color(i % 3 ? '#657078' : '#77807c'));
-        if (i % 3 === 0) {
-          rockDummy.position.y += height * 0.35;
-          rockDummy.scale.set(1.1, 0.3, 1);
-          rockDummy.updateMatrix(); mossTransforms.push(rockDummy.matrix.clone());
-        }
+    for (const [i, wall] of this.map.obstacles.entries()) {
+      const base = this.heightAt(wall.x, wall.z) - 0.5;
+      rockDummy.rotation.set(0, (i % 4) * Math.PI / 2, 0);
+      rockDummy.scale.set(wall.width, wall.height, wall.depth);
+      rockDummy.position.set(wall.x, base, wall.z);
+      rockDummy.updateMatrix(); mountainTransforms[i % 4]!.push(rockDummy.matrix.clone());
+      // Musgo nas saliências, em manchas grandes e irregulares.
+      if (i % 4 === 0) {
+        rockDummy.position.set(wall.x + wall.width * 0.14, base + wall.height * 0.53, wall.z + wall.depth * 0.21);
+        rockDummy.scale.set(wall.width * 0.27, 0.3, wall.depth * 0.2);
+        rockDummy.updateMatrix(); mossTransforms.push(rockDummy.matrix.clone());
       }
     }
-    const rocks = new THREE.InstancedMesh(createRockGeometry(), new THREE.MeshLambertMaterial({ color: 0xffffff }), rockTransforms.length);
-    rockTransforms.forEach((matrix, i) => { rocks.setMatrixAt(i, matrix); rocks.setColorAt(i, rockColors[i]!); });
-    rocks.castShadow = true; rocks.receiveShadow = true;
-    this.unitReveal.apply(rocks);
-    this.scene.add(rocks); this.mapOccluders.push(rocks);
-    const moss = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(0.8), new THREE.MeshLambertMaterial({ color: '#425341' }), mossTransforms.length);
+    mountainTransforms.forEach((transforms, variant) => {
+      const mountains = new THREE.InstancedMesh(createMountainGeometry(variant),
+        new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }), transforms.length);
+      transforms.forEach((matrix, i) => mountains.setMatrixAt(i, matrix));
+      mountains.castShadow = true; mountains.receiveShadow = true;
+      this.unitReveal.apply(mountains);
+      this.scene.add(mountains); this.mapOccluders.push(mountains);
+    });
+    const moss = new THREE.InstancedMesh(createRockGeometry(3), new THREE.MeshLambertMaterial({ color: '#4c6242' }), mossTransforms.length);
     mossTransforms.forEach((matrix, i) => moss.setMatrixAt(i, matrix));
     this.unitReveal.apply(moss);
     this.scene.add(moss);
-    const plaza = new THREE.Mesh(new THREE.CircleGeometry(10, 32), new THREE.MeshLambertMaterial({ color: 0x707775 }));
-    plaza.rotation.x = -Math.PI / 2;
-    plaza.position.y = 3.06;
-    this.scene.add(plaza);
-    const ring = new THREE.Mesh(new THREE.RingGeometry(8.7, 9, 32), new THREE.MeshBasicMaterial({ color: 0xa49b7e }));
-    ring.rotation.x = -Math.PI / 2;
-    ring.position.y = 3.08;
-    this.scene.add(ring);
+    // Pontes sobre os rios.
+    const plankMat = new THREE.MeshLambertMaterial({ color: '#6b5236' });
+    const railMat = new THREE.MeshLambertMaterial({ color: '#4a3827' });
+    for (const b of BRIDGES) {
+      const horizontal = b.width >= b.depth;
+      const deck = new THREE.Mesh(new THREE.BoxGeometry(b.width, 0.4, b.depth), plankMat);
+      deck.position.set(b.x, BRIDGE_Y - 0.2, b.z);
+      deck.castShadow = true; deck.receiveShadow = true;
+      this.unitReveal.apply(deck);
+      this.scene.add(deck);
+      this.bridgeDecks.push(deck);
+      const long = horizontal ? b.width : b.depth;
+      const short = horizontal ? b.depth : b.width;
+      for (const side of [-1, 1]) {
+        const rail = new THREE.Mesh(new THREE.BoxGeometry(horizontal ? long : 0.3, 0.6, horizontal ? 0.3 : long), railMat);
+        rail.position.set(
+          b.x + (horizontal ? 0 : side * (short / 2 - 0.3)),
+          BRIDGE_Y + 0.35,
+          b.z + (horizontal ? side * (short / 2 - 0.3) : 0),
+        );
+        rail.castShadow = true;
+        this.scene.add(rail);
+      }
+      const planks = Math.max(3, Math.round(long / 3));
+      for (let i = 1; i < planks; i++) {
+        const p = -long / 2 + (long * i) / planks;
+        const plank = new THREE.Mesh(
+          new THREE.BoxGeometry(horizontal ? 0.25 : short * 0.86, 0.1, horizontal ? short * 0.86 : 0.25),
+          railMat,
+        );
+        plank.position.set(b.x + (horizontal ? p : 0), BRIDGE_Y - 0.01, b.z + (horizontal ? 0 : p));
+        this.scene.add(plank);
+      }
+    }
     // Base do vampiro: piso sombrio e círculo rúnico. O terreno sobe perto da
     // borda norte, então cada vértice acompanha a altura para o círculo fechar.
     const drape = (geo: THREE.BufferGeometry, lift: number) => {
@@ -262,12 +282,14 @@ export class GameScene {
 
   /** altura do terreno em coordenadas de mundo */
   heightAt(x: number, z: number): number {
+    if (isBridgeAtWorld(x, z)) return BRIDGE_Y;
     const n = this.map.tiles;
     const gx = THREE.MathUtils.clamp((x + WORLD.half) / WORLD.tileSize, 0, n - 0.0001);
     const gz = THREE.MathUtils.clamp((z + WORLD.half) / WORLD.tileSize, 0, n - 0.0001);
     const tx = Math.floor(gx), tz = Math.floor(gz), fx = gx - tx, fz = gz - tz;
     const height = (dx: number, dz: number) => {
       const i = Math.min(n - 1, tz + dz) * n + Math.min(n - 1, tx + dx);
+      if (this.map.bridge[i] === 1) return BRIDGE_Y;
       return this.map.water[i] ? 1 : (this.map.height[i] ?? 0) * 14;
     };
     const a = height(0, 0), b = height(1, 0), c = height(0, 1), d = height(1, 1);
@@ -405,7 +427,7 @@ export class GameScene {
     }
   }
 
-  /** Toda árvore de madeira é um nó coletável: render instanciado, 3 árvores por nó. */
+  /** Bosques coletáveis: quatro árvores por nó em duas chamadas instanciadas. */
   private syncWoodNodes(wood: Array<{ id: number; x: number; z: number }>) {
     const key = wood.map(n => n.id).join(',');
     if (key === this.woodKey) return;
@@ -422,7 +444,7 @@ export class GameScene {
       (this.woodCrowns.material as THREE.Material).dispose();
       this.woodCrowns = null;
     }
-    const PER = 3;
+    const PER = 4;
     const ids: number[] = [];
     const trunks = new THREE.InstancedMesh(
       new THREE.CylinderGeometry(0.19, 0.35, 3, 7),
@@ -443,16 +465,17 @@ export class GameScene {
     const up = new THREE.Vector3(0, 1, 0);
     let k = 0;
     for (const nd of wood) {
-      const y = this.heightAt(nd.x, nd.z);
       for (let t = 0; t < PER; t++) {
         const a = nd.id * 2.4 + t * 2.1;
         const size = 0.75 + (((nd.id * 13 + t * 7) % 9) / 9) * 0.45;
         rotation.setFromAxisAngle(up, a);
         scale.set(size * 0.88, size, size * 0.88);
-        position.set(nd.x + Math.sin(a) * 1.7, y + 1.5 * size, nd.z + Math.cos(a) * 1.7);
+        const x = nd.x + Math.sin(a) * 1.7, z = nd.z + Math.cos(a) * 1.7;
+        const y = this.heightAt(x, z);
+        position.set(x, y + 1.5 * size, z);
         m.compose(position, rotation, scale);
         trunks.setMatrixAt(k, m);
-        position.set(nd.x + Math.sin(a) * 1.7, y + 2.1 * size, nd.z + Math.cos(a) * 1.7);
+        position.set(x, y + 2.1 * size, z);
         m.compose(position, rotation, scale);
         crowns.setMatrixAt(k, m);
         ids.push(nd.id);
@@ -715,8 +738,8 @@ export class GameScene {
       this.sun.intensity = 1.6 * Math.max(0.2, Math.sin(ang));
       this.sun.color.setHex(t > 0.8 ? 0xffb080 : 0xffeecc);
       this.hemi.intensity = 1.4;
-      this.fog.near = 120;
-      this.fog.far = 400;
+      this.fog.near = 240;
+      this.fog.far = 900;
     } else {
       sky.copy(NIGHT_SKY);
       // lua fixa
@@ -724,8 +747,8 @@ export class GameScene {
       this.sun.color.setHex(0x8a9cd8);
       this.sun.intensity = 0.35;
       this.hemi.intensity = 0.25;
-      this.fog.near = 40;
-      this.fog.far = 180;
+      this.fog.near = 60;
+      this.fog.far = 320;
     }
     this.fog.color.copy(sky);
     this.scene.background = sky;
@@ -756,7 +779,8 @@ export class GameScene {
     this.camera.updateMatrixWorld(true);
     this.terrain.updateMatrixWorld(true);
     this.raycaster.setFromCamera(new THREE.Vector2(nx, ny), this.camera);
-    return this.raycaster.intersectObject(this.terrain, false)[0]?.point ?? null;
+    for (const deck of this.bridgeDecks) deck.updateMatrixWorld(true);
+    return this.raycaster.intersectObjects([this.terrain, ...this.bridgeDecks], false)[0]?.point ?? null;
   }
 
   pickAt(nx: number, ny: number): { unitId?: number; nodeId?: number; buildingId?: number } {
@@ -789,7 +813,7 @@ export class GameScene {
     ], true);
     const hit = hits[0];
     if (hit) {
-      // Árvores de madeira são instanciadas: instanceId → nó (3 instâncias por nó).
+      // Árvores de madeira são instanciadas: instanceId → nó.
       const ids = (hit.object.userData as { woodNodeIds?: number[] }).woodNodeIds;
       if (ids && hit.instanceId !== undefined) {
         const nodeId = ids[hit.instanceId];

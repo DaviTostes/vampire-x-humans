@@ -164,12 +164,14 @@ O Vale da Vigília é um **mapa fixo**, com a mesma disposição em todas as par
 
 ### Elementos principais
 
-- **Praça central:** ponto de partida dos Humanos.
-- **Base do Vampiro:** a Cripta e as quatro lojas, ao norte do vale.
+- **Clareira central:** ponto de partida dos Humanos, com chão natural e trilhas entre as árvores.
+- **Ilha florestal:** terreno de contorno irregular e eixo inclinado, cercado pelo mar, com enseadas e praias.
+- **Base do Vampiro:** a Cripta e as quatro lojas, a noroeste da ilha.
+- **Rios e pontes:** canais sinuosos dividem o vale em regiões. As **pontes** são o único caminho sobre a água — unidades atravessam, mas não é possível construir sobre elas.
+- **Relevo:** colinas e mesas elevadas dão altura ao terreno; o interior das bases é plano para construir.
 - **Florestas e árvores de coleta:** fontes de madeira.
-- **Minas (12):** 4 na praça central e 1 exposta fora da entrada de cada refúgio — ouro exige sair das muralhas.
-- **Lagos e rochedos:** obstáculos que influenciam movimento e construção.
-- **Oito refúgios:** áreas amplas para ocupar e construir, cercadas por formações rochosas e vegetação.
+- **Minas:** 4 na praça central e 1 exposta fora da entrada de cada refúgio — ouro exige sair das muralhas.
+- **Oito refúgios:** clareiras naturais distribuídas pelo vale.
 
 ### Refúgios
 
@@ -182,11 +184,11 @@ O Vale da Vigília é um **mapa fixo**, com a mesma disposição em todas as par
 7. Vale das Cinzas
 8. Bosque da Névoa
 
-Cada refúgio possui **uma única entrada**. O espaço interno é livre para construir — não há árvores nem minas dentro das muralhas; toda a coleta acontece fora, na praça central e nas florestas.
+Cada refúgio é uma **base natural**: uma clareira abrigada numa reentrância da montanha. Maciços assimétricos, encostas e floresta delimitam o espaço. O interior fica livre para construir; a coleta acontece fora, com minas ao lado das trilhas.
 
 ### A entrada e o muro
 
-Colocar um **Muro** na passagem protege o refúgio sem impedir a circulação da equipe humana:
+Cada refúgio possui **uma única passagem** entre as encostas. Colocar um **Muro** nessa passagem protege o refúgio sem impedir a circulação da equipe humana:
 
 - Humanos e Peões conseguem atravessar o muro.
 - O Vampiro fica bloqueado e precisa destruí-lo para entrar.

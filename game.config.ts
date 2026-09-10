@@ -177,45 +177,68 @@ export const GAME_CONFIG = {
   },
 
   map: {
-    version: 1,
-    tiles: 144, tileSize: 2, // Mundo atual: 288 × 288 unidades
+    version: 3,
+    tiles: 240, tileSize: 2, // Mundo: 480 × 480 unidades
     // Um ponto para cada vaga humana. Adicionar/remover pontos altera as vagas da sala.
     humanSpawns: [{ x: -3, z: -3 }, { x: 3, z: -3 }, { x: -3, z: 3 }, { x: 3, z: 3 }],
-    crypt: { x: 0, z: -127 },
+    crypt: { x: -154, z: -120 },
     // Lojas da base do vampiro, ao redor da cripta e dentro do raio de
     // confinamento diurno (cryptRadius). Cada item é comprado na sua loja.
     vampireShops: [
-      { kind: 'forge', x: -8, z: -134 },
-      { kind: 'relic', x: 8, z: -134 },
-      { kind: 'mist', x: -11, z: -127 },
-      { kind: 'shrine', x: 11, z: -127 },
+      { kind: 'forge', x: -167, z: -127 },
+      { kind: 'relic', x: -141, z: -127 },
+      { kind: 'mist', x: -171, z: -120 },
+      { kind: 'shrine', x: -137, z: -120 },
     ] as Array<{ kind: VampireItemShopKind; x: number; z: number }>,
-    vampireSpawnOffset: { x: 0, z: 6 },
-    refugeWalls: { thickness: 3.2, entranceWidth: 3, height: 5.5 },
+    vampireSpawnOffset: { x: 8, z: 6 },
+
+    // As bases humanas são formadas pelo próprio ambiente: um anel orgânico de
+    // rochedos com uma única abertura. O jogador fecha a passagem com um Muro.
+    // As posições ficam num anel sobre a ilha inclinada; `facing` aponta a
+    // entrada para o centro do mapa.
+    refugeWalls: { thickness: 5, entranceWidth: 3, height: 5.5 },
     refuges: [
-      { name: 'Clareira dos Pinheiros', x: -66, z: -74, width: 42, depth: 38, facing: 'south' },
-      { name: 'Refúgio da Pedreira', x: 0, z: -76, width: 44, depth: 40, facing: 'south' },
-      { name: 'Bosque da Lua', x: 66, z: -74, width: 40, depth: 44, facing: 'south' },
-      { name: 'Abrigo do Poente', x: -104, z: 0, width: 40, depth: 46, facing: 'east' },
-      { name: 'Clareira da Aurora', x: 104, z: 0, width: 40, depth: 42, facing: 'west' },
-      { name: 'Refúgio dos Corvos', x: -66, z: 76, width: 46, depth: 40, facing: 'north' },
-      { name: 'Vale das Cinzas', x: 0, z: 78, width: 40, depth: 42, facing: 'north' },
-      { name: 'Bosque da Névoa', x: 66, z: 74, width: 42, depth: 44, facing: 'north' },
+      { name: 'Clareira dos Pinheiros', x: 110, z: 86, width: 46, depth: 42, facing: 'west' },
+      { name: 'Refúgio da Pedreira', x: 29, z: 123, width: 46, depth: 42, facing: 'north' },
+      { name: 'Bosque da Lua', x: -69, z: 88, width: 46, depth: 42, facing: 'north' },
+      { name: 'Abrigo do Poente', x: -126, z: 2, width: 42, depth: 48, facing: 'east' },
+      { name: 'Clareira da Aurora', x: -110, z: -86, width: 42, depth: 48, facing: 'east' },
+      { name: 'Refúgio dos Corvos', x: -29, z: -123, width: 46, depth: 42, facing: 'south' },
+      { name: 'Vale das Cinzas', x: 69, z: -88, width: 46, depth: 42, facing: 'south' },
+      { name: 'Bosque da Névoa', x: 126, z: -2, width: 42, depth: 48, facing: 'west' },
     ] as RefugeConfig[],
-    forests: [
-      { x: -116, z: -86, rx: 18, rz: 40 }, { x: 116, z: -86, rx: 18, rz: 40 },
-      { x: -116, z: 86, rx: 18, rz: 40 }, { x: 116, z: 86, rx: 18, rz: 40 },
-      { x: -52, z: -117, rx: 43, rz: 16 }, { x: 52, z: -117, rx: 43, rz: 16 },
-      { x: -50, z: 116, rx: 45, rz: 18 }, { x: 50, z: 116, rx: 45, rz: 18 },
-      { x: -38, z: 0, rx: 16, rz: 22 }, { x: 38, z: 0, rx: 16, rz: 22 },
-      { x: -65, z: -36, rx: 25, rz: 12 }, { x: 65, z: -36, rx: 25, rz: 12 },
-      { x: -65, z: 36, rx: 25, rz: 12 }, { x: 65, z: 36, rx: 25, rz: 12 },
+
+    // Ilha inclinada: elipse girada com costa irregular, cercada de água.
+    // `rotation` em radianos gira o eixo maior; `bays` recortam enseadas.
+    coast: {
+      ru: 225, rv: 180, rotation: 0.66, noiseA: 0.07, noiseB: 0.05,
+      bays: [{ x: -80, z: -182, r: 28 }, { x: 175, z: 130, r: 26 }],
+    },
+    lakes: [{ x: -20, z: -40, rx: 12, rz: 9 }, { x: 74, z: 34, rx: 10, rz: 8 }],
+    // Rio sinuoso que corta a ilha; as pontes surgem onde as trilhas o cruzam.
+    rivers: [
+      { width: 15, points: [{ x: -179, z: -96 }, { x: -100, z: -34 }, { x: -22, z: 28 }, { x: 57, z: 89 }, { x: 136, z: 151 }] },
     ],
-    lakes: [{ x: 104, z: -43, rx: 14, rz: 10 }, { x: -104, z: 43, rx: 14, rz: 10 }],
+    // Vaus extras fixos (somados aos automáticos das trilhas).
+    bridges: [],
+    // Clareiras abertas no meio da floresta, boas para construir ou emboscar.
+    meadows: [
+      { x: -40, z: -150, rx: 22, rz: 16 },
+      { x: 80, z: 152, rx: 24, rz: 16 },
+      { x: -158, z: 78, rx: 20, rz: 26 },
+      { x: 150, z: -92, rx: 22, rz: 18 },
+    ],
+    // Platôs elevados: colinas e mesas que dão relevo ao vale.
+    highlands: [
+      { x: -70, z: -70, rx: 45, rz: 38, height: 0.15 },
+      { x: 60, z: 60, rx: 50, rz: 40, height: 0.17 },
+      { x: -20, z: 150, rx: 40, rz: 35, height: 0.14 },
+      { x: 20, z: -150, rx: 40, rz: 35, height: 0.14 },
+    ],
     resources: {
       centralWoodX: [-22, 22], centralWoodZ: [-12, -6, 0, 6, 12],
       centralGold: [{ x: -12, z: -19 }, { x: 12, z: -19 }, { x: -12, z: 19 }, { x: 12, z: 19 }],
-      forestNodeSpacing: 9, // Grade de árvores coletáveis dentro dos clusters de floresta
+      forestNodeSpacing: 6.5, // Grade de árvores coletáveis; menor = floresta mais densa
     },
   },
 };

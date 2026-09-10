@@ -547,6 +547,40 @@ export function createRockGeometry(seed = 0): THREE.BufferGeometry {
   }
   g.computeVertexNormals(); return g;
 }
+
+/** Maciço com sopé largo, estratos quebrados e crista deslocada. Base em y=0. */
+export function createMountainGeometry(seed: number): THREE.BufferGeometry {
+  const ring = [[-0.5, -0.5], [0, -0.5], [0.5, -0.5], [0.5, 0],
+    [0.5, 0.5], [0, 0.5], [-0.5, 0.5], [-0.5, 0]];
+  const vertices: THREE.Vector3[][] = [];
+  for (let tier = 0; tier < 4; tier++) {
+    vertices.push(ring.map(([x, z], i) => {
+      const noise = Math.sin(i * 1.7 + seed * 2.8 + tier);
+      const shrink = [1, 0.94, 0.64, 0.12][tier]!;
+      const scale = tier === 0 ? 1 : shrink * (0.92 + noise * 0.08);
+      return new THREE.Vector3(x! * scale + Math.sin(seed) * tier * 0.025,
+        [0, 0.18, 0.6, 0.98][tier]! + (tier === 0 ? 0 : noise * 0.035),
+        z! * scale + Math.cos(seed * 2) * tier * 0.025);
+    }));
+  }
+  const positions: number[] = [], colors: number[] = [];
+  const triangle = (a: THREE.Vector3, b: THREE.Vector3, c: THREE.Vector3, shade: number) => {
+    const color = new THREE.Color(['#424c49', '#56615c', '#6b746c', '#879084'][shade % 4]!);
+    for (const p of [a, b, c]) { positions.push(p.x, p.y, p.z); colors.push(color.r, color.g, color.b); }
+  };
+  for (let tier = 0; tier < 3; tier++) for (let i = 0; i < 8; i++) {
+    const j = (i + 1) % 8, lower = vertices[tier]!, upper = vertices[tier + 1]!;
+    triangle(lower[i]!, upper[i]!, lower[j]!, (i + tier + seed) % 4);
+    triangle(lower[j]!, upper[i]!, upper[j]!, (i + tier + seed + 1) % 4);
+  }
+  const top = vertices[3]!;
+  for (let i = 1; i < 7; i++) triangle(top[0]!, top[i]!, top[i + 1]!, 3);
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  geometry.computeVertexNormals();
+  return geometry;
+}
 export function createResourceModel(kind: string): THREE.Group {
   const g = new THREE.Group();
   if (kind === 'wood') {

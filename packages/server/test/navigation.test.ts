@@ -8,10 +8,12 @@ test('destino inacessível não monopoliza o tick nem paralisa as outras unidade
   state.phase = 'night';
   const compound = COMPOUNDS[1]!;
   const door = compoundEntrance(compound);
+  const length = Math.hypot(door.x - compound.x, door.z - compound.z);
+  const out = { x: (door.x - compound.x) / length, z: (door.z - compound.z) / length };
   state.buildings.push({ ...state.buildings[0]!, id: 1001, kind: 'wall', owner: 0, x: door.x, z: door.z });
   const vampire = state.units.find(u => u.kind === 'vampire')!;
   const human = state.units[0]!;
-  Object.assign(vampire, { x: door.x, z: door.z + 5 });
+  Object.assign(vampire, { x: door.x + out.x * 5, z: door.z + out.z * 5 });
   Object.assign(human, { x: -3, z: -3 });
   let collisionChecks = 0;
   const canStand = navigation.canStand.bind(navigation);
@@ -26,7 +28,7 @@ test('destino inacessível não monopoliza o tick nem paralisa as outras unidade
       { playerId: VAMPIRE_PLAYER_ID, cmd: { type: 'move', ids: [vampire.id], x: compound.x, z: compound.z } },
       { playerId: 0, cmd: { type: 'move', ids: [human.id], x: 12, z: 12 } },
     ] : []);
-    assert.ok(vampire.z > door.z, 'vampiro não deve atravessar a entrada fechada');
+    assert.ok((vampire.x - door.x) * out.x + (vampire.z - door.z) * out.z > 0, 'vampiro não deve atravessar a entrada fechada');
   }
   assert.ok(Math.hypot(human.x - 12, human.z - 12) < 1);
   assert.equal(state.tick, 8 * TICK_RATE);
@@ -39,7 +41,7 @@ test('vampiro alcança e ataca humano ou peão coletando junto à árvore', () =
     state.phase = 'night';
     const human = state.units[0]!;
     const vampire = state.units.find(u => u.kind === 'vampire')!;
-    const tree = state.nodes.find(n => n.kind === 'wood' && n.x === 22 && n.z === 0)!;
+    const tree = state.nodes.find(n => n.kind === 'wood' && Math.hypot(n.x, n.z) < 26)!;
     Object.assign(human, { hero, x: tree.x, z: tree.z - 1.8 });
     Object.assign(vampire, { x: tree.x, z: tree.z + 6 });
     for (let i = 0; i < 6 * TICK_RATE && !human.dead; i++) {
@@ -60,7 +62,7 @@ test('busca dividida entre ticks continua perseguindo um alvo em movimento', () 
   state.phase = 'night';
   const human = state.units[0]!;
   const vampire = state.units.find(u => u.kind === 'vampire')!;
-  Object.assign(human, { x: 60, z: 60 });
+  Object.assign(human, { x: COMPOUNDS[7]!.x, z: COMPOUNDS[7]!.z });
   Object.assign(vampire, { x: -3, z: -3 });
   for (let i = 0; i < 4 * TICK_RATE; i++) {
     human.z += 0.03;
