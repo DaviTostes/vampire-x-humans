@@ -1,7 +1,7 @@
 // Controles RTS: câmera, seleção, ordens, ghost de construção
 
 import * as THREE from 'three';
-import { BUILDING_SIZE, BUILD_COSTS, BUILDABLE, WORLD, VAMPIRE_PLAYER_ID, canPlaceBuilding, type BuildKind, type Snapshot } from '@vampire/shared';
+import { BUILDING_SIZE, BUILD_COSTS, BUILDABLE, WORLD, VAMPIRE_PLAYER_ID, VAMPIRE_SKILLS, canPlaceBuilding, type BuildKind, type Snapshot, type VampireSkillId } from '@vampire/shared';
 import type { GameScene } from './scene.js';
 import type { Net } from './net.js';
 import { RTS_CAMERA } from './camera.js';
@@ -13,6 +13,7 @@ export class RtsControls {
   buildMode: BuildKind | null = null;
   private ghost: THREE.Mesh | null = null;
   private buildPointer: { clientX: number; clientY: number } | null = null;
+  private pointer: { clientX: number; clientY: number } | null = null;
   private buildTarget: { x: number; z: number } | null = null;
   private buildValid = false;
   private dragStart: { x: number; y: number } | null = null;
@@ -39,8 +40,14 @@ export class RtsControls {
 
     window.addEventListener('keydown', (e) => {
       if ((e.target as HTMLElement).matches('input, textarea, select')) return;
-      this.keys.add(e.key.toLowerCase());
-      if (e.key.toLowerCase() === 'escape') this.cancelBuild();
+      const key = e.key.toLowerCase();
+      this.keys.add(key);
+      if (key === 'escape') { this.cancelBuild(); return; }
+      if (e.repeat) return;
+      // Espaço: foca e seleciona o personagem principal.
+      if (e.code === 'Space') { e.preventDefault(); this.focusHero(); return; }
+      // 1..9: constrói (humano) ou usa habilidade (vampiro).
+      if (/^[1-9]$/.test(key)) this.hotkey(Number(key));
     });
     window.addEventListener('keyup', (e) => this.keys.delete(e.key.toLowerCase()));
     window.addEventListener('blur', () => {
@@ -99,6 +106,49 @@ export class RtsControls {
     this.camTarget.set(x, this.scene.heightAt(x, z), z);
   }
 
+  /** Seleciona e centraliza o personagem principal (tecla Espaço). */
+  focusHero() {
+    const snap = this.getSnap();
+    if (!snap) return;
+    const units = snap.units.filter(u => u.owner === this.getMyId() && u.hp > 0);
+    const hero = units.find(u => u.kind === 'vampire' || u.hero) ?? units[0];
+    if (!hero) return;
+    this.selected = [hero.id];
+    this.selectedBuilding = null;
+    this.inspectedUnit = null;
+    this.focusOn(hero.x, hero.z);
+    this.scene.setSelection(this.selected);
+    this.scene.setBuildingSelection(null);
+    this.onSelectionChanged();
+  }
+
+  /** Atalhos numéricos: construir (humano) ou lançar habilidade (vampiro). */
+  private hotkey(index: number) {
+    const snap = this.getSnap();
+    if (!snap || snap.result) return;
+    if (this.getMyId() === VAMPIRE_PLAYER_ID) {
+      const skill = (Object.keys(VAMPIRE_SKILLS) as VampireSkillId[])[index - 1];
+      if (skill && snap.vampireSkills?.[skill]) this.net.command({ type: 'castVampireSkill', skillId: skill });
+      return;
+    }
+    const kind = BUILDABLE[index - 1];
+    if (!kind) return;
+    if (this.buildMode === kind) { this.cancelBuild(); return; }
+    // Sem trabalhador selecionado, seleciona o principal para não travar o atalho.
+    const hasWorker = snap.units.some(u => u.owner === this.getMyId() && u.kind === 'worker' && this.selected.includes(u.id));
+    if (!hasWorker) {
+      const worker = snap.units.find(u => u.owner === this.getMyId() && u.kind === 'worker' && u.hp > 0);
+      if (worker) {
+        this.selected = [worker.id];
+        this.selectedBuilding = null;
+        this.inspectedUnit = null;
+        this.scene.setSelection(this.selected);
+        this.scene.setBuildingSelection(null);
+      }
+    }
+    this.enterBuild(kind);
+  }
+
   // ---------- mouse ----------
 
   private ndc(e: { clientX: number; clientY: number }): { x: number; y: number } {
@@ -124,8 +174,9 @@ export class RtsControls {
   }
 
   private onMove(e: PointerEvent) {
+    this.pointer = { clientX: e.clientX, clientY: e.clientY };
     if (this.buildMode && this.ghost) {
-      this.buildPointer = { clientX: e.clientX, clientY: e.clientY };
+      this.buildPointer = this.pointer;
       this.updateBuildPreview();
     }
     if (this.dragStart) {
@@ -159,6 +210,8 @@ export class RtsControls {
     if (!dragged) {
       // seleção simples
       const n = this.ndc(e);
+      const ground = this.scene.screenToGround(n.x, n.y);
+      if (ground) this.scene.clickMarker(ground.x, ground.z, 0xf0d9a8);
       const pick = this.scene.pickAt(n.x, n.y);
       if (pick.unitId !== undefined) {
         const u = snap.units.find((uu) => uu.id === pick.unitId);
@@ -196,10 +249,12 @@ export class RtsControls {
 
   private rightClick(e: PointerEvent) {
     if (this.buildMode) { this.cancelBuild(); return; }
+    const n = this.ndc(e);
+    const ground = this.scene.screenToGround(n.x, n.y);
+    if (ground) this.scene.clickMarker(ground.x, ground.z, 0x8fe07a);
     if (this.selected.length === 0) return;
     const snap = this.getSnap();
     if (!snap) return;
-    const n = this.ndc(e);
     const pick = this.scene.pickAt(n.x, n.y);
 
     if (pick.nodeId !== undefined) {
@@ -267,6 +322,11 @@ export class RtsControls {
     this.ghost.visible = false;
     this.ghost.renderOrder = 11;
     this.scene.scene.add(this.ghost);
+    // Mostra a prévia imediatamente, na posição atual do cursor (ou no centro).
+    const rect = this.scene.renderer.domElement.getBoundingClientRect();
+    this.buildPointer = this.pointer ?? { clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 };
+    this.updateBuildPreview();
+    this.onSelectionChanged();
   }
 
   private updateBuildPreview() {
@@ -307,6 +367,7 @@ export class RtsControls {
     this.buildTarget = null;
     this.buildValid = false;
     this.scene.setTowerRange('placement', null);
+    this.onSelectionChanged();
   }
 
   private placeBuild(e: PointerEvent) {

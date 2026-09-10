@@ -111,6 +111,8 @@ export class UnitReveal {
     this.dummy.quaternion.copy(camera.quaternion);
     let count = 0;
     for (const unit of units.values()) {
+      // Unidades escondidas pela fog de guerra não devem furar o cenário.
+      if (!unit.visible) continue;
       const vampire = unit.userData.kind === 'vampire';
       this.dummy.position.copy(unit.position);
       this.dummy.position.y += vampire ? 1.8 : 1.3;

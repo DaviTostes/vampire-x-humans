@@ -6,7 +6,7 @@ const URL = 'ws://localhost:3000';
 
 function client(name) {
   const ws = new WebSocket(URL);
-  const state: any = { name, snaps: 0, lastSnap: null, result: null, lastLobby: null };
+  const state: any = { name, snaps: 0, lastSnap: null, result: null, lastLobby: null, nodes: [] };
   ws.on('message', (raw) => {
     const msg = JSON.parse(String(raw));
     if (msg.type === 'snap') {
@@ -15,6 +15,7 @@ function client(name) {
     }
     if (msg.type === 'result') state.result = msg.result;
     if (msg.type === 'started') state.playerId = msg.playerId;
+    if (msg.type === 'started' && Array.isArray(msg.nodes)) state.nodes = msg.nodes;
     if (msg.type === 'created' || msg.type === 'joined' || msg.type === 'lobby') {
       state.lastLobby = msg.lobby;
       if (msg.playerId !== undefined) state.playerId = msg.playerId;
@@ -70,7 +71,7 @@ async function main() {
   const workers = myUnits(host).map((u: any) => u.id);
   assert.equal(workers.length, 1);
   assert.equal(snap0.units.length, 5);
-  const woodNode = snap0.nodes.find((n: any) => n.kind === 'wood');
+  const woodNode = host.nodes.find((n: any) => n.kind === 'wood');
   host.ws.send(
     JSON.stringify({ type: 'cmd', command: { type: 'gather', ids: workers, nodeId: woodNode.id } }),
   );

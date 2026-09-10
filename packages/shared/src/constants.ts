@@ -2,11 +2,15 @@
 import { GAME_CONFIG } from '../../../game.config.js';
 export { GAME_CONFIG } from '../../../game.config.js';
 export type { BuildKind } from '../../../game.config.js';
-export type { VampireItemId, VampireSkillId, VampireItemShopKind, VampireBuildingKind } from '../../../game.config.js';
-import type { BuildKind, VampireBuildingKind } from '../../../game.config.js';
+export type { VampireItemId, VampireSkillId } from '../../../game.config.js';
+import type { BuildKind } from '../../../game.config.js';
+
+// Escala global do mapa (game.config.ts → map.scale). O mundo e todas as
+// coordenadas de projeto são multiplicados por ela em um único lugar.
+export const MAP_SCALE = GAME_CONFIG.map.scale;
 
 export const WORLD = {
-  get tiles() { return GAME_CONFIG.map.tiles; },
+  get tiles() { return Math.round(GAME_CONFIG.map.tiles * MAP_SCALE); },
   get tileSize() { return GAME_CONFIG.map.tileSize; },
   get half() { return this.tiles * this.tileSize / 2; },
 };
@@ -31,16 +35,6 @@ export const KEEP = GAME_CONFIG.buildings.keep;
 export const CRYPT = GAME_CONFIG.buildings.crypt;
 export const VAMPIRE_ITEMS = GAME_CONFIG.vampireItems;
 export const VAMPIRE_SKILLS = GAME_CONFIG.vampireSkills;
-// Posições das lojas da base do vampiro, definidas no mapa.
-export const VAMPIRE_SHOPS = GAME_CONFIG.map.vampireShops;
-// Toda estrutura em que o vampiro pode comprar algo (base + lojas de itens).
-export const VAMPIRE_SHOP_KINDS: Array<VampireBuildingKind> = [
-  'crypt', ...VAMPIRE_SHOPS.map((s) => s.kind),
-];
-export function vampireShopRange(kind: VampireBuildingKind): number {
-  const building = GAME_CONFIG.buildings[kind] as { shopRange?: number } | undefined;
-  return building?.shopRange ?? 3;
-}
 export const RECRUIT = TAVERNA.recruit;
 export const BUILDABLE = GAME_CONFIG.buildable;
 export const MARKET = GAME_CONFIG.market;
@@ -48,12 +42,16 @@ export const TICK_RATE = GAME_CONFIG.simulation.ticksPerSecond;
 export const DT = 1 / TICK_RATE;
 export const INTERACTION = GAME_CONFIG.interaction;
 
+// Inclinação máxima transponível: acima disso a encosta bloqueia o movimento.
+// Unidades de altura de mapa por unidade de mundo.
+export const TERRAIN_MAX_SLOPE = 0.06;
+
 export const BUILD_COSTS = Object.fromEntries(
   Object.entries(GAME_CONFIG.buildings).filter(([, b]) => 'cost' in b).map(([kind, b]) => [kind, 'cost' in b ? b.cost : undefined]),
 ) as Record<BuildKind, { wood: number; gold: number; time: number }>;
 export const BUILDING_SIZE = Object.fromEntries(
   Object.entries(GAME_CONFIG.buildings).map(([kind, b]) => [kind, b.size]),
-) as Record<BuildKind | VampireBuildingKind, number>;
+) as Record<BuildKind | 'crypt', number>;
 export const BUILD_MAX_LEVEL = BANK.maxLevel;
 export const BANK_UPGRADE_COST = BANK.upgradeCosts;
 export const WALL_MAX_LEVEL = WALL.maxLevel;

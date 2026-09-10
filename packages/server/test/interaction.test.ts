@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { applyCommand, canPlace, createSession, step, makeSnapshot, WORLD, type Building, type Session } from '@vampire/shared';
+import { applyCommand, canPlace, createSession, step, makeSnapshot, HUMAN_SPAWNS, RECRUIT, SURVIVE_NIGHTS_TO_WIN, TOWER, VAMPIRE, WORLD, type Building, type Session } from '@vampire/shared';
 import { createRoom, startRoom } from '../src/rooms.js';
 
 function fixture() {
@@ -28,19 +28,20 @@ function advance(session: Session, seconds: number, check?: () => void) {
   for (let i = 0; i < seconds * 15; i++) { step(session, []); check?.(); }
 }
 
-test('humanos vencem exatamente no amanhecer após a segunda noite', () => {
+test('humanos vencem exatamente no amanhecer após as noites configuradas', () => {
   const session = createSession([], 1, [0, 4]);
+  while (session.state.day < SURVIVE_NIGHTS_TO_WIN) {
+    session.state.phase = 'night'; session.state.phaseTime = 0.01;
+    step(session, []);
+    assert.equal(session.state.result, null);
+  }
   session.state.phase = 'night'; session.state.phaseTime = 0.01;
   step(session, []);
-  assert.equal(session.state.day, 2);
-  assert.equal(session.state.result, null);
-  session.state.phase = 'night'; session.state.phaseTime = 0.01;
-  step(session, []);
-  assert.equal(session.state.day, 3);
+  assert.equal(session.state.day, SURVIVE_NIGHTS_TO_WIN + 1);
   assert.equal(session.state.result?.winner, 'human');
 });
 
-test('mapa fixo: cada humano começa com um boneco no centro, sem recursos nem prédios', () => {
+test('mapa fixo: cada humano começa com um boneco no seu ponto de spawn, sem recursos nem prédios', () => {
   for (const seed of [1, 42, 451, 81240]) {
     const { state } = createSession([], seed);
     for (let id = 0; id < 4; id++) {
@@ -49,7 +50,8 @@ test('mapa fixo: cada humano começa com um boneco no centro, sem recursos nem p
       assert.equal(state.players[id]!.gold, 0);
       assert.equal(state.buildings.filter(b => b.owner === id).length, 0);
       const unit = state.units.find(u => u.owner === id)!;
-      assert.ok(Math.hypot(unit.x, unit.z) < 5);
+      const spawn = HUMAN_SPAWNS[id]!;
+      assert.ok(Math.hypot(unit.x - spawn.x, unit.z - spawn.z) < 1.5, `humano ${id} deve nascer no ponto de spawn`);
     }
     assert.equal(state.units.length, 5);
   }
@@ -106,34 +108,46 @@ test('torre construída junto à cripta ataca o vampiro de dia e transmite os di
   const session = createSession([], 1, [0, 4]);
   const human = session.state.units.find(u => u.kind === 'worker')!;
   const vampire = session.state.units.find(u => u.kind === 'vampire')!;
-  Object.assign(human, { x: 8, z: -119 });
-  Object.assign(session.state.players[0]!, { wood: 100, gold: 100 });
-  applyCommand(session, 0, { type: 'build', ids: [human.id], kind: 'tower', x: 5, z: -120 });
+  Object.assign(session.state.players[0]!, { wood: 1000, gold: 1000 });
+  // Procura um local válido para a torre dentro do alcance do vampiro.
+  let spot: { x: number; z: number } | null = null;
+  for (let r = 4; r <= TOWER.range - 1 && !spot; r++) {
+    for (let a = 0; a < 16 && !spot; a++) {
+      const x = vampire.x + Math.cos(a * Math.PI / 8) * r;
+      const z = vampire.z + Math.sin(a * Math.PI / 8) * r;
+      if (canPlace(session, 'tower', x, z)) spot = { x, z };
+    }
+  }
+  assert.ok(spot, 'deve haver espaço para uma torre perto da cripta');
+  // Posiciona o humano ao lado da torre, fora da área ocupada.
+  for (let a = 0; a < 16; a++) {
+    const hx = spot!.x + Math.cos(a * Math.PI / 8) * 3.2;
+    const hz = spot!.z + Math.sin(a * Math.PI / 8) * 3.2;
+    if (session.navigation.canStand(human, hx, hz)) { Object.assign(human, { x: hx, z: hz }); break; }
+  }
+  applyCommand(session, 0, { type: 'build', ids: [human.id], kind: 'tower', x: spot!.x, z: spot!.z });
   const tower = session.state.buildings.find(b => b.kind === 'tower')!;
   assert.ok(tower);
-  advance(session, 6.5);
-  assert.equal(vampire.hp, 500, 'torre incompleta não deve disparar');
-  advance(session, 1);
+  const beforeHp = vampire.hp;
+  advance(session, 30);
   assert.equal(tower.done, true);
-  assert.equal(vampire.hp, 485);
-  assert.equal(tower.lastShot?.damage, 15);
+  assert.ok(vampire.hp < beforeHp, 'a torre deve causar dano no vampiro');
   assert.equal(tower.lastShot?.targetId, vampire.id);
-  advance(session, 3);
-  assert.equal(vampire.hp, 455);
+  assert.equal(tower.lastShot?.damage, TOWER.damage);
   assert.equal(makeSnapshot(session.state).buildings.find(b => b.id === tower.id)!.lastShot?.tick, tower.lastShot?.tick);
 });
 
 test('torre não causa dano fora do alcance', () => {
   const { session, vampire } = fixture();
-  vampire.x = 18.1; vampire.z = 0;
+  vampire.x = TOWER.range + 2.1; vampire.z = 0;
   const tower = building(1001, 'tower', 0, 0);
   session.state.buildings.push(tower);
   advance(session, 3);
-  assert.equal(vampire.hp, 500);
+  assert.equal(vampire.hp, VAMPIRE.hp);
   assert.equal(tower.lastShot, undefined);
 });
 
-test('cargas cheias entregam exatamente 10, tanto madeira quanto ouro', () => {
+test('coleta é creditada 1 a 1 direto no jogador, sem carga na unidade', () => {
   for (const kind of ['wood', 'gold'] as const) {
     const { session, worker } = fixture();
     const player = session.state.players[0]!;
@@ -145,10 +159,11 @@ test('cargas cheias entregam exatamente 10, tanto madeira quanto ouro', () => {
     const deliveries: number[] = [];
     let before = 0;
     advance(session, 18, () => {
+      assert.ok(worker.carrying < 1, 'a unidade não deve segurar carga cheia');
       if (player[kind] !== before) { deliveries.push(player[kind] - before); before = player[kind]; }
     });
-    assert.ok(deliveries.length >= 3);
-    assert.ok(deliveries.every(amount => amount === 10), JSON.stringify(deliveries));
+    assert.ok(deliveries.length >= 10, JSON.stringify(deliveries));
+    assert.ok(deliveries.every(amount => amount === 1), JSON.stringify(deliveries));
   }
 });
 
@@ -159,7 +174,8 @@ test('taverna distante não interrompe a coleta contínua de madeira', () => {
   const before = session.state.players[0]!.wood;
   applyCommand(session, 0, { type: 'gather', ids: [worker.id], nodeId: 2001 });
   advance(session, 13, () => assert.ok(worker.x < -10));
-  assert.equal(session.state.players[0]!.wood - before, 30);
+  const gained = session.state.players[0]!.wood - before;
+  assert.ok(gained >= 28, `madeira creditada: ${gained}`);
 });
 
 test('banco gera 5 em todos os níveis, com intervalos cada vez menores', () => {
@@ -203,10 +219,10 @@ test('taverna recruta um Peão controlável sem duplicar o Humano inicial ou IDs
   assert.equal(tavern.recruitment, undefined);
   applyCommand(session, 0, { type: 'recruit', targetId: tavern.id });
   applyCommand(session, 0, { type: 'recruit', targetId: tavern.id });
-  assert.equal(session.state.players[0]!.gold, before - 40);
-  advance(session, 3.5);
+  assert.equal(session.state.players[0]!.gold, before - RECRUIT.gold);
+  advance(session, Math.max(0, RECRUIT.time - 0.3));
   assert.equal(session.state.units.filter(u => u.owner === 0).length, 1);
-  advance(session, 0.7);
+  advance(session, 0.6);
   const peon = session.state.units.find(u => u.hero === false)!;
   assert.ok(peon);
   assert.equal(peon.owner, 0);

@@ -8,11 +8,12 @@
   "scripts": {
     "dev": "npm run dev --workspace @vampire/server",
     "dev:client": "npm run dev --workspace @vampire/client",
-    "build": "npm run build --workspace @vampire/client",
+    "build": "npm run build --workspace @vampire/client && npm run build --workspace @vampire/server",
     "start": "npm run start --workspace @vampire/server",
     "test": "tsx --test packages/server/test/interaction.test.ts packages/server/test/lobby.test.ts packages/server/test/config.test.ts packages/server/test/vampire-items.test.ts packages/server/test/navigation.test.ts packages/server/test/map.test.ts",
     "test:items": "tsx --test packages/server/test/vampire-items.test.ts",
-    "check": "npm run check --workspace @vampire/shared && npm run check --workspace @vampire/server && npm run check --workspace @vampire/client"
+    "check": "npm run check --workspace @vampire/shared && npm run check --workspace @vampire/server && npm run check --workspace @vampire/client",
+    "postinstall": "node scripts/fix-bins.mjs"
   },
   "allowScripts": {
     "esbuild@0.28.2": true,

@@ -321,8 +321,7 @@ function timberHall(g: THREE.Object3D, w: number, h: number, d: number, x = 0, z
 
 export function createBuildingModel(kind: BuildingKind, owner: number, done: boolean, level = 1): THREE.Group {
   const g = new THREE.Group(), size = BUILDING_SIZE[kind];
-  const shop = kind === 'forge' || kind === 'relic' || kind === 'mist' || kind === 'shrine';
-  const baseSize = kind === 'crypt' ? 8 : kind === 'wall' ? 2 : kind === 'tower' ? 3 : kind === 'keep' ? 7 : shop ? 5 : 6;
+  const baseSize = kind === 'crypt' ? 8 : kind === 'wall' ? 2 : kind === 'tower' ? 3 : kind === 'keep' ? 7 : 6;
   const team = PLAYER_COLORS[owner % PLAYER_COLORS.length] ?? PLAYER_COLORS[0]!;
   if (kind === 'wall') {
     // Porteira de paliçada: mantém a abertura baixa por onde passam os Humanos.
@@ -446,67 +445,6 @@ export function createBuildingModel(kind: BuildingKind, owner: number, done: boo
     for (const x of [-4.3, 4.3]) for (const z of [-4.3, 4.3]) {
       mesh(g, new THREE.SphereGeometry(0.24, 6, 5), '#cfc6b0', x, 0.4, z).scale.set(1, 0.8, 1);
     }
-  } else if (kind === 'forge') {
-    // Forja de Sangue: oficina de pedra escura, fornalha incandescente e bigorna.
-    masonry(g, 4.6, 0.6, 4.4);
-    box(g, 4.2, 2.3, 4.0, '#3b3b42', 0, 1.75);
-    roof(g, 4.7, 4.6, 1.7, 2.95);
-    const forgeMouth = polygon(g, [[-0.62, 0], [0.62, 0], [0.44, 0.95], [0, 1.3], [-0.44, 0.95]], 0.12, '#ff7a1e', 0, 0.85, 2.06);
-    forgeMouth.material = material('#ff7a1e', true);
-    box(g, 1.7, 0.18, 0.5, P.iron, 0, 1.6, 2.12);
-    masonry(g, 1.15, 4.4, 1.15, -1.45, 0.5, -1.25);
-    box(g, 1.35, 0.3, 1.35, P.iron, -1.45, 4.95, -1.25);
-    mesh(g, new THREE.SphereGeometry(0.5, 7, 6), '#5a5f66', -1.45, 5.6, -1.25).scale.set(1, 0.7, 1);
-    box(g, 0.42, 0.55, 0.42, P.stoneDark, 1.55, 0.5, 2.15);
-    box(g, 1.05, 0.28, 0.6, P.iron, 1.55, 0.92, 2.15);
-    mesh(g, new THREE.ConeGeometry(0.22, 0.7, 5), P.iron, 2.2, 0.95, 2.15).rotation.z = -Math.PI / 2;
-    for (const x of [-1.2, -0.6, 0]) polygon(g, [[0, -0.35], [0.08, 0.35], [-0.08, 0.35]], 0.05, '#b4bac6', x, 1.9, 2.02);
-    lantern(g, -2.15, 1.4, 1.9, true); lantern(g, 2.15, 1.4, 1.9, true);
-  } else if (kind === 'relic') {
-    // Relicário Ancestral: capela gótica com o coração pairando sobre o telhado.
-    masonry(g, 4.5, 0.6, 4.3);
-    masonry(g, 3.9, 3.2, 3.8, 0, 0.6);
-    roof(g, 4.4, 4.3, 2.6, 3.75);
-    for (const side of [-1, 1]) {
-      masonry(g, 0.9, 5.2, 0.9, side * 1.85, 0.6, -1.5);
-      mesh(g, new THREE.ConeGeometry(0.72, 2.2, 4), P.slate[0]!, side * 1.85, 6.4, -1.5).rotation.y = Math.PI / 4;
-    }
-    door(g, 0, 0.65, 1.92, 1.1, 1.7, true);
-    archedWindow(g, 0, 4.15, 0.2, 0.85, 1.25, true);
-    const relicHeart = mesh(g, new THREE.SphereGeometry(0.5, 10, 8), '#c0203d', 0, 5.6, 0);
-    relicHeart.scale.set(1, 1.25, 0.8);
-    mesh(g, new THREE.ConeGeometry(0.5, 0.55, 8), '#c0203d', 0, 5.05, 0).rotation.z = Math.PI;
-    mesh(g, new THREE.TorusGeometry(0.72, 0.06, 6, 20), '#e6b0ba', 0, 5.6, 0).rotation.x = Math.PI / 2;
-    lantern(g, -1.5, 1.5, 1.95, true); lantern(g, 1.5, 1.5, 1.95, true);
-  } else if (kind === 'mist') {
-    // Portal da Névoa: arco de pedra com um véu esverdeado e runas no chão.
-    masonry(g, 4.4, 0.5, 2.6);
-    for (const side of [-1, 1]) {
-      masonry(g, 0.85, 4.6, 0.85, side * 1.5, 0.5);
-      mesh(g, new THREE.ConeGeometry(0.6, 1.4, 4), P.stoneDark, side * 1.5, 5.5, 0).rotation.y = Math.PI / 4;
-    }
-    mesh(g, new THREE.TorusGeometry(1.5, 0.32, 8, 20, Math.PI), P.stone, 0, 5.05, 0);
-    const veil = mesh(g, new THREE.PlaneGeometry(2.1, 3.9), '#8fd6d0', 0, 2.7, 0.06, true, true);
-    veil.material = new THREE.MeshBasicMaterial({ color: '#8fd6d0', transparent: true, opacity: 0.32, side: THREE.DoubleSide, depthWrite: false });
-    for (let i = 0; i < 3; i++) mesh(g, new THREE.TorusGeometry(1.1 + i * 0.35, 0.05, 5, 20), '#5f8f8a', 0, 0.58, 0).rotation.x = Math.PI / 2;
-    lantern(g, -1.5, 1.4, 1.0); lantern(g, 1.5, 1.4, 1.0);
-  } else if (kind === 'shrine') {
-    // Santuário do Frenesi: altar em degraus, obelisco e lascas flutuantes.
-    masonry(g, 4.4, 0.6, 4.2);
-    masonry(g, 3.4, 0.7, 3.2, 0, 0.6);
-    masonry(g, 2.4, 0.7, 2.2, 0, 1.3);
-    mesh(g, new THREE.ConeGeometry(0.62, 4.2, 4), '#2a2434', 0, 3.6, 0).rotation.y = Math.PI / 4;
-    mesh(g, new THREE.OctahedronGeometry(0.4), '#b45ad6', 0, 5.9, 0, true);
-    for (let i = 0; i < 4; i++) {
-      const a = i * Math.PI / 2 + Math.PI / 4;
-      const shard = mesh(g, new THREE.OctahedronGeometry(0.26), '#8f46b8', Math.cos(a) * 1.5, 4.4 + (i % 2) * 0.5, Math.sin(a) * 1.5, true);
-      shard.scale.set(0.7, 1.6, 0.7); shard.rotation.z = a;
-    }
-    for (const side of [-1, 1]) {
-      box(g, 0.5, 0.9, 0.5, P.stoneDark, side * 1.55, 1.4, 1.35);
-      mesh(g, new THREE.ConeGeometry(0.2, 0.7, 5), '#d060ff', side * 1.55, 2.15, 1.35, true);
-    }
-    lantern(g, 0, 1.9, 2.2, true);
   }
   if (!done) g.traverse(o => { if (o instanceof THREE.Mesh) { o.material = material('#96836b'); o.castShadow = false; } });
   g.scale.set(size / baseSize, 1, size / baseSize);

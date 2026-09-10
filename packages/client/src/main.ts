@@ -22,6 +22,8 @@ void net.connect().catch(() => lobby.render());
 
 function startGame(net: Net) {
   const scene = new GameScene(app, net.lobby!.seed);
+  // Fog de guerra: esconde unidades inimigas fora da visão do time local.
+  scene.setLocalPlayer(net.myId);
   let hud: Hud;
   const controls = new RtsControls(scene, net, app, () => net.myId, () => net.latestSnap,
     () => { if (hud && net.latestSnap) hud.update(net.latestSnap, net.myId); });

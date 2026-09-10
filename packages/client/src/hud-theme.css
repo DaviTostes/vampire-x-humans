@@ -1,80 +1,174 @@
-/* Molduras douradas sobre ardósia; ornamentos sem animações ou filtros caros. */
-.vxh-hud { --gold: #ba9458; --gold-hi: #f1d99d; --faction: #234e71; --faction-dark: #101d2c; }
+/* HUD de pedra entalhada, inspirada na barra inferior do Warcraft III:
+   console de pedra com rebites, recessos escuros para mapa/retrato/comandos e
+   botões de habilidade em lousa azulada. Sem animações caras: só sombras e
+   gradientes. */
+
+.vxh-hud {
+  --gold: #c9a86a; --gold-hi: #e9d3a0;
+  --faction: #234e71; --faction-dark: #101d2c;
+  --stone-hi: #949aa3; --stone: #6e747d; --stone-lo: #4a4f57; --stone-edge: #0a0c10;
+  --slot: #19202c; --slot-hi: #2c3651; --parch: #d9caa4;
+}
 .vxh-hud[data-faction="vampire"] { --faction: #782337; --faction-dark: #260e19; }
+.vxh-hud, .vxh-hud *, .vxh-hud *::before, .vxh-hud *::after { box-sizing: border-box; }
+
 .vxh-bottom { height: 236px; left: 16px; right: 16px; bottom: 16px; gap: 14px;
-  grid-template-columns: 230px 184px minmax(300px, 1fr) 240px;
+  grid-template-columns: 230px 184px minmax(300px,1fr) 240px;
   grid-template-areas: "map portrait commands sheet"; }
-.vxh-frame { border: 3px double #b18b50; border-radius: 3px;
-  background: linear-gradient(135deg, #14202b, #080e16 55%, #0c131b);
-  box-shadow: inset 0 0 0 3px #05080d, inset 0 0 0 4px #55442e, 0 0 0 2px #16100b, 0 4px 12px #0009; }
-.vxh-frame::before, .vxh-frame::after { width: 20px; height: 20px; transform: none; border: 0;
-  background: linear-gradient(135deg, #fae5b2, #896038 48%, #d8b777 50%, #463222 70%);
-  clip-path: polygon(0 0,100% 0,65% 25%,95% 60%,60% 95%,25% 65%,0 100%,0 0,22% 22%,22% 58%,58% 22%,22% 22%);
-  box-shadow: none; }
-.vxh-frame::before { top: -7px; left: -7px; }
-.vxh-frame::after { bottom: -7px; right: -7px; transform: rotate(180deg); }
-.vxh-mapframe { grid-area: map; margin-top: -16px; padding: 9px 9px 24px; }
-.vxh-mapframe::after { content: ''; width: 20px; height: 20px; left: auto; padding: 0; border: 0; }
-.vxh-map-caption { position: absolute; bottom: 4px; left: 0; right: 0; text-align: center;
-  color: var(--gold-hi); font-size: 11px; letter-spacing: 2px; }
+
+/* Recesso escuro onde ficam mapa, retrato, atributos e comandos. */
+.vxh-frame {
+  position: relative; border: 2px solid var(--stone-edge); border-radius: 4px;
+  background: radial-gradient(ellipse 150% 110% at 50% 0%, #1d222b, #0e1117 58%, #0a0c11 100%);
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,.9), inset 0 2px 0 rgba(255,255,255,.05),
+    inset 0 0 18px rgba(0,0,0,.8), 0 1px 0 rgba(255,255,255,.05); }
+/* A base desenhava cantoneiras douradas; o tema de pedra usa só os recessos. */
+.vxh-frame::before, .vxh-frame::after { content: none; }
+
+.vxh-mapframe { grid-area: map; margin-top: -16px; padding: 6px 6px 22px; }
+.vxh-map-caption { position: absolute; bottom: 3px; left: 0; right: 0; text-align: center;
+  color: var(--gold-hi); font-size: 11px; letter-spacing: 2px; text-shadow: 0 1px 2px #000; }
 .vxh-compass { position: absolute; top: -20px; left: calc(50% - 16px); width: 32px; height: 32px;
-  background: #0b141f; border: 3px double #bc975c; transform: rotate(45deg); z-index: 3; }
+  background: radial-gradient(circle at 40% 32%, #3a4450, #14181f 78%); border: 3px double #bc975c;
+  transform: rotate(45deg); z-index: 3; }
 .vxh-compass span { display: block; transform: rotate(-45deg); text-align: center; line-height: 28px; color: var(--gold-hi); }
-.vxh-minimap { border: 1px solid #6c5635; }
-.vxh-portrait { grid-area: portrait; padding: 13px 12px 9px; gap: 6px; background: linear-gradient(140deg,var(--faction-dark),#080e16 70%); }
-.vxh-portrait-art { width: 108px; flex: 1; max-height: 124px; border: 3px double #967447; background: #080d15; }
-.vxh-portrait .name { color: #f1dfb5; font-size: 15px; letter-spacing: .6px; }
+.vxh-minimap { position: static; display: block; width: 100%; height: 100%; border: 1px solid #10131a;
+  border-radius: 2px; box-shadow: inset 0 0 0 1px rgba(0,0,0,.8), inset 0 0 18px #000; }
+
+.vxh-portrait { grid-area: portrait; padding: 8px; gap: 5px;
+  background: linear-gradient(180deg, #1c1f25, #0b0d12); }
+.vxh-portrait-art { flex: 1; min-height: 0; overflow: hidden; border: 2px solid var(--stone-edge);
+  background: #090c14; box-shadow: inset 0 0 14px #000; }
+.vxh-portrait-art svg { width: 100%; height: 100%; object-fit: cover; }
+.vxh-portrait .name { font-size: 12px; text-align: center; color: var(--gold-hi); font-variant: small-caps;
+  letter-spacing: 1px; padding: 2px 4px; border: 1px solid var(--stone-edge); border-radius: 2px;
+  background: linear-gradient(180deg, rgba(34,38,46,.92), rgba(10,12,17,.92)); text-shadow: 0 1px 2px #000; }
 .vxh-crest { position: absolute; top: 0; right: 12px; width: 34px; height: 68px; display: grid; place-items: center;
-  clip-path: polygon(0 0,100% 0,100% 76%,50% 100%,0 76%); background: #b99054; padding: 2px; }
+  clip-path: polygon(0 0,100% 0,100% 76%,50% 100%,0 76%); background: #b99054; padding: 2px;
+  box-shadow: 0 0 10px rgba(201,168,106,.3), inset 0 0 0 1px rgba(233,211,160,.28); }
 .vxh-crest span { display: grid; place-items: center; width: 100%; height: 100%; font-size: 27px; color: #efcf84;
   background: linear-gradient(90deg,var(--faction-dark),var(--faction),var(--faction-dark));
   clip-path: polygon(0 0,100% 0,100% 75%,50% 97%,0 75%); }
 .vxh-crest svg { width: 28px; height: 34px; }
-.vxh-statbar { height: 16px; flex-shrink: 0; border: 1px solid #8e7948; border-radius: 2px; }
-.vxh-hud[data-faction="vampire"] .healthbar > i { background: linear-gradient(#bb334e,#641c2e); }
+
+.vxh-statbar { position: relative; height: 16px; background: #0a0c10; border: 1px solid #3a3f47;
+  border-radius: 2px; box-shadow: inset 0 0 0 1px #05070a, inset 0 2px 4px #000; }
+.vxh-statbar > i { position: absolute; inset: 0; right: auto; background: linear-gradient(#5b9b46,#244b27);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.2); }
+.vxh-statbar.bloodbar > i { background: linear-gradient(#3d6694,#192d49); }
+.vxh-statbar span { position: relative; display: block; text-align: center; line-height: 14px; font-size: 11px; text-shadow: 1px 1px #000; }
+.vxh-portrait-activity { text-align: center; font-size: 12px; margin-top: 2px; min-height: 15px; line-height: 15px;
+  color: #e4c579; text-shadow: 0 1px 1px #000; }
+
+/* Painel de comandos: grade de botões de habilidade. */
 .vxh-commands { grid-area: commands; display: flex; flex-direction: column; min-width: 0; padding: 7px 9px 9px; }
-.vxh-commands-heading { display: flex; align-items: center; gap: 10px; height: 24px; flex-shrink: 0;
-  color: var(--gold-hi); font-size: 11px; letter-spacing: 3px; white-space: nowrap; justify-content: center; }
-.vxh-commands-heading::before, .vxh-commands-heading::after { content: ''; flex: 1; height: 1px; background: linear-gradient(90deg,transparent,#9c7746); }
+.vxh-commands-heading { display: flex; align-items: center; justify-content: center; gap: 10px; height: 24px;
+  flex-shrink: 0; margin-bottom: 6px; color: var(--gold-hi); font-size: 11px; letter-spacing: 3px; white-space: nowrap;
+  border: 1px solid var(--stone-edge); border-radius: 2px;
+  background: linear-gradient(180deg, rgba(48,53,62,.9), rgba(14,16,21,.9));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.07), inset 0 -6px 10px rgba(0,0,0,.5); }
+.vxh-commands-heading::before, .vxh-commands-heading::after { content: ''; flex: 0 0 26px; height: 1px;
+  background: linear-gradient(90deg, transparent, var(--gold)); }
 .vxh-commands-heading::after { transform: rotate(180deg); }
 .vxh-panel { flex: 1; min-height: 0; padding: 7px 0 0; border: 0; box-shadow: none; background: none;
   display: flex; flex-wrap: nowrap; align-items: stretch; justify-content: flex-start; gap: 8px; overflow: auto;
   scrollbar-width: thin; scrollbar-color: #8b6b3f #0b1119; }
-.vxh-panel > .vxh-btn { flex: 1 0 96px; max-width: 170px; min-width: 0; padding: 8px 6px;
-  display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 3px;
-  border: 3px double #947549; border-radius: 3px; background: radial-gradient(ellipse at 50% 30%,var(--faction-dark),#080e16 80%);
-  box-shadow: inset 0 0 0 2px #080b10; font: 600 14px Georgia,serif; color: #eedcaf; line-height: 1.15; }
-.vxh-panel > .vxh-btn:hover:not(:disabled) { border-color: #efd395; background: radial-gradient(ellipse at 50% 30%,var(--faction),#0c121b 85%); }
-.vxh-panel > .vxh-btn:disabled { border-color: #65563d; color: #b6b0a3; }
-.vxh-panel > .vxh-btn.active { border-color: #d09461; box-shadow: inset 0 0 16px var(--faction); }
+.vxh-panel > .vxh-btn { flex: 1 0 96px; max-width: 170px; position: relative; min-width: 0; min-height: 0;
+  padding: 8px 6px; font-size: 14px; display: flex; flex-direction: column; justify-content: center;
+  align-items: center; gap: 3px; border-radius: 3px; border: 1px solid var(--stone-edge); color: var(--parch);
+  font-weight: 600; line-height: 1.15;
+  background: radial-gradient(ellipse at 50% 18%, var(--slot-hi), #131824 78%);
+  box-shadow: inset 0 0 0 2px #4a5573, inset 0 0 0 3px #0b0e15, inset 0 2px 0 rgba(190,205,230,.18),
+    inset 0 -8px 14px rgba(0,0,0,.5); }
+.vxh-panel > .vxh-btn:hover:not(:disabled) { color: var(--gold-hi);
+  box-shadow: inset 0 0 0 2px var(--gold), inset 0 0 0 3px #0b0e15, inset 0 0 18px rgba(201,168,106,.25),
+    inset 0 -8px 14px rgba(0,0,0,.5); }
+.vxh-panel > .vxh-btn:disabled { border-color: #232830; color: #8f96a0;
+  background: radial-gradient(ellipse at 50% 18%, #232936, #10141c 80%); }
+.vxh-panel > .vxh-btn.active { border-color: var(--stone-edge); color: #ffb9b9;
+  box-shadow: inset 0 0 0 2px #7c2a33, inset 0 0 0 3px #0b0e15, inset 0 0 18px #8e2a35, inset 0 -8px 14px rgba(0,0,0,.5); }
 .vxh-card-art { display: block; width: 100%; height: 78px; flex-shrink: 0; }
 .vxh-card-art svg { display: block; height: 100%; width: 100%; }
+.vxh-card-art img { display: block; height: 100%; width: 100%; object-fit: contain; }
 .vxh-btn:disabled .vxh-card-art { opacity: .65; }
 .vxh-panel .vxh-btn small { font: 12px/1.2 Georgia,serif; margin-top: 1px; }
-.vxh-panel .vxh-cost, .vxh-panel .vxh-item-price { padding-top: 5px; margin-top: auto; border-top: 1px solid #59472c; width: 100%; }
-.vxh-panel > span { flex: 1; align-self: center; font-size: 12px; }
-.vxh-sheet { grid-area: sheet; padding: 12px; overflow-y: auto; pointer-events: auto; scrollbar-width: thin; scrollbar-color: #8b6b3f #0b1119; }
-.vxh-sheet-heading { font-size: 10px; letter-spacing: 2px; margin-bottom: 9px; color: var(--gold); }
+.vxh-panel .vxh-cost, .vxh-panel .vxh-item-price { padding-top: 5px; margin-top: auto; border-top: 1px solid #323a49; width: 100%; }
+.vxh-panel > span { flex: 1; align-self: center; font-size: 12px; line-height: 1.6; color: #a89a78; font-style: italic;
+  text-align: center; letter-spacing: .4px; text-shadow: 0 1px 1px #000; }
+
+/* Ficha de atributos. */
+.vxh-sheet { grid-area: sheet; padding: 12px; overflow-y: auto; pointer-events: auto;
+  scrollbar-width: thin; scrollbar-color: #8b6b3f #0b1119; }
+.vxh-sheet-heading { font-size: 10px; letter-spacing: 2px; text-align: center; color: #e4cf94;
+  padding: 3px; margin-bottom: 9px; border: 1px solid var(--stone-edge); border-radius: 2px;
+  background: linear-gradient(180deg, rgba(48,53,62,.9), rgba(14,16,21,.9));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.07); }
 .vxh-selinfo { font: 12px/1.5 Georgia,serif; color: #c9c2b1; }
 .vxh-selinfo b { display: block; font-size: 16px; margin-bottom: 5px; color: #edd49d; }
-.vxh-inventory { gap: 4px; }
-.vxh-inventory > span { border-color: #705939; box-shadow: none; font-size: 11px; }
-.vxh-topbar, .vxh-clock, .vxh-hero { border: 3px double #aa874f; border-radius: 3px;
-  background: linear-gradient(#14202a,#070d14); box-shadow: inset 0 0 0 2px #080c12, 0 3px 8px #0008; }
-.vxh-hero { top: 14px; left: 18px; width: 76px; padding: 5px; }
-.vxh-hero-crest { position: absolute; bottom: -24px; left: 23px; width: 27px; height: 28px;
-  background: var(--faction); color: #e9c47d; border: 1px solid #9e7e48; font-size: 23px;
+.vxh-activity { color: #e4c579; margin-top: 6px; }
+.vxh-progress { height: 8px; background: #080b10; border: 1px solid #3a3f47; margin: 6px 0;
+  box-shadow: inset 0 1px 3px #000; }
+.vxh-progress > div { height: 100%; background: linear-gradient(90deg,#2f5f8c,#7fb2e0); }
+.vxh-inventory { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.vxh-inventory > span { border: 1px solid var(--stone-edge); border-radius: 3px; padding: 5px 8px; color: #d5c397;
+  font-size: 12px; background: radial-gradient(ellipse at 50% 20%, var(--slot-hi), #0d1015 85%);
+  box-shadow: inset 0 0 0 2px #3a4256, inset 0 0 8px #000; }
+.vxh-item-equipped { color: #a8d8b1; }
+.vxh-command-icon { display: block; font-size: 23px; line-height: 1.1; margin-bottom: 2px; }
+.vxh-hotkey { position: absolute; top: 3px; right: 4px; font-size: 10px; line-height: 1; padding: 1px 4px;
+  color: #0b0d12; font-weight: 700; border: 1px solid #08090c; border-radius: 3px;
+  background: linear-gradient(#e9d3a0, #a8895a); box-shadow: 0 1px 2px #000a; pointer-events: none; }
+.vxh-btn:disabled .vxh-hotkey { opacity: .5; }
+.vxh-item-button small { font-size: 12px; }
+.vxh-item-button .vxh-item-price { font-size: 15px; }
+.vxh-item-button .vxh-command-icon { font-size: 20px; }
+
+/* Barra superior, relógio e retrato do herói: metal escuro sobre pedra. */
+.vxh-topbar, .vxh-clock, .vxh-hero { border: 1px solid var(--stone-edge); border-radius: 4px;
+  background: linear-gradient(180deg, #262a31, #0b0d12 85%);
+  box-shadow: inset 0 0 0 2px #3a3f47, inset 0 0 0 3px #10131a, inset 0 1px 0 rgba(233,211,160,.08), 0 5px 16px #000a; }
+.vxh-topbar { left: auto; right: 12px; transform: none; top: 10px; gap: 0; padding: 0; }
+.vxh-topbar .res { position: relative; padding: 9px 22px; border-right: 1px solid #0c0f13; min-width: 105px;
+  box-shadow: 1px 0 0 rgba(233,211,160,.06); }
+.vxh-topbar .res::after { content: ''; position: absolute; right: -3px; top: 50%; width: 6px; height: 6px;
+  transform: translateY(-50%) rotate(45deg); background: radial-gradient(circle at 35% 35%, #cfd6de, #6c747e 60%, #2b2f36);
+  box-shadow: 0 0 3px #000a; }
+.vxh-topbar b { font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: .5px; text-shadow: 0 1px 2px #000; }
+.vxh-topbar .res-icon { color: var(--gold-hi); font-size: 21px; }
+.vxh-clock { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); align-items: center; gap: 9px;
+  padding: 6px 16px 6px 8px; font-weight: 600; font-size: 16px; }
+.vxh-clock .icon { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; font-size: 15px;
+  background: radial-gradient(circle at 40% 32%, #cfe6ff, #3f7dbf 55%, #123a5e);
+  box-shadow: inset 0 0 0 2px #0a1826, 0 0 0 2px #caa25e, 0 0 8px rgba(120,180,255,.35); }
+.vxh-hud[data-phase="night"] .vxh-clock .icon {
+  background: radial-gradient(circle at 40% 32%, #e6eaff, #5a6aa8 55%, #1a2140);
+  box-shadow: inset 0 0 0 2px #0a0f22, 0 0 0 2px #caa25e, 0 0 10px rgba(150,170,255,.4); }
+.vxh-clock.night { color: #9aa8e8; }
+.vxh-clock.day { color: #e8c86a; }
+.vxh-hero { position: absolute; top: 10px; left: 14px; width: 68px; padding: 3px; cursor: pointer; pointer-events: auto;
+  background: linear-gradient(160deg,#23262d,#0b0d12 70%); }
+.vxh-hero svg { display: block; width: 100%; height: 65px; }
+.vxh-hero .vxh-bar { height: 5px; border-radius: 0; }
+.vxh-hero-crest { position: absolute; bottom: -24px; left: 23px; width: 27px; height: 28px; background: var(--faction);
+  color: #e9c47d; border: 1px solid #9e7e48; font-size: 23px;
   clip-path: polygon(0 0,100% 0,100% 68%,50% 100%,0 68%); }
 .vxh-hero .vxh-hero-crest svg { width: 25px; height: 25px; }
-.vxh-quit { border: 2px solid #ae8450; color: #f2dca9; }
-.vxh-hud .vxh-admin { border: 3px double #a07a46; border-radius: 2px; background: #080f18f5; font-family: Georgia,serif; }
+
+.vxh-quit { pointer-events: auto; padding: 9px 16px; border: 1px solid var(--stone-edge); border-radius: 3px;
+  background: radial-gradient(ellipse at 50% 20%,#5a2530,#1c0b10 85%);
+  box-shadow: inset 0 0 0 2px #6e3a41, inset 0 0 0 3px #140b0d, inset 0 0 12px rgba(142,42,53,.35);
+  color: #ffd9dc; font: 650 13px 'Palatino Linotype','Book Antiqua',Palatino,Georgia,serif; cursor: pointer; }
+.vxh-quit:hover { color: #ffe9ec;
+  box-shadow: inset 0 0 0 2px #a2525b, inset 0 0 0 3px #140b0d, inset 0 0 16px rgba(224,138,146,.3); }
+.vxh-hud .vxh-admin { border: 2px solid var(--stone-edge); border-radius: 3px; background: #080f18f5; font-family: Georgia,serif; }
 .vxh-hud .vxh-admin summary { color: #eed29b; }
+
 @media(max-width: 1200px) {
   .vxh-bottom { grid-template-columns: 180px 154px minmax(250px,1fr) 190px; gap: 10px; height: 218px; }
   .vxh-portrait-art { width: 87px; }
-  .vxh-crest { right: 6px; width: 28px; }
   .vxh-card-art { height: 60px; }
   .vxh-commands-heading { font-size: 9px; letter-spacing: 2px; }
+  .vxh-crest { right: 6px; width: 28px; }
 }
 @media(max-width: 900px) {
   .vxh-bottom { grid-template-columns: 154px 130px minmax(0,1fr); grid-template-areas: "map portrait commands"; }
@@ -82,14 +176,14 @@
   .vxh-crest { width: 22px; height: 46px; right: 4px; }
   .vxh-crest span { font-size: 19px; }
   .vxh-portrait { padding: 9px 6px; }
-  .vxh-clock { font-size: 12px; max-width: 210px; text-align: center; }
+  .vxh-clock { font-size: 12px; max-width: 220px; }
 }
 @media(max-width: 600px) {
   .vxh-bottom { left: 8px; right: 8px; bottom: 8px; height: 184px; gap: 8px;
     grid-template-columns: 110px 100px minmax(0,1fr); }
   .vxh-portrait-art { width: 66px; }
   .vxh-portrait .name { font-size: 12px; }
-  .vxh-mapframe { padding: 6px 6px 24px; margin-top: 0; }
+  .vxh-mapframe { padding: 6px 6px 22px; margin-top: 0; }
   .vxh-map-caption { font-size: 8px; letter-spacing: .5px; }
   .vxh-commands-heading { letter-spacing: 0; font-size: 8px; }
   .vxh-panel > .vxh-btn { flex-basis: 84px; font-size: 12px; }
@@ -100,4 +194,16 @@
   .vxh-topbar { top: 72px; right: 8px; }
   .vxh-clock { top: 12px; }
   .vxh-hud .vxh-admin { top: 118px; right: 8px; }
+}
+
+/* Retratos: cantos suaves e vinheta para fundir a foto com o fundo do HUD. */
+.vxh-portrait-img {
+  border-radius: 4px;
+  -webkit-mask-image: radial-gradient(132% 132% at 50% 40%, #000 60%, rgba(0,0,0,0) 100%);
+  mask-image: radial-gradient(132% 132% at 50% 40%, #000 60%, rgba(0,0,0,0) 100%);
+}
+.vxh-card-img {
+  border-radius: 3px;
+  -webkit-mask-image: radial-gradient(128% 128% at 50% 45%, #000 56%, rgba(0,0,0,0) 100%);
+  mask-image: radial-gradient(128% 128% at 50% 45%, #000 56%, rgba(0,0,0,0) 100%);
 }

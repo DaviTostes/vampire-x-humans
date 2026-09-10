@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import {
   DAY_LENGTH,
   NIGHT_LENGTH,
+  MAX_HUMANS,
   BUILDING_SIZE,
   TOWER,
   COMPOUNDS,
@@ -12,6 +13,8 @@ import {
   BRIDGE_Y,
   distanceToTrails,
   isBridgeAtWorld,
+  isLandAt,
+  isWaterAtWorld,
   CRYPT_POSITION,
   type BuildingKind,
   WORLD,
@@ -22,9 +25,249 @@ import {
 import { createBuildingModel, createUnitModel, createResourceModel, orientEntranceWall, createPineCanopyGeometry, createMountainGeometry, createRockGeometry, createLanternModel } from './models.js';
 import { RTS_CAMERA } from './camera.js';
 import { UnitReveal } from './unit-reveal.js';
-import { updateExternalAnimation } from './assets/asset-registry.js';
+import { assetRegistry, updateExternalAnimation } from './assets/asset-registry.js';
 
 const WORLD_SIZE = WORLD.tiles * WORLD.tileSize;
+
+/**
+ * Visão de guerra (cliente): unidades inimigas só aparecem dentro do raio de
+ * visão do time local. Humanos compartilham a visão; o vampiro tem a dele.
+ */
+const VAMPIRE_OWNER_ID = MAX_HUMANS;
+const UNIT_VISION: Record<string, number> = { worker: 16, vampire: 24 };
+const BUILDING_VISION: Record<string, number> = { wall: 8, tower: 19, bank: 14, taverna: 14, keep: 18 };
+const VISION_SCALE = 1.8;
+
+interface VisionProfile {
+  cosOuter: number;    // cosseno do ângulo externo do cone
+  cosInner: number;    // cosseno do ângulo interno (nítido)
+  peripheral: number;  // fração do raio com percepção 360°
+  core: number;        // fração do raio totalmente nítida
+}
+// Humano: cone frontal largo (~160°) e queda contínua de nitidez.
+const HUMAN_VISION: VisionProfile = {
+  cosOuter: Math.cos((80 * Math.PI) / 180),
+  cosInner: Math.cos((48 * Math.PI) / 180),
+  peripheral: 0.5,
+  core: 0.2,
+};
+// Vampiro: enxerga mais longe, num ângulo maior e com núcleo nítido maior.
+const VAMPIRE_VISION: VisionProfile = {
+  cosOuter: Math.cos((95 * Math.PI) / 180),
+  cosInner: Math.cos((58 * Math.PI) / 180),
+  peripheral: 0.6,
+  core: 0.28,
+};
+// A visão depende da fase: humanos enxergam melhor de dia; o vampiro, à noite.
+const PHASE_VISION = {
+  human: { day: 1.35, night: 0.8 },
+  vampire: { day: 0.6, night: 1.2 },
+} as const;
+// Teto de fontes de visão no shader (loop em tela cheia). Fontes maiores têm
+// prioridade quando o time tem muitas unidades.
+const MAX_VISION_SOURCES = 32;
+const FOG_DAY_STRENGTH = 0.5;
+const FOG_NIGHT_STRENGTH = 0.68;
+
+function teamOf(owner: number): 'human' | 'vampire' | 'neutral' {
+  if (owner < 0) return 'neutral';
+  return owner === VAMPIRE_OWNER_ID ? 'vampire' : 'human';
+}
+
+/**
+ * Chão do mapa: tiles pintados de grama e pedra, com o caminho (trilhas) virando
+ * pedra e as texturas de transição grama↔pedra alinhadas às bordas do caminho.
+ */
+const GROUND_TILE_URLS = {
+  grass: 'assets/environment/ground/ground_grass.jpg',
+  stone: 'assets/environment/ground/ground_stone.jpg',
+  edge: 'assets/environment/ground/ground_edge_south.jpg',
+} as const;
+
+const GROUND_TILE_WORLD = 7;    // Unidades de mundo por repetição da textura base.
+const GROUND_PATH_HALF = 2.7;   // Meia-largura de pedra do caminho.
+const GROUND_EDGE_HALF = 3.4;   // Meia-largura visível da transição grama↔pedra.
+const GROUND_FIELD_MAX = 18;    // Maior distância codificada no campo de trilhas.
+
+function groundPublicUrl(path: string): string {
+  const base = import.meta.env.BASE_URL || '/';
+  return `${base}${path.replace(/^\/+/, '')}`;
+}
+
+function loadGroundTexture(path: string, clampVertical: boolean): THREE.Texture {
+  const texture = new THREE.TextureLoader().load(groundPublicUrl(path));
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = clampVertical ? THREE.ClampToEdgeWrapping : THREE.RepeatWrapping;
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = 4;
+  return texture;
+}
+
+/**
+ * Campo de distância até as trilhas (r = d / MAX), com 1 unidade de mundo por
+ * texel. É a máscara que decide onde há pedra e a orientação da transição.
+ */
+function createPathField(map: GameMap): THREE.DataTexture {
+  const res = map.tiles * 2;
+  const cell = WORLD_SIZE / res;
+  const data = new Uint8Array(res * res * 4);
+  for (let tz = 0; tz < res; tz++) {
+    for (let tx = 0; tx < res; tx++) {
+      const wx = -WORLD.half + (tx + 0.5) * cell;
+      const wz = -WORLD.half + (tz + 0.5) * cell;
+      const d = Math.min(distanceToTrails(wx, wz), GROUND_FIELD_MAX) / GROUND_FIELD_MAX;
+      const v = Math.round(d * 255);
+      const i = (tz * res + tx) * 4;
+      data[i] = v; data[i + 1] = v; data[i + 2] = v; data[i + 3] = 255;
+    }
+  }
+  const texture = new THREE.DataTexture(data, res, res, THREE.RGBAFormat);
+  texture.needsUpdate = true;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.wrapS = texture.wrapT = THREE.ClampToEdgeWrapping;
+  return texture;
+}
+
+/** Material do terreno que mistura grama, pedra e a transição ao longo do caminho. */
+function createGroundMaterial(field: THREE.DataTexture): THREE.MeshStandardMaterial {
+  const grass = loadGroundTexture(GROUND_TILE_URLS.grass, false);
+  const stone = loadGroundTexture(GROUND_TILE_URLS.stone, false);
+  const edge = loadGroundTexture(GROUND_TILE_URLS.edge, true);
+
+  const material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.97, metalness: 0 });
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.uGroundGrass = { value: grass };
+    shader.uniforms.uGroundStone = { value: stone };
+    shader.uniforms.uGroundEdge = { value: edge };
+    shader.uniforms.uGroundField = { value: field };
+    shader.uniforms.uGroundHalf = { value: WORLD.half };
+    shader.uniforms.uGroundSize = { value: WORLD_SIZE };
+    shader.uniforms.uGroundPathHalf = { value: GROUND_PATH_HALF };
+    shader.uniforms.uGroundEdgeHalf = { value: GROUND_EDGE_HALF };
+    shader.uniforms.uGroundTileWorld = { value: GROUND_TILE_WORLD };
+    shader.uniforms.uGroundFieldMax = { value: GROUND_FIELD_MAX };
+    shader.uniforms.uGroundFieldTexel = { value: WORLD_SIZE / field.image.width };
+
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vGroundWorld;')
+      .replace(
+        '#include <begin_vertex>',
+        '#include <begin_vertex>\n  vGroundWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;',
+      );
+
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>
+        varying vec3 vGroundWorld;
+        uniform sampler2D uGroundGrass;
+        uniform sampler2D uGroundStone;
+        uniform sampler2D uGroundEdge;
+        uniform sampler2D uGroundField;
+        uniform float uGroundHalf;
+        uniform float uGroundSize;
+        uniform float uGroundPathHalf;
+        uniform float uGroundEdgeHalf;
+        uniform float uGroundTileWorld;
+        uniform float uGroundFieldMax;
+        uniform float uGroundFieldTexel;
+        float groundHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123); }
+        float groundFieldAt(vec2 world) {
+          vec2 uv = clamp((world + vec2(uGroundHalf)) / uGroundSize, 0.0, 1.0);
+          return texture2D(uGroundField, uv).r * uGroundFieldMax;
+        }`)
+      .replace('#include <map_fragment>', `
+        vec2 groundWorld = vGroundWorld.xz;
+        float groundDist = groundFieldAt(groundWorld);
+        float groundEps = uGroundFieldTexel;
+        float groundDX = groundFieldAt(groundWorld + vec2(groundEps, 0.0)) - groundFieldAt(groundWorld - vec2(groundEps, 0.0));
+        float groundDZ = groundFieldAt(groundWorld + vec2(0.0, groundEps)) - groundFieldAt(groundWorld - vec2(0.0, groundEps));
+        vec2 groundGrad = normalize(vec2(groundDX, groundDZ) + vec2(1e-4));
+        float groundWobble = (groundHash(floor(groundWorld * 1.7)) - 0.5) * 0.8;
+        float groundD = groundDist + groundWobble;
+        vec2 groundUv = groundWorld / uGroundTileWorld;
+        vec3 groundGrass = texture2D(uGroundGrass, groundUv).rgb;
+        vec3 groundStone = texture2D(uGroundStone, groundUv).rgb;
+        float groundStoneMask = 1.0 - smoothstep(uGroundPathHalf - 0.7, uGroundPathHalf + 0.7, groundD);
+        vec3 groundPlain = mix(groundGrass, groundStone, groundStoneMask);
+        vec2 groundTangent = vec2(-groundGrad.y, groundGrad.x);
+        float groundV = 0.5 + (groundD - uGroundPathHalf) / (2.0 * uGroundEdgeHalf);
+        float groundU = dot(groundWorld, groundTangent) / uGroundTileWorld;
+        vec3 groundEdge = texture2D(uGroundEdge, vec2(groundU, groundV)).rgb;
+        float groundEdgeWeight = 1.0 - smoothstep(0.6, 1.0, abs(2.0 * groundV - 1.0));
+        diffuseColor.rgb = mix(groundPlain, groundEdge, groundEdgeWeight);
+      `);
+  };
+  material.customProgramCacheKey = () => 'ground-splat-v1';
+  return material;
+}
+
+// ---------- Piso da cripta: praça escura com borda suave + círculo rúnico ----------
+// Em vez de um disco chapado de borda dura, o piso some suavemente na grama e o
+// anel de runas fica brilhando no chão (material sem luz) marcando o raio diário.
+const CRYPT_DECAL_RADIUS = 16;
+const CRYPT_RUNE_RADIUS = 14; // alinha com CRYPT_RADIUS (confinamento diurno)
+
+function cryptDecalCanvas(runes: boolean): HTMLCanvasElement {
+  const SZ = 512, R = SZ / 2;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = SZ;
+  const ctx = canvas.getContext('2d')!;
+  if (!runes) {
+    const plaza = ctx.createRadialGradient(R, R, 0, R, R, R);
+    plaza.addColorStop(0.0, 'rgba(52,45,64,0.72)');
+    plaza.addColorStop(0.55, 'rgba(41,35,52,0.62)');
+    plaza.addColorStop(0.80, 'rgba(30,24,41,0.32)');
+    plaza.addColorStop(1.0, 'rgba(24,18,32,0)');
+    ctx.fillStyle = plaza;
+    ctx.beginPath(); ctx.arc(R, R, R, 0, Math.PI * 2); ctx.fill();
+    // Pedra manchada, determinística, para o piso não ficar liso.
+    for (let i = 0; i < 2600; i++) {
+      const a = i * 2.399963, rr = Math.sqrt(((i * 37) % 101) / 101) * R * 0.94;
+      const x = R + Math.cos(a) * rr, y = R + Math.sin(a) * rr;
+      const s = 1 + (i % 3);
+      ctx.fillStyle = i % 2 ? 'rgba(84,72,104,0.05)' : 'rgba(0,0,0,0.07)';
+      ctx.fillRect(x, y, s, s);
+    }
+    return canvas;
+  }
+  // Camada rúnica (transparente fora das linhas).
+  const ring = R * (CRYPT_RUNE_RADIUS / CRYPT_DECAL_RADIUS);
+  ctx.save();
+  ctx.translate(R, R);
+  ctx.shadowColor = 'rgba(255,64,96,0.9)';
+  ctx.shadowBlur = 9;
+  ctx.strokeStyle = 'rgba(214,68,92,0.92)';
+  for (const scale of [0.9, 1, 1.05]) {
+    ctx.lineWidth = scale === 1 ? 3 : 1.6;
+    ctx.beginPath(); ctx.arc(0, 0, ring * scale, 0, Math.PI * 2); ctx.stroke();
+  }
+  ctx.lineWidth = 2.4;
+  for (let i = 0; i < 64; i++) {
+    const a = (i / 64) * Math.PI * 2;
+    const major = i % 4 === 0;
+    const inner = ring * (major ? 0.78 : 0.88);
+    const outer = ring * (major ? 1.12 : 1.03);
+    ctx.beginPath();
+    ctx.moveTo(Math.cos(a) * inner, Math.sin(a) * inner);
+    ctx.lineTo(Math.cos(a) * outer, Math.sin(a) * outer);
+    ctx.stroke();
+  }
+  // Glifos internos, como um selo arcano.
+  ctx.lineWidth = 2.4;
+  for (let i = 0; i < 3; i++) {
+    const r2 = ring * (0.34 + i * 0.17);
+    ctx.beginPath(); ctx.arc(0, 0, r2, i * 1.15 + 0.3, i * 1.15 + 2.0); ctx.stroke();
+  }
+  ctx.restore();
+  return canvas;
+}
+
+function cryptDecalTexture(runes: boolean): THREE.CanvasTexture {
+  const texture = new THREE.CanvasTexture(cryptDecalCanvas(runes));
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = 4;
+  return texture;
+}
 
 
 export class GameScene {
@@ -37,8 +280,7 @@ export class GameScene {
   private unitMeshes = new Map<number, THREE.Group>();
   private buildingMeshes = new Map<number, THREE.Group>();
   private nodeMeshes = new Map<number, THREE.Group>();
-  private woodTrunks: THREE.InstancedMesh | null = null;
-  private woodCrowns: THREE.InstancedMesh | null = null;
+  private woodInstances: THREE.InstancedMesh[] = [];
   private woodKey = '';
   private hpBars = new Map<number, THREE.Mesh>();
   private selectionRings = new Map<number, THREE.Mesh>();
@@ -53,8 +295,33 @@ export class GameScene {
   private towerRanges = new Map<'placement' | 'selection', THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>>();
   private mapOccluders: THREE.Mesh[] = [];
   private unitReveal = new UnitReveal();
+  private localOwner = -1;
+  private visionSources: Array<{
+    x: number; z: number; r: number; dir: number; cone: boolean;
+    unitId?: number; buildingId?: number;
+    cosOuter: number; cosInner: number; peripheral: number; core: number;
+  }> = [];
+  // Direção para onde cada unidade aliada olha (derivada do movimento/alvo).
+  private unitHeading = new Map<number, number>();
+  private unitPrev = new Map<number, { x: number; z: number }>();
+  // Sombra de guerra: sobreposição em tela cheia que escurece o terreno fora da
+  // visão do time. Os círculos de visão vão como uniforms (sem textura por tick).
+  private fogScene = new THREE.Scene();
+  private fogCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  private fogMesh!: THREE.Mesh;
+  private fogUniforms = {
+    uInvViewProj: { value: new THREE.Matrix4() },
+    uVision: { value: Array.from({ length: MAX_VISION_SOURCES }, () => new THREE.Vector4()) },
+    uVisionDir: { value: Array.from({ length: MAX_VISION_SOURCES }, () => new THREE.Vector2()) },
+    uVisionShape: { value: Array.from({ length: MAX_VISION_SOURCES }, () => new THREE.Vector4()) },
+    uVisionCount: { value: 0 },
+    uWorldHalf: { value: WORLD.half },
+    uGroundY: { value: 3.2 },
+    uFogColor: { value: new THREE.Color(0x0b1424) },
+    uFogStrength: { value: FOG_DAY_STRENGTH },
+  };
   private animationTime = 0;
-  private effects: Array<{ object: THREE.Object3D; age: number; lifetime: number; velocity: THREE.Vector3; spin: boolean; onComplete?: () => void }> = [];
+  private effects: Array<{ object: THREE.Object3D; age: number; lifetime: number; velocity: THREE.Vector3; spin: boolean; growth: number; onComplete?: () => void }> = [];
 
   constructor(container: HTMLElement, seed: number) {
     this.container = container;
@@ -78,7 +345,7 @@ export class GameScene {
     this.camera.position.set(0, groundHeight + initialDistance * RTS_CAMERA.elevation, initialDistance * RTS_CAMERA.depth);
     this.camera.lookAt(0, groundHeight, 0);
 
-    this.fog = new THREE.Fog(0x8a9db8, 240, 900);
+    this.fog = new THREE.Fog(0x8a9db8, 110, 420);
     this.scene.fog = this.fog;
 
     this.hemi = new THREE.HemisphereLight(0xbfd4ff, 0x3a4a33, 0.9);
@@ -94,6 +361,7 @@ export class GameScene {
 
     this.buildTerrain();
     this.buildFixedMap();
+    this.buildFogOfWar();
     window.addEventListener('resize', () => this.onResize());
   }
 
@@ -115,12 +383,13 @@ export class GameScene {
     const pos = geo.attributes.position as THREE.BufferAttribute;
     const colors = new Float32Array(pos.count * 3);
 
-    const cGrass = new THREE.Color('#415549');
-    const cDry = new THREE.Color('#65654b');
-    const cRock = new THREE.Color('#65717a');
-    const cSand = new THREE.Color('#7a7864');
-    const cTrail = new THREE.Color('#a58d63');
-    const cClearing = new THREE.Color('#757858');
+    // Tons suaves aplicados sobre a textura pintada: areia no litoral, terra
+    // seca em altitude e clareiras. A pedra do caminho vem do shader.
+    const tWhite = new THREE.Color(1, 1, 1);
+    const tDry = new THREE.Color(0.9, 0.88, 0.74);
+    const tRock = new THREE.Color(0.82, 0.84, 0.86);
+    const tSand = new THREE.Color(1.14, 1.05, 0.78);
+    const tMeadow = new THREE.Color(1.02, 1.04, 0.86);
     const tmp = new THREE.Color();
 
     for (let iy = 0; iy <= seg; iy++) {
@@ -140,22 +409,18 @@ export class GameScene {
             if (nx2 < 0 || nz2 < 0 || nx2 >= n || nz2 >= n || this.map.water[nz2 * n + nx2]) { beach = true; break; }
           }
         }
-        if (this.map.water[i] || beach) tmp.copy(cSand).lerp(cRock, 0.2);
-        else if (h > 0.42) tmp.copy(cDry).lerp(cRock, Math.min(1, (h - 0.42) * 3.5));
-        else tmp.copy(cGrass).lerp(cDry, Math.max(0, (h - 0.2) * 1.6));
+        if (this.map.water[i] || beach) tmp.copy(tSand);
+        else if (h > 0.42) tmp.copy(tWhite).lerp(tRock, Math.min(1, (h - 0.42) * 3.5));
+        else tmp.copy(tWhite).lerp(tDry, Math.max(0, (h - 0.2) * 1.6));
         // Clareiras suaves na própria terra, sem pisos quadrados destacados.
         const wx = tx * WORLD.tileSize - WORLD.half, wz = tz * WORLD.tileSize - WORLD.half;
         for (const c of COMPOUNDS) {
           const d = Math.hypot((wx - c.x) / (c.width * 0.55), (wz - c.z) / (c.depth * 0.55));
-          if (d < 1.3) tmp.lerp(new THREE.Color('#72774b'), Math.max(0, 1 - d / 1.3) * 0.4);
+          if (d < 1.3) tmp.lerp(tMeadow, Math.max(0, 1 - d / 1.3) * 0.35);
         }
         if (!this.map.water[i]) {
-          const distance = distanceToTrails(wx, wz);
-          const edge = 2.1 + Math.sin(wx * 0.31 + wz * 0.27) * 0.2;
-          const trail = THREE.MathUtils.smoothstep(edge + 1.4 - distance, 0, 1.4);
           const clearing = Math.max(0, 1 - Math.hypot(wx, wz) / (13 + Math.sin(Math.atan2(wz, wx) * 3) * 2));
-          tmp.lerp(cClearing, clearing * 0.8);
-          tmp.lerp(cTrail, trail * (0.85 + Math.sin(wx * 1.2 + wz * 0.8) * 0.08));
+          tmp.lerp(tMeadow, clearing * 0.25);
         }
         colors[vi * 3] = tmp.r;
         colors[vi * 3 + 1] = tmp.g;
@@ -165,7 +430,7 @@ export class GameScene {
     geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     geo.computeVertexNormals();
 
-    const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
+    const mat = createGroundMaterial(createPathField(this.map));
     const terrain = new THREE.Mesh(geo, mat);
     terrain.receiveShadow = true;
     this.terrain = terrain;
@@ -184,6 +449,91 @@ export class GameScene {
     this.scene.add(water);
   }
 
+  /**
+   * Sombra de guerra: quad em tela cheia desenhado por último. Reconstrói a
+   * posição de mundo no plano do chão e escurece o que estiver fora da visão.
+   * Unidades projetam um cone frontal suave (olho humano) com queda por
+   * distância e uma percepção periférica curta; prédios veem em volta. Escurece
+   * terreno, árvores e prédios inimigos; aliados ficam iluminados por serem
+   * fontes de visão.
+   */
+  private buildFogOfWar() {
+    const material = new THREE.ShaderMaterial({
+      uniforms: this.fogUniforms,
+      transparent: true,
+      depthTest: false,
+      depthWrite: false,
+      vertexShader: `
+        varying vec2 vUv;
+        void main() {
+          vUv = uv;
+          gl_Position = vec4(position.xy, 0.0, 1.0);
+        }
+      `,
+      fragmentShader: `
+        varying vec2 vUv;
+        uniform mat4 uInvViewProj;
+        uniform vec4 uVision[${MAX_VISION_SOURCES}];
+        uniform vec2 uVisionDir[${MAX_VISION_SOURCES}];
+        uniform vec4 uVisionShape[${MAX_VISION_SOURCES}];
+        uniform int uVisionCount;
+        uniform float uWorldHalf;
+        uniform float uGroundY;
+        uniform vec3 uFogColor;
+        uniform float uFogStrength;
+
+        void main() {
+          vec4 nearW = uInvViewProj * vec4(vUv * 2.0 - 1.0, -1.0, 1.0);
+          vec4 farW = uInvViewProj * vec4(vUv * 2.0 - 1.0, 1.0, 1.0);
+          vec3 nearP = nearW.xyz / nearW.w;
+          vec3 farP = farW.xyz / farW.w;
+          vec3 dir = farP - nearP;
+          if (abs(dir.y) < 1e-5) discard;
+          // Interseção do raio com o plano médio do chão (aproxima o relevo).
+          float t = (uGroundY - nearP.y) / dir.y;
+          if (t < 0.0 || t > 1.0) discard;
+          vec2 world = nearP.xz + dir.xz * t;
+          if (abs(world.x) > uWorldHalf || abs(world.y) > uWorldHalf) discard;
+
+          float vis = 0.0;
+          for (int i = 0; i < ${MAX_VISION_SOURCES}; i++) {
+            if (i >= uVisionCount) break;
+            vec4 s = uVision[i];
+            vec4 shape = uVisionShape[i];
+            float d = distance(world, s.xy);
+            // Queda contínua de nitidez (fóvea → periferia) com a distância.
+            float radial = 1.0 - smoothstep(s.z * shape.w, s.z, d);
+            float coverage;
+            if (s.w > 0.5) {
+              // Olho humano: cone frontal suave + percepção periférica curta.
+              float peripheralR = s.z * shape.z;
+              float peripheral = 1.0 - smoothstep(peripheralR * 0.35, peripheralR, d);
+              vec2 toPoint = world - s.xy;
+              float cosA = d > 1e-4 ? dot(toPoint / d, uVisionDir[i]) : 1.0;
+              float angular = smoothstep(shape.x, shape.y, cosA);
+              float cone = radial * angular;
+              // União suave cone+periferia: sem a "quina" que o max criava.
+              coverage = cone + peripheral - cone * peripheral;
+            } else {
+              coverage = radial;
+            }
+            // União suave entre fontes, para não criar vincos onde elas se cruzam.
+            vis = vis + coverage - vis * coverage;
+          }
+          float alpha = (1.0 - vis) * uFogStrength;
+          // Ruído ordenado de ~1/255 evita faixas no degradê da sombra.
+          float grain = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+          alpha += (grain - 0.5) / 255.0;
+          if (alpha < 0.004) discard;
+          gl_FragColor = vec4(uFogColor, alpha);
+        }
+      `,
+    });
+    this.fogMesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material);
+    this.fogMesh.frustumCulled = false;
+    this.fogScene.add(this.fogMesh);
+  }
+
   private buildFixedMap() {
     // Um lampião baixo sinaliza a passagem entre as encostas.
     for (const c of COMPOUNDS) {
@@ -194,15 +544,27 @@ export class GameScene {
       lamp.position.set(x, this.heightAt(x, z) + 1.2, z);
       this.scene.add(lamp);
     }
+    // As bases humanas são montadas com o aglomerado de pedra (GLB): cada
+    // obstáculo da encosta vira uma pilha, com altura limitada para não virar
+    // agulha. Sem o GLB, mantém o maciço procedural.
+    const stone = assetRegistry.propInstance('prop:rock:stone-cluster');
+    const stoneMatrices: THREE.Matrix4[] = [];
     const mountainTransforms: THREE.Matrix4[][] = Array.from({ length: 4 }, () => []);
     const rockDummy = new THREE.Object3D();
     const mossTransforms: THREE.Matrix4[] = [];
     for (const [i, wall] of this.map.obstacles.entries()) {
-      const base = this.heightAt(wall.x, wall.z) - 0.5;
-      rockDummy.rotation.set(0, (i % 4) * Math.PI / 2, 0);
-      rockDummy.scale.set(wall.width, wall.height, wall.depth);
-      rockDummy.position.set(wall.x, base, wall.z);
-      rockDummy.updateMatrix(); mountainTransforms[i % 4]!.push(rockDummy.matrix.clone());
+      const base = this.heightAt(wall.x, wall.z) - (stone ? 0.4 : 0.5);
+      if (stone) {
+        rockDummy.rotation.set(0, (i % 4) * Math.PI / 2 + Math.sin(i * 1.7) * 0.4, 0);
+        rockDummy.scale.set(wall.width / 3.5, Math.min(wall.height, 7.5) / 2.35, wall.depth / 3.4);
+        rockDummy.position.set(wall.x, base, wall.z);
+        rockDummy.updateMatrix(); stoneMatrices.push(rockDummy.matrix.clone());
+      } else {
+        rockDummy.rotation.set(0, (i % 4) * Math.PI / 2, 0);
+        rockDummy.scale.set(wall.width, wall.height, wall.depth);
+        rockDummy.position.set(wall.x, base, wall.z);
+        rockDummy.updateMatrix(); mountainTransforms[i % 4]!.push(rockDummy.matrix.clone());
+      }
       // Musgo nas saliências, em manchas grandes e irregulares.
       if (i % 4 === 0) {
         rockDummy.position.set(wall.x + wall.width * 0.14, base + wall.height * 0.53, wall.z + wall.depth * 0.21);
@@ -210,18 +572,65 @@ export class GameScene {
         rockDummy.updateMatrix(); mossTransforms.push(rockDummy.matrix.clone());
       }
     }
-    mountainTransforms.forEach((transforms, variant) => {
-      const mountains = new THREE.InstancedMesh(createMountainGeometry(variant),
-        new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }), transforms.length);
-      transforms.forEach((matrix, i) => mountains.setMatrixAt(i, matrix));
-      mountains.castShadow = true; mountains.receiveShadow = true;
-      this.unitReveal.apply(mountains);
-      this.scene.add(mountains); this.mapOccluders.push(mountains);
-    });
+    if (!stone) {
+      mountainTransforms.forEach((transforms, variant) => {
+        const mountains = new THREE.InstancedMesh(createMountainGeometry(variant),
+          new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }), transforms.length);
+        transforms.forEach((matrix, i) => mountains.setMatrixAt(i, matrix));
+        mountains.castShadow = true; mountains.receiveShadow = true;
+        this.unitReveal.apply(mountains);
+        this.scene.add(mountains); this.mapOccluders.push(mountains);
+      });
+    }
     const moss = new THREE.InstancedMesh(createRockGeometry(3), new THREE.MeshLambertMaterial({ color: '#4c6242' }), mossTransforms.length);
     mossTransforms.forEach((matrix, i) => moss.setMatrixAt(i, matrix));
     this.unitReveal.apply(moss);
     this.scene.add(moss);
+
+    // Pedras soltas espalhadas pelo chão plano, no mesmo InstancedMesh.
+    if (stone) {
+      const scatter = new THREE.Object3D();
+      const step = 11, half = WORLD.half - 6;
+      for (let gx = -half; gx <= half; gx += step) {
+        for (let gz = -half; gz <= half; gz += step) {
+          const h = Math.abs(Math.sin(gx * 12.9898 + gz * 78.233) * 43758.5453) % 1;
+          if (h > 0.5) continue;
+          const x = gx + (h * 2 - 1) * step * 0.38;
+          const z = gz + (((h * 7) % 1) * 2 - 1) * step * 0.38;
+          if (!isLandAt(x, z) || isWaterAtWorld(x, z)) continue;
+          if (distanceToTrails(x, z) < 3.5) continue;
+          if (Math.hypot(x, z) < 12) continue;
+          if (Math.hypot(x - CRYPT_POSITION.x, z - CRYPT_POSITION.z) < 15) continue;
+          if (COMPOUNDS.some(c => Math.abs(x - c.x) < c.width / 2 + 3 && Math.abs(z - c.z) < c.depth / 2 + 3)) continue;
+          const s = 0.5 + h * 0.7;
+          scatter.position.set(x, this.heightAt(x, z) - 0.2, z);
+          scatter.rotation.set(0, h * Math.PI * 2, 0);
+          scatter.scale.set(s, s * (0.85 + h * 0.3), s);
+          scatter.updateMatrix();
+          stoneMatrices.push(scatter.matrix.clone());
+        }
+      }
+    }
+    if (stone) {
+      if (stoneMatrices.length) {
+        const rocks = new THREE.InstancedMesh(stone.geometry, stone.material.clone(), stoneMatrices.length);
+        const rockTint = new THREE.Color();
+        stoneMatrices.forEach((matrix, i) => {
+          rocks.setMatrixAt(i, matrix);
+          const shade = 0.8 + ((i * 61) % 100) / 100 * 0.28;
+          rocks.setColorAt(i, rockTint.setRGB(shade * 0.98, shade * 0.99, shade));
+        });
+        rocks.castShadow = true;
+        rocks.receiveShadow = true;
+        rocks.instanceMatrix.needsUpdate = true;
+        if (rocks.instanceColor) rocks.instanceColor.needsUpdate = true;
+        this.unitReveal.apply(rocks);
+        this.scene.add(rocks);
+        this.mapOccluders.push(rocks);
+      } else {
+        stone.geometry.dispose();
+      }
+    }
     // Pontes sobre os rios.
     const plankMat = new THREE.MeshLambertMaterial({ color: '#6b5236' });
     const railMat = new THREE.MeshLambertMaterial({ color: '#4a3827' });
@@ -256,8 +665,8 @@ export class GameScene {
         this.scene.add(plank);
       }
     }
-    // Base do vampiro: piso sombrio e círculo rúnico. O terreno sobe perto da
-    // borda norte, então cada vértice acompanha a altura para o círculo fechar.
+    // Base do vampiro: praça escura de borda suave e anel rúnico brilhante.
+    // Cada vértice acompanha o terreno para o piso assentar no platô.
     const drape = (geo: THREE.BufferGeometry, lift: number) => {
       const pos = geo.attributes.position as THREE.BufferAttribute;
       for (let i = 0; i < pos.count; i++) {
@@ -266,18 +675,23 @@ export class GameScene {
       pos.needsUpdate = true;
       geo.computeVertexNormals();
     };
-    const baseGeo = new THREE.RingGeometry(0.02, 16, 64, 8);
-    baseGeo.rotateX(-Math.PI / 2);
-    drape(baseGeo, 0.02);
-    const base = new THREE.Mesh(baseGeo, new THREE.MeshLambertMaterial({ color: 0x2a2130 }));
-    base.position.set(CRYPT_POSITION.x, 0, CRYPT_POSITION.z);
-    this.scene.add(base);
-    const runeGeo = new THREE.RingGeometry(14.2, 14.6, 64, 1);
-    runeGeo.rotateX(-Math.PI / 2);
-    drape(runeGeo, 0.05);
-    const rune = new THREE.Mesh(runeGeo, new THREE.MeshBasicMaterial({ color: 0x8e2a35 }));
-    rune.position.set(CRYPT_POSITION.x, 0, CRYPT_POSITION.z);
-    this.scene.add(rune);
+    const decalAt = (map: THREE.Texture, lift: number, lit: boolean, order: number, factor: number) => {
+      const geo = new THREE.CircleGeometry(CRYPT_DECAL_RADIUS, 128);
+      geo.rotateX(-Math.PI / 2);
+      drape(geo, lift);
+      const mat = lit
+        ? new THREE.MeshLambertMaterial({ map, transparent: true, depthWrite: false })
+        : new THREE.MeshBasicMaterial({ map, transparent: true, depthWrite: false });
+      mat.polygonOffset = true;
+      mat.polygonOffsetFactor = factor;
+      mat.polygonOffsetUnits = factor * 2;
+      const decal = new THREE.Mesh(geo, mat);
+      decal.position.set(CRYPT_POSITION.x, 0, CRYPT_POSITION.z);
+      decal.renderOrder = order;
+      this.scene.add(decal);
+    };
+    decalAt(cryptDecalTexture(false), 0.05, true, 1, -2);
+    decalAt(cryptDecalTexture(true), 0.10, false, 2, -6);
   }
 
   /** altura do terreno em coordenadas de mundo */
@@ -298,9 +712,118 @@ export class GameScene {
       d + (c - d) * (1 - fx) + (b - d) * (1 - fz);
   }
 
+  /** Define o jogador local; a visão do time esconde inimigos fora do alcance. */
+  setLocalPlayer(owner: number) {
+    this.localOwner = owner;
+  }
+
+  private computeVision(snap: Snapshot) {
+    const sources: typeof this.visionSources = [];
+    const myTeam = teamOf(this.localOwner);
+    if (this.localOwner >= 0 && myTeam !== 'neutral') {
+      const nodeById = new Map(snap.nodes.map((n) => [n.id, n] as const));
+      const buildingById = new Map(snap.buildings.map((b) => [b.id, b] as const));
+      const unitById = new Map(snap.units.map((u) => [u.id, u] as const));
+      const heading = new Map<number, number>();
+      const prev = new Map<number, { x: number; z: number }>();
+      for (const u of snap.units) {
+        if (teamOf(u.owner) !== myTeam) continue;
+        // Direção do olhar: para onde anda; parado, para o alvo da ordem.
+        let dir = this.unitHeading.get(u.id) ?? 0;
+        const before = this.unitPrev.get(u.id);
+        let moved = false;
+        if (before) {
+          const mx = u.x - before.x, mz = u.z - before.z;
+          if (mx * mx + mz * mz > 0.01) { dir = Math.atan2(mx, mz); moved = true; }
+        }
+        if (!moved && u.targetId != null) {
+          const target = nodeById.get(u.targetId) ?? buildingById.get(u.targetId) ?? unitById.get(u.targetId);
+          if (target) {
+            const tx = target.x - u.x, tz = target.z - u.z;
+            if (tx * tx + tz * tz > 0.01) dir = Math.atan2(tx, tz);
+          }
+        }
+        heading.set(u.id, dir);
+        prev.set(u.id, { x: u.x, z: u.z });
+        // O vampiro enxerga mais longe e num cone mais amplo que os humanos,
+        // mas de dia o humano leva vantagem (e à noite o vampiro).
+        const profile = u.kind === 'vampire' ? VAMPIRE_VISION : HUMAN_VISION;
+        const phase = snap.phase;
+        const group = u.kind === 'vampire' ? 'vampire' : 'human';
+        const radius = (UNIT_VISION[u.kind] ?? 16) * VISION_SCALE * PHASE_VISION[group][phase];
+        sources.push({ x: u.x, z: u.z, r: radius, dir, cone: true, unitId: u.id, ...profile });
+      }
+      this.unitHeading = heading;
+      this.unitPrev = prev;
+      for (const b of snap.buildings) {
+        if (teamOf(b.owner) !== myTeam) continue;
+        const radius = (BUILDING_VISION[b.kind] ?? 12) * VISION_SCALE * PHASE_VISION[myTeam][snap.phase];
+        sources.push({ x: b.x, z: b.z, r: radius, dir: 0, cone: false, buildingId: b.id, ...HUMAN_VISION });
+      }
+    } else {
+      this.unitHeading.clear();
+      this.unitPrev.clear();
+    }
+    this.visionSources = sources;
+  }
+
+  private isVisibleToLocal(owner: number, x: number, z: number): boolean {
+    if (this.localOwner < 0) return true;
+    if (owner < 0) return true;
+    if (teamOf(owner) === teamOf(this.localOwner)) return true;
+    for (const s of this.visionSources) {
+      const dx = x - s.x, dz = z - s.z;
+      const d2 = dx * dx + dz * dz;
+      if (!s.cone) {
+        if (d2 <= s.r * s.r) return true;
+        continue;
+      }
+      // Mesma regra do shader: periferia curta em 360° + cone frontal.
+      const peripheral = s.r * s.peripheral;
+      if (d2 <= peripheral * peripheral) return true;
+      if (d2 > s.r * s.r) continue;
+      const d = Math.sqrt(d2);
+      const cos = (dx * Math.sin(s.dir) + dz * Math.cos(s.dir)) / d;
+      if (cos >= s.cosOuter) return true;
+    }
+    return false;
+  }
+
+  /** Atualiza os círculos/cone de visão usados pela sombra de guerra. */
+  private updateFogVision() {
+    const uniforms = this.fogUniforms;
+    let sources = this.visionSources;
+    if (this.localOwner < 0 || sources.length === 0) {
+      uniforms.uVisionCount.value = 0;
+      return;
+    }
+    // A visão segue o modelo já interpolado (posição e facing por frame), não a
+    // posição discreta do snapshot — andando, a luz deixa de atrasar/saltar.
+    for (const s of sources) {
+      const mesh = s.unitId !== undefined ? this.unitMeshes.get(s.unitId)
+        : s.buildingId !== undefined ? this.buildingMeshes.get(s.buildingId) : undefined;
+      if (!mesh) continue;
+      s.x = mesh.position.x;
+      s.z = mesh.position.z;
+      if (s.cone) s.dir = mesh.rotation.y;
+    }
+    if (sources.length > MAX_VISION_SOURCES) {
+      // Mantém as maiores visões quando o time tem muitas fontes.
+      sources = [...sources].sort((a, b) => b.r - a.r).slice(0, MAX_VISION_SOURCES);
+    }
+    for (let i = 0; i < sources.length; i++) {
+      const s = sources[i]!;
+      uniforms.uVision.value[i]!.set(s.x, s.z, s.r, s.cone ? 1 : 0);
+      uniforms.uVisionShape.value[i]!.set(s.cosOuter, s.cosInner, s.peripheral, s.core);
+      if (s.cone) uniforms.uVisionDir.value[i]!.set(Math.sin(s.dir), Math.cos(s.dir));
+    }
+    uniforms.uVisionCount.value = sources.length;
+  }
+
   // ---------- sync de entidades ----------
 
   sync(snap: Snapshot) {
+    this.computeVision(snap);
     const seenUnits = new Set<number>();
     for (const u of snap.units) {
       seenUnits.add(u.id);
@@ -326,8 +849,13 @@ export class GameScene {
       if (target && (u.activity === 'gathering' || u.activity === 'building' || u.activity === 'repairing' || u.activity === 'attacking')) {
         g.rotation.y = Math.atan2(target.x - g.position.x, target.z - g.position.z);
       }
+      const visible = this.isVisibleToLocal(u.owner, u.x, u.z);
+      g.visible = visible;
+      g.userData.visionVisible = visible;
       if (!g.userData.bar) this.addHealthBar(g, u.id);
       this.updateHealthBar(u.id, u.hp, u.maxHp);
+      const bar = this.hpBars.get(u.id);
+      if (bar) bar.visible = visible;
     }
     // remove mortos
     for (const [id, g] of this.unitMeshes) {
@@ -427,25 +955,61 @@ export class GameScene {
     }
   }
 
-  /** Bosques coletáveis: quatro árvores por nó em duas chamadas instanciadas. */
+  /** Bosques coletáveis: quatro árvores por nó, instanciadas em uma ou duas chamadas. */
   private syncWoodNodes(wood: Array<{ id: number; x: number; z: number }>) {
     const key = wood.map(n => n.id).join(',');
     if (key === this.woodKey) return;
     this.woodKey = key;
-    if (this.woodTrunks) {
-      this.scene.remove(this.woodTrunks);
-      this.woodTrunks.geometry.dispose();
-      (this.woodTrunks.material as THREE.Material).dispose();
-      this.woodTrunks = null;
+    for (const instances of this.woodInstances) {
+      this.scene.remove(instances);
+      instances.geometry.dispose();
+      (instances.material as THREE.Material).dispose();
     }
-    if (this.woodCrowns) {
-      this.scene.remove(this.woodCrowns);
-      this.woodCrowns.geometry.dispose();
-      (this.woodCrowns.material as THREE.Material).dispose();
-      this.woodCrowns = null;
-    }
-    const PER = 4;
+    this.woodInstances = [];
+
     const ids: number[] = [];
+    const m = new THREE.Matrix4();
+    const rotation = new THREE.Quaternion(), scale = new THREE.Vector3(), position = new THREE.Vector3();
+    const up = new THREE.Vector3(0, 1, 0);
+    let k = 0;
+
+    // GLB decimado da árvore: uma malha instanciada por nó (tronco + copa juntos).
+    // Uma árvore por nó e sem sombra; cor e escala variam por instância.
+    const tree = assetRegistry.propInstance('prop:tree:evergreen');
+    if (tree) {
+      const trees = new THREE.InstancedMesh(tree.geometry, tree.material.clone(), Math.max(1, wood.length));
+      trees.castShadow = false;
+      trees.receiveShadow = false;
+      this.unitReveal.apply(trees);
+      const treeTint = new THREE.Color();
+      for (const nd of wood) {
+        const a = nd.id * 2.4;
+        const h1 = ((nd.id * 13) % 9) / 9;
+        const h2 = ((nd.id * 29) % 7) / 7;
+        const size = 0.68 + h1 * 0.5;
+        rotation.setFromAxisAngle(up, a);
+        scale.set(size * (0.82 + h2 * 0.16), size * (0.92 + h1 * 0.25), size * (0.82 + h2 * 0.16));
+        const x = nd.x + Math.sin(a) * 0.5, z = nd.z + Math.cos(a) * 0.5;
+        position.set(x, this.heightAt(x, z), z);
+        m.compose(position, rotation, scale);
+        trees.setMatrixAt(k, m);
+        const shade = 0.8 + ((nd.id * 37) % 100) / 100 * 0.3;
+        treeTint.setRGB(shade * 0.93, shade, shade * 0.86);
+        trees.setColorAt(k, treeTint);
+        ids.push(nd.id);
+        k++;
+      }
+      trees.count = k;
+      trees.instanceMatrix.needsUpdate = true;
+      if (trees.instanceColor) trees.instanceColor.needsUpdate = true;
+      trees.userData.woodNodeIds = ids;
+      this.woodInstances = [trees];
+      this.scene.add(trees);
+      return;
+    }
+
+    const PER = 4;
+    // Fallback procedural: troncos e copas em duas chamadas instanciadas.
     const trunks = new THREE.InstancedMesh(
       new THREE.CylinderGeometry(0.19, 0.35, 3, 7),
       new THREE.MeshLambertMaterial({ color: 0x493b31 }),
@@ -460,10 +1024,6 @@ export class GameScene {
     crowns.castShadow = true;
     this.unitReveal.apply(trunks);
     this.unitReveal.apply(crowns);
-    const m = new THREE.Matrix4();
-    const rotation = new THREE.Quaternion(), scale = new THREE.Vector3(), position = new THREE.Vector3();
-    const up = new THREE.Vector3(0, 1, 0);
-    let k = 0;
     for (const nd of wood) {
       for (let t = 0; t < PER; t++) {
         const a = nd.id * 2.4 + t * 2.1;
@@ -488,8 +1048,7 @@ export class GameScene {
     crowns.instanceMatrix.needsUpdate = true;
     trunks.userData.woodNodeIds = ids;
     crowns.userData.woodNodeIds = ids;
-    this.woodTrunks = trunks;
-    this.woodCrowns = crowns;
+    this.woodInstances = [trunks, crowns];
     this.scene.add(trunks, crowns);
   }
 
@@ -540,10 +1099,6 @@ export class GameScene {
       case 'keep': return 10.2;
       case 'taverna': return 8.2;
       case 'crypt': return 11.5;
-      case 'forge': return 6.6;
-      case 'relic': return 8.4;
-      case 'mist': return 7.2;
-      case 'shrine': return 7.4;
       default: return 8;
     }
   }
@@ -553,10 +1108,42 @@ export class GameScene {
     label.scale.set(180 * unit, 32 * unit, 1);
   }
 
-  private addEffect(object: THREE.Object3D, velocity: THREE.Vector3, lifetime: number, spin = false, onComplete?: () => void) {
+  private addEffect(object: THREE.Object3D, velocity: THREE.Vector3, lifetime: number, spin = false, onComplete?: () => void, growth = 0) {
     if (this.effects.length >= 100) this.disposeEffect(this.effects.shift()!.object);
     this.scene.add(object);
-    this.effects.push({ object, velocity, lifetime, age: 0, spin, onComplete });
+    this.effects.push({ object, velocity, lifetime, age: 0, spin, growth, onComplete });
+  }
+
+  /**
+   * Marcador do clique: anel que expande e some, com faíscas em volta.
+   * `color` diferencia seleção (dourado) de ordem (verde).
+   */
+  clickMarker(x: number, z: number, color = 0x9fe08a) {
+    const group = new THREE.Group();
+    group.position.set(x, this.heightAt(x, z) + 0.1, z);
+    group.renderOrder = 12;
+    const ring = (inner: number, outer: number, opacity: number) => {
+      const mesh = new THREE.Mesh(
+        new THREE.RingGeometry(inner, outer, 32),
+        new THREE.MeshBasicMaterial({ color, transparent: true, opacity, side: THREE.DoubleSide, depthWrite: false, depthTest: false, toneMapped: false }),
+      );
+      mesh.rotation.x = -Math.PI / 2;
+      return mesh;
+    };
+    group.add(ring(0.62, 0.82, 0.95));
+    group.add(ring(0.2, 0.34, 0.85));
+    for (let i = 0; i < 7; i++) {
+      const a = i * (Math.PI * 2 / 7) + 0.35;
+      const spark = new THREE.Mesh(
+        new THREE.BoxGeometry(0.1, 0.1, 0.1),
+        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.95, depthWrite: false, toneMapped: false }),
+      );
+      spark.position.set(Math.cos(a) * 0.55, 0.08, Math.sin(a) * 0.55);
+      spark.rotation.y = a;
+      group.add(spark);
+    }
+    group.scale.setScalar(0.45);
+    this.addEffect(group, new THREE.Vector3(0, 0, 0), 0.6, false, undefined, 1.9);
   }
 
   private disposeEffect(object: THREE.Object3D) {
@@ -710,7 +1297,7 @@ export class GameScene {
 
   unitScreenPosition(id: number): THREE.Vector3 | null {
     const g = this.unitMeshes.get(id);
-    if (!g) return null;
+    if (!g || !g.visible) return null;
     this.camera.updateMatrixWorld(true);
     return g.position.clone().add(new THREE.Vector3(0, g.userData.kind === 'vampire' ? 1.8 : 1, 0)).project(this.camera);
   }
@@ -752,6 +1339,7 @@ export class GameScene {
     }
     this.fog.color.copy(sky);
     this.scene.background = sky;
+    this.fogUniforms.uFogStrength.value = phase === 'night' ? FOG_NIGHT_STRENGTH : FOG_DAY_STRENGTH;
 
     // tochas piscam à noite
     if (phase === 'night' && this.torches.length === 0) {
@@ -764,8 +1352,7 @@ export class GameScene {
     for (let i = 0; i < this.torches.length; i++) {
       const pl = this.torches[i]!;
       // Tochas da vila: nunca nas estruturas da base do vampiro.
-      const b = [...this.buildingMeshes.values()].filter((g) => g.userData.done &&
-        !['crypt', 'forge', 'relic', 'mist', 'shrine'].includes(g.userData.kind));
+      const b = [...this.buildingMeshes.values()].filter((g) => g.userData.done && g.userData.kind !== 'crypt');
       if (b.length === 0) continue;
       const target = b[i % b.length]!;
       pl.position.set(target.position.x, this.heightAt(target.position.x, target.position.z) + 4, target.position.z);
@@ -788,7 +1375,7 @@ export class GameScene {
     this.scene.updateMatrixWorld(true);
     this.raycaster.setFromCamera(new THREE.Vector2(nx, ny), this.camera);
     // Unidades reveladas têm prioridade sobre copas/telhados que as encobrem.
-    const unitHit = this.raycaster.intersectObjects([...this.unitMeshes.values()], true)[0];
+    const unitHit = this.raycaster.intersectObjects([...this.unitMeshes.values()].filter(g => g.visible), true)[0];
     if (unitHit) {
       for (let o: THREE.Object3D | null = unitHit.object; o; o = o.parent) {
         if (o.userData.pick) return o.userData.pick;
@@ -798,7 +1385,8 @@ export class GameScene {
     const rect = this.renderer.domElement.getBoundingClientRect();
     let nearest = 10;
     let unitId: number | undefined;
-    for (const [id] of this.unitMeshes) {
+    for (const [id, g] of this.unitMeshes) {
+      if (!g.visible) continue;
       const p = this.unitScreenPosition(id)!;
       if (p.z < -1 || p.z > 1) continue;
       const d = Math.hypot((p.x - nx) * rect.width / 2, (p.y - ny) * rect.height / 2);
@@ -808,7 +1396,7 @@ export class GameScene {
     // Entre estruturas e recursos, conserva a ordem de profundidade.
     const hits = this.raycaster.intersectObjects([
       ...this.buildingMeshes.values(), ...this.nodeMeshes.values(),
-      ...(this.woodTrunks ? [this.woodTrunks, this.woodCrowns!] : []),
+      ...this.woodInstances,
       ...this.mapOccluders, this.terrain,
     ], true);
     const hit = hits[0];
@@ -825,7 +1413,25 @@ export class GameScene {
         }
       }
     }
-    return {};
+    // Muros e estruturas finas/vasadas são difíceis de acertar no pixel: se o
+    // raio caiu no chão, escolhe o prédio mais próximo na tela dentro da folga.
+    const buildingId = this.buildingAtScreen(nx, ny, rect);
+    return buildingId === undefined ? {} : { buildingId };
+  }
+
+  /** Prédio cujo centro projetado está mais perto do cursor, dentro da folga. */
+  private buildingAtScreen(nx: number, ny: number, rect: DOMRect): number | undefined {
+    let nearest = 28;
+    let found: number | undefined;
+    const center = new THREE.Vector3();
+    for (const [id, g] of this.buildingMeshes) {
+      new THREE.Box3().setFromObject(g).getCenter(center);
+      const v = center.project(this.camera);
+      if (v.z < -1 || v.z > 1) continue;
+      const d = Math.hypot((v.x - nx) * rect.width / 2, (v.y - ny) * rect.height / 2);
+      if (d < nearest) { nearest = d; found = id; }
+    }
+    return found;
   }
 
   render(dt: number) {
@@ -837,6 +1443,7 @@ export class GameScene {
         this.disposeEffect(effect.object); this.effects.splice(i, 1); effect.onComplete?.(); continue;
       }
       effect.object.position.addScaledVector(effect.velocity, dt);
+      if (effect.growth) effect.object.scale.addScalar(dt * effect.growth);
       if (effect.spin) effect.object.rotation.z += dt * 5;
       effect.object.traverse(object => {
         if (object instanceof THREE.Mesh || object instanceof THREE.Sprite) {
@@ -895,6 +1502,7 @@ export class GameScene {
       g.position.y = this.heightAt(g.position.x, g.position.z);
       const bar = g.userData.bar as THREE.Mesh | undefined;
       if (bar) {
+        bar.visible = g.visible;
         bar.position.set(g.position.x, g.position.y + (g.userData.healthBarHeight ?? 4.4), g.position.z);
         bar.quaternion.copy(this.camera.quaternion);
       }
@@ -912,6 +1520,16 @@ export class GameScene {
       if (g) ring.position.set(g.position.x, g.position.y + 0.15, g.position.z);
     }
     this.unitReveal.update(this.renderer, this.camera, this.unitMeshes);
+    // Atualiza a visão com as posições/facing já interpolados deste frame.
+    this.updateFogVision();
     this.renderer.render(this.scene, this.camera);
+    // Sombra de guerra por cima de tudo (sem teste de profundidade): reconstrói o
+    // mundo no shader e escurece o que está fora da visão do time.
+    if (this.fogUniforms.uVisionCount.value > 0) {
+      this.fogUniforms.uInvViewProj.value.multiplyMatrices(this.camera.matrixWorld, this.camera.projectionMatrixInverse);
+      this.renderer.autoClear = false;
+      this.renderer.render(this.fogScene, this.fogCamera);
+      this.renderer.autoClear = true;
+    }
   }
 }

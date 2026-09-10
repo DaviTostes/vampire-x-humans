@@ -46,7 +46,6 @@ import { canPlaceBuilding } from './placement.js';
 import {
   vampireItemBonuses,
   vampireItemCost,
-  vampireItemShop,
   vampireEffectiveCooldown,
   vampireEffectiveSpeed,
   vampireShopAccess,
@@ -88,7 +87,12 @@ function buildingById(s: GameState, id: number): Building | undefined {
 }
 
 function nextEntityId(s: GameState): number {
-  return Math.max(1000, ...s.buildings.map(b => b.id), ...s.units.map(u => u.id), ...s.nodes.map(n => n.id)) + 1;
+  // Varredura em laço (sem spread) evita estourar a pilha em partidas longas.
+  let max = 1000;
+  for (const b of s.buildings) if (b.id > max) max = b.id;
+  for (const u of s.units) if (u.id > max) max = u.id;
+  for (const n of s.nodes) if (n.id > max) max = n.id;
+  return max + 1;
 }
 
 export function buildingHalf(b: Pick<Building, 'kind'>): number {
@@ -110,13 +114,8 @@ export function applyCommand(session: Session, playerId: number, cmd: Command): 
     case 'buyVampireItem': {
       if (playerId !== VAMPIRE_PLAYER_ID || !Object.hasOwn(VAMPIRE_ITEMS, cmd.itemId)) return;
       const vampire = s.units.find(u => u.kind === 'vampire' && u.owner === playerId && !u.dead);
-      if (!vampire) return;
-      // Cada item só pode ser comprado na sua própria loja.
-      const shop = buildingById(s, cmd.shopId);
-      if (!shop || shop.kind !== vampireItemShop(cmd.itemId)) return;
-      // A cripta define a área da base em que todas as lojas atendem.
-      const crypt = s.buildings.find(b => b.kind === 'crypt');
-      if (vampireShopAccess(s.phase, vampire, shop, crypt)) return;
+      const crypt = buildingById(s, cmd.cryptId);
+      if (vampireShopAccess(s.phase, vampire, crypt) || !vampire) return;
       const item = VAMPIRE_ITEMS[cmd.itemId];
       const count = s.vampire.items[cmd.itemId] ?? 0;
       const cost = vampireItemCost(cmd.itemId, count);
@@ -150,7 +149,7 @@ export function applyCommand(session: Session, playerId: number, cmd: Command): 
       // Skills são desbloqueadas apenas na cripta (a base do vampiro).
       const crypt = buildingById(s, cmd.cryptId);
       if (!vampire || !crypt || crypt.kind !== 'crypt') return;
-      if (vampireShopAccess(s.phase, vampire, crypt, crypt)) return;
+      if (vampireShopAccess(s.phase, vampire, crypt)) return;
       const skill = VAMPIRE_SKILLS[cmd.skillId];
       if (s.vampire.skills[cmd.skillId] || s.vampire.blood < skill.unlockCost) return;
       s.vampire.blood -= skill.unlockCost;
@@ -387,35 +386,27 @@ function vampireOutsideCrypt(s: GameState): boolean {
   return dist(vamp.x, vamp.z, crypt.x, crypt.z) > CRYPT_RADIUS;
 }
 
-/** Cada ciclo de coleta credita os recursos direto, sem transporte até prédios. */
-function creditGatheredResources(s: GameState, u: Unit): void {
-  const p = s.players.find(pl => pl.id === u.owner);
-  if (p && u.carryRes) p[u.carryRes] = Math.round((p[u.carryRes] + u.carrying) * 1e6) / 1e6;
-  u.carrying = 0;
-  u.carryRes = null;
-}
-
 function updateGather(s: GameState, nav: Navigation, u: Unit, dt: number): void {
   const stats = workerStats(u);
   const node = s.nodes.find((n) => n.id === u.gatherNodeId && n.amount > 0);
-  if (u.carrying > 0 && (u.carrying >= stats.carry || !node || u.carryRes !== node.kind)) {
-    creditGatheredResources(s, u);
-  }
   if (!node) {
     u.order = null;
     u.gatherNodeId = null;
+    u.carrying = 0;
+    u.carryRes = null;
     return;
   }
   if (nav.move(u, node.x, node.z, stats.speed, dt, node.kind === 'wood' ? INTERACTION.woodGatherRange : INTERACTION.goldGatherRange)) {
     u.activity = 'gathering';
-    // coletando
-    // Árvores e minas são permanentes: só avança o ciclo de coleta da unidade.
-    const rate = Math.min(stats.gatherRate * dt, stats.carry - u.carrying);
-    u.carrying += rate;
-    // Evita 9.999999999999998 virar 9 quando o inventário é exibido como inteiro.
-    if (stats.carry - u.carrying < 1e-7) u.carrying = stats.carry;
     u.carryRes = node.kind;
-    if (u.carrying >= stats.carry) creditGatheredResources(s, u);
+    // Vai direto para o total do jogador, 1 a 1 — sem segurar carga na unidade.
+    u.carrying += stats.gatherRate * dt;
+    const whole = Math.floor(u.carrying + 1e-9);
+    if (whole > 0) {
+      const p = s.players.find((pl) => pl.id === u.owner);
+      if (p) p[node.kind] = Math.round((p[node.kind] + whole) * 1e6) / 1e6;
+      u.carrying -= whole;
+    }
   }
 }
 

@@ -105,21 +105,21 @@ O Vampiro recebe ordens de movimento e ataque como as outras unidades. À noite,
 
 **Inspeção:** um jogador humano pode clicar no Vampiro para consultar sua vida, sangue, dano e ação atual no HUD. Inspecionar uma unidade de outro jogador não permite controlá-la.
 
-### Base do Vampiro: cripta e lojas
+### Base do Vampiro: a cripta
 
-Durante o **dia**, o Vampiro pode trocar sangue por equipamento na sua base, ao norte do vale. A base reúne a **Cripta** e quatro lojas: cada item é comprado na sua própria loja, com um visual próprio.
+Durante o **dia**, o Vampiro pode trocar sangue por equipamento na sua base, no centro do vale. Tudo é comprado na **Cripta**: itens e skills.
 
 1. Acumule sangue acertando ataques.
-2. Durante o dia, aproxime o Vampiro da loja desejada.
-3. Clique na estrutura para abrir a loja no HUD.
-4. Escolha o item. O sangue é descontado e o equipamento fica ativo imediatamente.
+2. Durante o dia, aproxime o Vampiro da cripta.
+3. Clique na cripta para abrir a loja no HUD.
+4. Escolha o item ou a skill. O sangue é descontado e o equipamento fica ativo imediatamente.
 
-| Loja | Item | Preço | Efeito |
+| Item | Preço | Efeito |
 |---|---:|---|---|
-| Forja de Sangue | Garras Sangrentas | 50 de sangue, +40% por nível | +10 de dano por nível contra unidades e construções, sem limite |
-| Relicário Ancestral | Coração Ancestral | 75 de sangue, +40% por nível | +300 de vida máxima por nível, sem limite |
-| Portal da Névoa | Botas da Névoa | 30 de sangue, +40% por nível | +0,5 de velocidade de movimento por nível, sem limite |
-| Santuário do Frenesi | Frenesi | 30 de sangue, +40% por nível | Ataques ~7% mais rápidos por nível (mínimo 0,45s), sem limite |
+| Garras Sangrentas | 50 de sangue, +40% por nível | +10 de dano por nível contra unidades e construções, sem limite |
+| Coração Ancestral | 75 de sangue, +40% por nível | +300 de vida máxima por nível, sem limite |
+| Botas da Névoa | 30 de sangue, +40% por nível | +0,5 de velocidade de movimento por nível, sem limite |
+| Frenesi | 30 de sangue, +40% por nível | Ataques ~7% mais rápidos por nível (mínimo 0,45s), sem limite |
 
 ### Skill do Vampiro: Golpe Sombrio
 
@@ -127,14 +127,14 @@ Durante o **dia**, o Vampiro pode trocar sangue por equipamento na sua base, ao 
 - Depois de desbloqueada, a skill aparece no painel do vampiro e pode ser ativada **a qualquer hora**, sem custo extra.
 - Ao ativar, o dano dobra por 8 segundos, com 50 segundos de recarga.
 
-- As lojas só atendem o Vampiro durante o dia, em qualquer ponto da região da base.
-- Cada item só pode ser comprado na sua loja específica. Todos os itens são **infinitos**: podem ser comprados quantas vezes o sangue permitir, e cada nível custa mais que o anterior.
+- A cripta só atende o Vampiro durante o dia, em qualquer ponto da região da base.
+- Todos os itens são comprados na cripta e são **infinitos**: podem ser comprados quantas vezes o sangue permitir, e cada nível custa mais que o anterior.
 - Depois da primeira compra de um item, ele pode ser upado **a qualquer hora pelo painel do vampiro**, sem voltar à base.
 - Os itens equipados aparecem na ficha do Vampiro e no painel da base.
 - As Garras também recebem o modificador de dano diurno nos ataques contra unidades.
 - O Coração soma seu bônus à vida atual e à máxima, preservando o dano já sofrido; não é uma cura completa.
 - Os itens permanecem ativos durante a noite. Uma nova partida começa com o inventário vazio.
-- Preços, bônus, lojas e distância de compra podem ser ajustados na configuração do jogo.
+- Preços, bônus e a distância de compra podem ser ajustados na configuração do jogo.
 
 ---
 
@@ -204,23 +204,23 @@ Existem dois recursos econômicos:
 | Recurso | Onde obter | Principais usos |
 |---|---|---|
 | Madeira | Árvores de coleta | Construções e melhorias do Banco |
-| Ouro | Minas, Banco e trocas | Construções, melhorias e recrutamento |
+| Ouro | Banco e trocas | Construções, melhorias e recrutamento |
+
+As **minas de ouro não existem** no mapa: o ouro vem do Banco e do mercado.
 
 ### Como coletar
 
 1. Selecione seu Humano ou um Peão.
-2. Clique com o botão direito em qualquer árvore ou mina.
-3. A unidade vai até o recurso e começa a trabalhar automaticamente.
+2. Clique com o botão direito em qualquer árvore.
+3. A unidade vai até a árvore e começa a trabalhar automaticamente.
 
-Cada unidade coleta em ciclos de **10 recursos**, levando aproximadamente **4 segundos de trabalho por ciclo**, além do deslocamento inicial.
+A coleta é contínua: **cada recurso vai direto para a reserva do jogador, 1 a 1**, assim que é extraído, além do deslocamento inicial.
 
-- Os recursos entram diretamente na reserva do jogador.
-- A unidade não precisa voltar a um depósito.
-- Árvores e minas são **fontes infinitas**: não encolhem nem desaparecem com a coleta.
+- A unidade não acumula carga nem precisa voltar a um depósito.
+- Árvores são **fontes infinitas**: não encolhem nem desaparecem com a coleta.
 - A coleta continua enquanto a unidade mantiver a ordem e permanecer viva.
-- Construir Banco ou Taverna não cria uma obrigação de transportar a coleta até eles.
 
-O HUD mostra o progresso do ciclo e o ícone correto: madeira para árvores, ouro para minas.
+O registro do relevo é feito pelas **formações rochosas** (bloqueiam a passagem); as trilhas são os caminhos que ligam o centro às bases.
 
 ### Mercado
 

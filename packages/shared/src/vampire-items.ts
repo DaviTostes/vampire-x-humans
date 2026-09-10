@@ -1,16 +1,4 @@
-import {
-  BUILDING_SIZE,
-  CRYPT_RADIUS,
-  VAMPIRE,
-  VAMPIRE_ITEMS,
-  VAMPIRE_SKILLS,
-  VAMPIRE_SHOP_KINDS,
-  vampireShopRange,
-  type VampireBuildingKind,
-  type VampireItemId,
-  type VampireItemShopKind,
-  type VampireSkillId,
-} from './constants.js';
+import { CRYPT_RADIUS, VAMPIRE, VAMPIRE_ITEMS, VAMPIRE_SKILLS, type VampireItemId, type VampireSkillId } from './constants.js';
 import type { Building, Unit, VampireState } from './types.js';
 
 export function vampireItemBonuses(items: VampireState['items'] = {}) {
@@ -52,37 +40,17 @@ export function vampireSkillMultiplier(skills: VampireState['skills'] = {}): num
   return 1;
 }
 
-/** Estrutura da base em que um item é comprado. */
-export function vampireItemShop(itemId: VampireItemId): VampireItemShopKind {
-  return VAMPIRE_ITEMS[itemId].shop;
-}
-
-export function isVampireShopKind(kind: string): kind is VampireBuildingKind {
-  return (VAMPIRE_SHOP_KINDS as string[]).includes(kind);
-}
-
-/**
- * Mesmas condições de abertura usadas pela simulação e pelo painel da loja.
- * `shop` pode ser a cripta (skills) ou a loja de um item; validar qual item
- * pertence a qual loja é responsabilidade de quem chama.
- *
- * De dia o Vampiro fica confinado à região da base (cripta). Dentro dela,
- * qualquer loja atende; fora dela, ainda é possível comprar ao encostar na
- * borda da estrutura (shopRange). `base` é a cripta.
- */
+/** Mesmas condições de abertura usadas pela simulação e pelo painel da loja. */
 export function vampireShopAccess(
   phase: 'day' | 'night',
   vampire: Pick<Unit, 'kind' | 'hp' | 'x' | 'z'> | undefined,
-  shop: Pick<Building, 'kind' | 'done' | 'hp' | 'x' | 'z'> | undefined,
-  base?: Pick<Building, 'x' | 'z'> | undefined,
+  crypt: Pick<Building, 'kind' | 'done' | 'hp' | 'x' | 'z'> | undefined,
 ): string | null {
-  if (phase !== 'day') return 'As lojas do Vampiro só abrem durante o dia';
+  if (phase !== 'day') return 'A loja da cripta só abre durante o dia';
   if (!vampire || vampire.kind !== 'vampire' || vampire.hp <= 0) return 'Vampiro indisponível';
-  if (!shop || !isVampireShopKind(shop.kind) || !shop.done || shop.hp <= 0) return 'Loja indisponível';
-  // Dentro da base, todas as lojas estão ao alcance.
-  if (base && Math.hypot(vampire.x - base.x, vampire.z - base.z) <= CRYPT_RADIUS) return null;
-  // Fora da base, é preciso encostar na borda da estrutura.
-  const half = BUILDING_SIZE[shop.kind] / 2;
-  const edge = Math.max(0, Math.hypot(vampire.x - shop.x, vampire.z - shop.z) - half);
-  return edge > vampireShopRange(shop.kind) ? 'Aproxime o Vampiro da base para comprar' : null;
+  if (!crypt || crypt.kind !== 'crypt' || !crypt.done || crypt.hp <= 0) return 'Cripta indisponível';
+  // Mesmo alcance do confinamento diurno (clampVampireToCrypt): de dia o vampiro
+  // nunca fica a mais de CRYPT_RADIUS da cripta, então a loja abre em toda a área dele.
+  const distance = Math.hypot(vampire.x - crypt.x, vampire.z - crypt.z);
+  return distance > CRYPT_RADIUS ? 'Aproxime o Vampiro da cripta para comprar' : null;
 }

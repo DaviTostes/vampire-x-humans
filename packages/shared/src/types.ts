@@ -1,6 +1,6 @@
 // Tipos de estado, comandos e snapshots compartilhados entre server e client
 
-import type { BuildKind, VampireBuildingKind, VampireItemId, VampireSkillId } from './constants.js';
+import type { BuildKind, VampireItemId, VampireSkillId } from './constants.js';
 
 export type { BuildKind };
 
@@ -11,7 +11,7 @@ export type ResourceKind = 'wood' | 'gold';
 export type UnitKind = 'worker' | 'vampire';
 export type Activity = 'idle' | 'moving' | 'gathering' | 'building' | 'repairing' | 'attacking' | 'blocked';
 
-export type BuildingKind = BuildKind | VampireBuildingKind;
+export type BuildingKind = BuildKind | 'crypt';
 
 export interface Order {
   t: 'move' | 'gather' | 'attack' | 'build' | 'repair' | 'upgrade';
@@ -111,7 +111,7 @@ export type Command =
   | { type: 'repair'; ids: number[]; targetId: number }
   | { type: 'upgrade'; ids: number[]; targetId: number }
   | { type: 'recruit'; targetId: number }
-  | { type: 'buyVampireItem'; shopId: number; itemId: VampireItemId }
+  | { type: 'buyVampireItem'; cryptId: number; itemId: VampireItemId }
   | { type: 'upgradeVampireItem'; itemId: VampireItemId }
   | { type: 'buyVampireSkill'; cryptId: number; skillId: VampireSkillId }
   | { type: 'castVampireSkill'; skillId: VampireSkillId }

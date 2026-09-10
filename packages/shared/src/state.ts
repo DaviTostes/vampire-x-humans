@@ -1,6 +1,6 @@
-import { DAY_LENGTH, START_RESOURCES, VAMPIRE, WORKER, CRYPT, GAME_CONFIG, MAX_PLAYERS, VAMPIRE_PLAYER_ID, VAMPIRE_SHOPS } from './constants.js';
+import { DAY_LENGTH, START_RESOURCES, VAMPIRE, WORKER, CRYPT, GAME_CONFIG, MAX_PLAYERS, VAMPIRE_PLAYER_ID, MAP_SCALE } from './constants.js';
 import { CRYPT_POSITION, HUMAN_SPAWNS, MAP_SEED, RESOURCE_PLACEMENTS } from './mapgen.js';
-import type { Building, GameState, PlayerState, Unit } from './types.js';
+import type { GameState, PlayerState, Unit } from './types.js';
 
 export function createPlayers(names: string[], ids = Array.from({ length: MAX_PLAYERS }, (_, i) => i)): PlayerState[] {
   return ids.map(id => ({ id, name: names[id] ?? (id === VAMPIRE_PLAYER_ID ? 'Vampiro' : `Humano ${id + 1}`),
@@ -12,7 +12,7 @@ export function createGameState(names: string[], _seed = MAP_SEED, playerIds = A
   const ids = [...new Set([...playerIds, VAMPIRE_PLAYER_ID])].filter(id => id >= 0 && id < MAX_PLAYERS).sort((a, b) => a - b);
   const units: Unit[] = ids.map(owner => {
     const vampire = owner === VAMPIRE_PLAYER_ID;
-    const position = vampire ? { x: CRYPT_POSITION.x + GAME_CONFIG.map.vampireSpawnOffset.x, z: CRYPT_POSITION.z + GAME_CONFIG.map.vampireSpawnOffset.z } : HUMAN_SPAWNS[owner]!;
+    const position = vampire ? { x: CRYPT_POSITION.x + GAME_CONFIG.map.vampireSpawnOffset.x * MAP_SCALE, z: CRYPT_POSITION.z + GAME_CONFIG.map.vampireSpawnOffset.z * MAP_SCALE } : HUMAN_SPAWNS[owner]!;
     const hp = vampire ? VAMPIRE.hp : WORKER.hp;
     return { id: owner + 1, owner, kind: vampire ? 'vampire' : 'worker', hero: true, ...position, hp, maxHp: hp,
       order: null, activity: 'idle', carrying: 0, carryRes: null, gatherNodeId: null, attackCd: 0, dead: false };
@@ -23,11 +23,6 @@ export function createGameState(names: string[], _seed = MAP_SEED, playerIds = A
     buildings: [
       { id: 100, kind: 'crypt', owner: -1, ...CRYPT_POSITION, hp: CRYPT.hp, maxHp: CRYPT.hp,
         level: 1, progress: 1, done: true, builderId: null, goldAcc: 0, attackCd: 0 },
-      ...VAMPIRE_SHOPS.map((shop, i): Building => {
-        const config = GAME_CONFIG.buildings[shop.kind];
-        return { id: 101 + i, kind: shop.kind, owner: -1, x: shop.x, z: shop.z, hp: config.hp, maxHp: config.hp,
-          level: 1, progress: 1, done: true, builderId: null, goldAcc: 0, attackCd: 0 };
-      }),
     ],
     nodes: RESOURCE_PLACEMENTS.map((node, i) => ({ id: 200 + i, ...node,
       amount: node.kind === 'wood' ? 600 : 2000, maxAmount: node.kind === 'wood' ? 600 : 2000 })),

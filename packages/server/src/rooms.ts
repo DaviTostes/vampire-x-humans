@@ -3,7 +3,11 @@
 import type { WebSocket } from 'ws';
 import { randomUUID } from 'node:crypto';
 import { createSession, makeSnapshot, step, MAP_SEED, GAME_CONFIG, MAX_HUMANS, MAX_PLAYERS, VAMPIRE_PLAYER_ID, type Session } from '@vampire/shared';
-import type { Command, Role, LobbyInfo } from '@vampire/shared';
+import type { Command, Role, LobbyInfo, ResourceNode, Snapshot } from '@vampire/shared';
+
+// Snapshot enviado na rede: os nós saem por mensagem própria, então podem ser
+// omitidos do snapshot por tick.
+type WireSnapshot = Omit<Snapshot, 'nodes'> & { nodes?: Snapshot['nodes'] };
 
 export interface Client {
   id: string;
@@ -22,9 +26,18 @@ export interface Room {
   session: Session | null;
   seed: number;
   queue: Array<{ playerId: number; cmd: Command }>;
+  // Comandos aceitos por jogador no tick atual; limita flood de um cliente.
+  cmdCount: Map<number, number>;
+  // Última quantidade de cada nó enviada ao cliente. Os nós são quase estáticos;
+  // enviá-los por inteiro a cada tick custava ~33 KB × 15 Hz por jogador.
+  nodeAmounts: Map<number, number>;
 }
 
 export const rooms = new Map<string, Room>();
+
+// Um jogador legítimo manda poucos comandos por tick; o teto evita que um
+// cliente malicioso encha a fila e atrase a simulação dos demais.
+const MAX_COMMANDS_PER_PLAYER_PER_TICK = 32;
 
 function genCode(): string {
   const abc = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -43,6 +56,8 @@ export function createRoom(): Room {
     session: null,
     seed: MAP_SEED,
     queue: [],
+    cmdCount: new Map(),
+    nodeAmounts: new Map(),
   };
   rooms.set(code, room);
   return room;
@@ -110,8 +125,27 @@ export function startRoom(room: Room, requesterId: string): boolean {
   }
   room.session = createSession(names, room.seed, room.clients.map(c => c.playerId));
   room.session.state.practice = room.clients.length === 1;
+  room.nodeAmounts.clear();
+  for (const node of room.session.state.nodes) room.nodeAmounts.set(node.id, node.amount);
   room.status = 'playing';
   return true;
+}
+
+/** Nós ativos enviados uma vez ao iniciar; depois só chegam deltas. */
+export function activeNodes(room: Room): ResourceNode[] {
+  return room.session?.state.nodes.filter(n => n.amount > 0) ?? [];
+}
+
+/** Nós cuja quantidade mudou desde o último envio. */
+function changedNodes(room: Room): Array<{ id: number; amount: number }> {
+  if (!room.session) return [];
+  const changed: Array<{ id: number; amount: number }> = [];
+  for (const node of room.session.state.nodes) {
+    if (room.nodeAmounts.get(node.id) === node.amount) continue;
+    room.nodeAmounts.set(node.id, node.amount);
+    changed.push({ id: node.id, amount: node.amount });
+  }
+  return changed;
 }
 
 export function leaveRoom(room: Room, ws: WebSocket) {
@@ -129,13 +163,24 @@ export function stepRoom(room: Room): void {
   if (room.status !== 'playing' || !room.session) return;
   const commands = room.queue;
   room.queue = [];
+  room.cmdCount.clear();
   step(room.session, commands);
-  const snap = makeSnapshot(room.session.state);
+  const snap = makeSnapshot(room.session.state) as WireSnapshot;
+  // Nós não vão no snapshot por tick; o cliente usa o cache do 'started' e os
+  // deltas de 'nodes'. Reduz o snapshot de ~37 KB para poucos KB.
+  snap.nodes = undefined;
   const payload = JSON.stringify({ type: 'snap', snap });
   for (const c of room.clients) {
     // Snapshots são completos: se a conexão está ocupada, espere o próximo
     // estado em vez de acumular uma fila de posições antigas.
     if (c.ws.readyState === 1 && c.ws.bufferedAmount === 0) c.ws.send(payload);
+  }
+  // Deltas de nós são pequenos e não podem ser descartados, senão o cliente
+  // fica com a quantidade errada para sempre.
+  const nodes = changedNodes(room);
+  if (nodes.length) {
+    const nodePayload = JSON.stringify({ type: 'nodes', nodes });
+    for (const c of room.clients) if (c.ws.readyState === 1) c.ws.send(nodePayload);
   }
   if (room.session.state.result) {
     room.status = 'ended';
@@ -148,6 +193,9 @@ export function stepRoom(room: Room): void {
 
 export function queueCommand(room: Room, playerId: number, cmd: Command): void {
   if (room.status !== 'playing') return;
+  const used = room.cmdCount.get(playerId) ?? 0;
+  if (used >= MAX_COMMANDS_PER_PLAYER_PER_TICK) return;
+  room.cmdCount.set(playerId, used + 1);
   room.queue.push({ playerId, cmd });
 }
 

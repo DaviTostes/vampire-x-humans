@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 WorkingDirectory=__APP_DIR__
-ExecStart=__APP_DIR__/node_modules/.bin/tsx packages/server/src/index.ts
+ExecStart=/usr/bin/env node __APP_DIR__/packages/server/dist/index.js
 Environment=NODE_ENV=production
 Environment=PORT=3000
 Restart=always

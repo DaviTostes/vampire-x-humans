@@ -13,9 +13,7 @@ O arquivo possui comentários em português para ajudar nas alterações.
 | Vida, velocidade, coleta, dano e construção do Humano | `units.human` |
 | Os mesmos atributos, mas apenas dos Peões | `units.peon` |
 | Vida, velocidade, dano, regeneração e sangue do Vampiro | `units.vampire` |
-| Preços em sangue, nomes, bônus, loja e limite de cópias dos itens | `vampireItems` |
-| Distância extra para comprar ao encostar na loja (fora da base) | `buildings.<loja>.shopRange` |
-| Posição das lojas da base do Vampiro | `map.vampireShops` |
+| Preços em sangue, nomes, bônus e limite de cópias dos itens | `vampireItems` |
 | Custo, tempo, vida e espaço ocupado por uma construção | `buildings.<nome>` |
 | Ouro por ciclo, intervalo de cada nível e melhorias do Banco | `buildings.bank` |
 | Custo e tempo de recrutamento de Peões | `buildings.taverna.recruit` |
@@ -87,9 +85,9 @@ A venda usa 20 de madeira e entrega 10 de ouro; a compra faz a operação invers
 
 ### Ajustar o mapa e as vagas
 
-O mapa continua fixo. Alterar `tiles` ou `tileSize` muda suas dimensões; as posições dos refúgios e recursos permanecem nas coordenadas indicadas no arquivo.
+O mapa continua fixo. `map.scale` reduz (ou amplia) o mundo inteiro de uma vez: todas as coordenadas abaixo continuam no espaço de projeto do mundo 480 e são multiplicadas por essa escala. Com `0.55`, por exemplo, o mundo vira ~264 × 264 e os refúgios, rios, lagos e recursos acompanham proporcionalmente. Um valor menor deixa o mapa mais apertado e denso; `1` mantém as dimensões originais. `tiles`/`tileSize` seguem definindo o mundo de projeto, não o final.
 
-`map.coast` define o contorno e a inclinação da ilha. `rivers` e `lakes` desenham a água; as trilhas abrem corredores na floresta e geram pontes ao cruzar rios. `meadows` abre clareiras extras. `resources.forestNodeSpacing` controla a densidade da floresta. Os refúgios são reentrâncias rochosas assimétricas: `facing` define a única passagem para o muro e `refugeWalls` ajusta o sopé e a altura inicial das encostas.
+`map.coast` define o contorno e a inclinação da ilha. `rivers` e `lakes` desenham a água (as trilhas geram pontes automaticamente ao cruzar rios, se houver). `meadows` abre clareiras extras. O relevo vem das pedras: `rockFormations` gera os maciços rochosos (visual + colisão) — `rx`/`rz` dão o tamanho da base, `height` a altura e `count` quantas pilhas de pedra. O terreno em si é plano. `resources.forestNodeSpacing` controla a densidade da floresta. Os refúgios são reentrâncias rochosas assimétricas: `facing` define a única passagem para o muro e `refugeWalls` ajusta o sopé e a altura inicial das encostas.
 
 Cada entrada em `map.humanSpawns` representa uma vaga humana. O lobby acrescenta uma vaga de Vampiro automaticamente. Ajuste os pontos de início e os refúgios para acomodar o número de jogadores desejado.
 

@@ -1,5 +1,5 @@
 // Rede orientada a eventos: o lobby só avança após a confirmação do servidor.
-import type { Command, LobbyInfo, Role, Snapshot } from '@vampire/shared';
+import type { Command, LobbyInfo, ResourceNode, Role, Snapshot } from '@vampire/shared';
 export type { LobbyInfo } from '@vampire/shared';
 
 export class Net {
@@ -15,6 +15,10 @@ export class Net {
   error = '';
   onSnap: ((snap: Snapshot) => void) | null = null;
   private listeners = new Set<() => void>();
+  // O servidor manda os nós uma vez no 'started' e depois só deltas; este cache
+  // é injetado em cada snapshot para o resto do cliente não mudar.
+  private nodeById = new Map<number, ResourceNode>();
+  private nodeList: ResourceNode[] = [];
 
   subscribe(listener: () => void): () => void {
     this.listeners.add(listener);
@@ -50,8 +54,16 @@ export class Net {
   private handle(raw: string) {
     const msg = JSON.parse(raw);
     if (msg.type === 'snap') {
+      // O snapshot por tick omite os nós; mantém o cache se o servidor mandar
+      // a lista completa (compatibilidade).
+      if (Array.isArray(msg.snap.nodes) && msg.snap.nodes.length) this.setNodes(msg.snap.nodes);
+      msg.snap.nodes = this.nodeList;
       this.latestSnap = msg.snap;
       this.onSnap?.(msg.snap);
+      return;
+    }
+    if (msg.type === 'nodes') {
+      this.applyNodeDeltas(msg.nodes);
       return;
     }
     switch (msg.type) {
@@ -71,12 +83,14 @@ export class Net {
         this.lobby = msg.lobby;
         this.myId = msg.playerId;
         this.started = true;
+        if (Array.isArray(msg.nodes)) this.setNodes(msg.nodes);
         break;
       case 'left':
         this.lobby = null;
         this.clientId = null;
         this.myId = -1;
         this.latestSnap = null;
+        this.setNodes([]);
         this.error = '';
         break;
       case 'error': this.error = msg.message; break;
@@ -84,6 +98,26 @@ export class Net {
     }
     this.pending = null;
     this.notify();
+  }
+
+  private setNodes(list: ResourceNode[]) {
+    this.nodeById.clear();
+    this.nodeList = list;
+    for (const node of list) this.nodeById.set(node.id, node);
+  }
+
+  private applyNodeDeltas(updates: Array<{ id: number; amount: number }> | undefined) {
+    if (!updates) return;
+    for (const update of updates) {
+      if (update.amount <= 0) {
+        if (!this.nodeById.delete(update.id)) continue;
+        const index = this.nodeList.findIndex((n) => n.id === update.id);
+        if (index >= 0) this.nodeList.splice(index, 1);
+      } else {
+        const node = this.nodeById.get(update.id);
+        if (node) node.amount = update.amount;
+      }
+    }
   }
 
   send(msg: object): boolean {

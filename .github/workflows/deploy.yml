@@ -43,7 +43,10 @@ jobs:
       - name: Verificar tipos
         run: npm run check
 
-      - name: Build do cliente
+      - name: Testes
+        run: npm test
+
+      - name: Build (cliente + servidor)
         run: npm run build
 
       - name: Configurar SSH

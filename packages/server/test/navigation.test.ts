@@ -26,11 +26,11 @@ test('destino inacessível não monopoliza o tick nem paralisa as outras unidade
     collisionChecks = 0;
     step(session, i === 0 ? [
       { playerId: VAMPIRE_PLAYER_ID, cmd: { type: 'move', ids: [vampire.id], x: compound.x, z: compound.z } },
-      { playerId: 0, cmd: { type: 'move', ids: [human.id], x: 12, z: 12 } },
+      { playerId: 0, cmd: { type: 'move', ids: [human.id], x: 6, z: 6 } },
     ] : []);
     assert.ok((vampire.x - door.x) * out.x + (vampire.z - door.z) * out.z > 0, 'vampiro não deve atravessar a entrada fechada');
   }
-  assert.ok(Math.hypot(human.x - 12, human.z - 12) < 1);
+  assert.ok(Math.hypot(human.x - 6, human.z - 6) < 1);
   assert.equal(state.tick, 8 * TICK_RATE);
 });
 
