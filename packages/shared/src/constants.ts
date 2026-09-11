@@ -162,6 +162,17 @@ export function repairerStats(level: number): { repairSpeed: number; trainingTim
   return cfg.levels[clampLevel(level, workerMaxLevel('repairer'))]!;
 }
 
+/**
+ * Reparo do Reparador em HP/s no nível de pesquisa. O Repair Speed da spec não
+ * tem unidade definida (A CONFIRMAR); ancoramos o nível 1 no valor base atual
+ * (`interaction.repairRate`) e escalamos proporcionalmente, para que evoluir o
+ * Reparador realmente aumente a velocidade de reparo.
+ */
+export function repairerRepairRate(level: number): number {
+  const ratio = repairerStats(level).repairSpeed / repairerStats(1).repairSpeed;
+  return GAME_CONFIG.interaction.repairRate * ratio;
+}
+
 /** Tempo de treino de um Reparador no nível atual (0 = instantâneo). */
 export function repairerTrainingTime(level: number): number {
   return repairerStats(level).trainingTime;

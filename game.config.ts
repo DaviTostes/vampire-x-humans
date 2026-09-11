@@ -33,7 +33,7 @@ export const GAME_CONFIG = {
     daySeconds: 60,
     nightSeconds: 100,
     nightsToWin: 10,
-    startingResources: { wood: 0, gold: 0 },
+    startingResources: { wood: 0, gold: 30 },
   },
   lobby: { codeLength: 5 },
 
@@ -61,7 +61,6 @@ export const GAME_CONFIG = {
       speedNight: Math.round(400 * MOVE_SPEED_SCALE * 10) / 10,
       attackDamage: 5,
       dayDamageMultiplier: 0.4,
-      attackDamageBuilding: 25,
       attackRange: 2.2, attackCooldown: 1.42,
       // Intervalo correspondente a Attack Speed 600 (1,42 × 120/600).
       minAttackCooldown: 0.284,
@@ -76,19 +75,19 @@ export const GAME_CONFIG = {
   // Progressões (níveis, custos de upgrade e pré-requisitos) ficam em `spec`.
   buildings: {
     bank: {
-      hp: 500, size: 6,
+      hp: 500, size: 5,
       cost: { wood: 0, gold: 0, time: 5 }, // nível 1 é gratuito (seção 4)
       // Ciclo de produção CONSTANTE (não muda com o nível). Cada ciclo entrega
       // `spec.bankLevels[nível].production` de ouro, que dobra a cada upgrade.
       cycleSeconds: 1,
     },
     taverna: {
-      hp: 500, size: 6,
+      hp: 500, size: 5,
       cost: { wood: 0, gold: 128, time: 5 },
       recruit: { wood: 0, gold: 50, time: 2 },
     },
     wall: {
-      hp: 30, size: 2, cost: { wood: 0, gold: 4, time: 2 },
+      hp: 30, size: 3, cost: { wood: 0, gold: 4, time: 2 },
     },
     tower: {
       hp: 300, size: 3,
@@ -101,7 +100,7 @@ export const GAME_CONFIG = {
     // TODO(A CONFIRMAR): a spec não define custos/vida/níveis do Mercado;
     // valores provisórios. Nível 2 é pré-requisito do Banco nível 6.
     market: {
-      hp: 500, size: 6,
+      hp: 500, size: 5,
       cost: { wood: 0, gold: 64, time: 4 },
       maxLevel: 2,
       // Chave = nível ATUAL: 1 é o custo de ir do nível 1 para o 2.
@@ -117,7 +116,7 @@ export const GAME_CONFIG = {
     // Estrutura neutra e indestrutível. A cripta é a base e vende itens e skills.
     // Ciclo de produção FIXO (como o Banco): só a quantidade por ciclo cresce
     // com os upgrades, o intervalo entre os ticks não muda.
-    crypt: { hp: 4000, size: 8, cycleSeconds: 1 },
+    crypt: { hp: 4000, size: 7, cycleSeconds: 1 },
   },
   buildable: ['bank', 'taverna', 'wall', 'tower', 'goldMine', 'market'] as BuildKind[],
 
@@ -182,16 +181,16 @@ export const GAME_CONFIG = {
     // rochedos com uma única abertura. O jogador fecha a passagem com um Muro.
     // As posições ficam num anel sobre a ilha inclinada; `facing` aponta a
     // entrada para o centro do mapa.
-    refugeWalls: { thickness: 5, entranceWidth: 3, height: 5.5 },
+    refugeWalls: { thickness: 5, entranceWidth: 8, height: 5.5 },
     refuges: [
-      { name: 'Clareira dos Pinheiros', x: 110, z: 86, width: 56, depth: 50, facing: 'west' },
-      { name: 'Refúgio da Pedreira', x: 29, z: 123, width: 56, depth: 50, facing: 'north' },
-      { name: 'Bosque da Lua', x: -69, z: 88, width: 56, depth: 50, facing: 'north' },
-      { name: 'Abrigo do Poente', x: -126, z: 2, width: 50, depth: 58, facing: 'east' },
-      { name: 'Clareira da Aurora', x: -110, z: -86, width: 50, depth: 58, facing: 'east' },
-      { name: 'Refúgio dos Corvos', x: -29, z: -123, width: 56, depth: 50, facing: 'south' },
-      { name: 'Vale das Cinzas', x: 69, z: -88, width: 56, depth: 50, facing: 'south' },
-      { name: 'Bosque da Névoa', x: 126, z: -2, width: 50, depth: 58, facing: 'west' },
+      { name: 'Clareira dos Pinheiros', x: 110, z: 86, width: 64, depth: 58, facing: 'west' },
+      { name: 'Refúgio da Pedreira', x: 29, z: 123, width: 64, depth: 58, facing: 'north' },
+      { name: 'Bosque da Lua', x: -69, z: 88, width: 64, depth: 58, facing: 'north' },
+      { name: 'Abrigo do Poente', x: -126, z: 2, width: 58, depth: 66, facing: 'east' },
+      { name: 'Clareira da Aurora', x: -110, z: -86, width: 58, depth: 66, facing: 'east' },
+      { name: 'Refúgio dos Corvos', x: -29, z: -123, width: 64, depth: 58, facing: 'south' },
+      { name: 'Vale das Cinzas', x: 69, z: -88, width: 64, depth: 58, facing: 'south' },
+      { name: 'Bosque da Névoa', x: 126, z: -2, width: 58, depth: 66, facing: 'west' },
     ] as RefugeConfig[],
 
     // Ilha inclinada: elipse girada com costa irregular, cercada de água.
@@ -462,6 +461,7 @@ export const GAME_CONFIG = {
 
     // ---- Limites de entidades por jogador (seção 28) ----
     entityLimits: {
+      bank: 1,
       wall: 2,
       taverna: 3,
       tower: 30,

@@ -1,7 +1,7 @@
 // Controles RTS: câmera, seleção, ordens, ghost de construção
 
 import * as THREE from 'three';
-import { BUILDING_SIZE, BUILD_COSTS, BUILDABLE, WORLD, VAMPIRE_PLAYER_ID, canBuildKind, canPlaceBuilding, type BuildKind, type HumanAbilityId, type Snapshot, type VampireAbilityId } from '@vampire/shared';
+import { BUILDING_SIZE, BUILD_COSTS, BUILDABLE, WORLD, VAMPIRE_PLAYER_ID, SPEC_ENTITY_LIMITS, HUMAN_ABILITIES, VAMPIRE_ABILITIES, isWaterAtWorld, canBuildKind, canPlaceBuilding, type BuildKind, type HumanAbilityId, type Snapshot, type VampireAbilityId } from '@vampire/shared';
 import type { GameScene } from './scene.js';
 import type { Net } from './net.js';
 import { RTS_CAMERA } from './camera.js';
@@ -35,6 +35,7 @@ export class RtsControls {
     private getMyId: () => number,
     private getSnap: () => Snapshot | null,
     private onSelectionChanged: () => void,
+    private setActingId: (owner: number) => void = () => {},
   ) {
     // caixa de seleção
     this.dragBox = document.createElement('div');
@@ -76,6 +77,7 @@ export class RtsControls {
       this.buildPointer = null;
       this.updateBuildPreview();
       this.scene.setHoverEnemy(null);
+      this.scene.clearAbilityMarker();
       this.scene.renderer.domElement.style.cursor = '';
     });
     dom.addEventListener('pointerup', (e) => this.onUp(e));
@@ -153,7 +155,7 @@ export class RtsControls {
         else this.net.command({ type: 'castVampireAbility', ability });
         return;
       }
-      if (key === 't') this.net.command({ type: 'castVampireSkill', skillId: 'powerStrike' });
+      // Golpe Sombrio (tecla T) removido por enquanto.
       return;
     }
     const id = HUMAN_ABILITY_KEYS[key];
@@ -202,8 +204,14 @@ export class RtsControls {
       this.buildPointer = this.pointer;
       this.updateBuildPreview();
     }
-    // Indicador de alvo: retículo vermelho ao passar o mouse sobre um inimigo.
-    if (!this.buildMode) this.updateHoverEnemy(e);
+    if (this.abilityMode || this.vampireAbilityMode) {
+      // Pré-visualização da habilidade no chão/alvo.
+      this.updateAbilityMarker(e);
+      this.scene.setHoverEnemy(null);
+    } else if (!this.buildMode) {
+      // Indicador de alvo: retículo vermelho ao passar o mouse sobre um inimigo.
+      this.updateHoverEnemy(e);
+    }
     if (this.dragStart) {
       const x = Math.min(this.dragStart.x, e.clientX);
       const y = Math.min(this.dragStart.y, e.clientY);
@@ -225,6 +233,43 @@ export class RtsControls {
     this.scene.renderer.domElement.style.cursor = enemy !== null ? 'crosshair' : '';
   }
 
+  /** Pré-visualização do alvo/área da habilidade em modo de mira. */
+  private updateAbilityMarker(e: { clientX: number; clientY: number }) {
+    const snap = this.getSnap();
+    if (!snap) return;
+    const n = this.ndc(e);
+    if (this.vampireAbilityMode === 'revealArea') {
+      const hit = this.scene.screenToGround(n.x, n.y);
+      if (!hit) { this.scene.clearAbilityMarker(); return; }
+      const valid = !isWaterAtWorld(hit.x, hit.z);
+      this.scene.setAbilityMarker(hit.x, hit.z, VAMPIRE_ABILITIES.revealArea.radius ?? 30, valid ? 0x9fd0ff : 0xff5a5a);
+      return;
+    }
+    if (this.abilityMode === 'teleport') {
+      const hit = this.scene.screenToGround(n.x, n.y);
+      if (!hit) { this.scene.clearAbilityMarker(); return; }
+      const hero = snap.units.find(u => u.owner === this.getMyId() && u.kind === 'worker' && u.hero);
+      const range = HUMAN_ABILITIES.teleport.maxRange ?? 0;
+      const valid = !!hero && Math.hypot(hit.x - hero.x, hit.z - hero.z) <= range && !isWaterAtWorld(hit.x, hit.z);
+      this.scene.setAbilityMarker(hit.x, hit.z, 0, valid ? 0x6ad6ff : 0xff5a5a);
+      return;
+    }
+    // Habilidades com alvo: destaca a unidade/prédio sob o cursor.
+    const pick = this.scene.pickAt(n.x, n.y);
+    const id = pick.unitId ?? pick.buildingId;
+    const unit = id !== undefined ? snap.units.find(u => u.id === id) : undefined;
+    const bld = id !== undefined ? snap.buildings.find(b => b.id === id) : undefined;
+    const position = unit ?? bld;
+    if (!position) { this.scene.clearAbilityMarker(); return; }
+    const myId = this.getMyId();
+    const valid = this.abilityMode === 'fortify'
+      ? unit?.owner === myId || bld?.owner === myId
+      : this.abilityMode === 'entangle' || this.abilityMode === 'silencer'
+        ? unit?.kind === 'vampire'
+        : false;
+    this.scene.setAbilityMarker(position.x, position.z, 0, valid ? 0x6ad6ff : 0xff5a5a);
+  }
+
   private onUp(e: PointerEvent) {
     if (this.scene.renderer.domElement.hasPointerCapture(e.pointerId)) {
       this.scene.renderer.domElement.releasePointerCapture(e.pointerId);
@@ -240,7 +285,8 @@ export class RtsControls {
 
     const snap = this.getSnap();
     if (!snap) return;
-    const myId = this.getMyId();
+    const practice = !!snap.practice;
+    let myId = this.getMyId();
     this.selectedBuilding = null;
     this.inspectedUnit = null;
 
@@ -252,7 +298,20 @@ export class RtsControls {
       const pick = this.scene.pickAt(n.x, n.y);
       if (pick.unitId !== undefined) {
         const u = snap.units.find((uu) => uu.id === pick.unitId);
-        if (u && u.owner === myId) {
+        // Teste solo: clicar numa unidade de qualquer lado assume o controle dela.
+        if (practice && u) {
+          if (u.owner !== myId) this.selected = [];
+          this.setActingId(u.owner);
+          myId = u.owner;
+        }
+        // Trabalhador em cima do prédio que constrói/repara: prioriza o prédio,
+        // para selecioná-lo (ex.: melhorar o muro) mesmo com a unidade ocupando.
+        const workTarget = u && u.owner === myId && (u.orderType === 'build' || u.orderType === 'repair') ? u.targetId : null;
+        const buildingUnder = workTarget != null ? this.scene.buildingUnderCursor(n.x, n.y) : undefined;
+        if (buildingUnder !== undefined && buildingUnder === workTarget) {
+          this.selected = [];
+          this.selectedBuilding = buildingUnder;
+        } else if (u && u.owner === myId) {
           this.selected = e.shiftKey ? (this.selected.includes(u.id) ? this.selected.filter(id => id !== u.id) : [...this.selected, u.id]) : [u.id];
         } else {
           this.selected = [];
@@ -261,6 +320,11 @@ export class RtsControls {
       } else {
         this.selected = [];
         this.selectedBuilding = pick.buildingId ?? null;
+        // Teste solo: selecionar um prédio de qualquer lado assume o controle dele.
+        if (practice && pick.buildingId !== undefined) {
+          const b = snap.buildings.find((bb) => bb.id === pick.buildingId);
+          if (b) this.setActingId(b.kind === 'crypt' ? VAMPIRE_PLAYER_ID : b.owner >= 0 ? b.owner : myId);
+        }
       }
     } else {
       // seleção em caixa — só unidades próprias
@@ -326,9 +390,16 @@ export class RtsControls {
         this.net.command({ type: 'resumeBuild', ids: this.selected, targetId: b.id });
         return;
       }
-      if (b && b.done && b.kind === 'wall' && b.owner === this.getMyId() && b.hp < b.maxHp) {
-        this.net.command({ type: 'repair', ids: this.selected, targetId: b.id });
-        return;
+      if (b && b.done && b.kind === 'wall' && b.owner === this.getMyId()) {
+        // Mesmo com o muro cheio: deixa o construtor de prontidão para reparar.
+        const canRepair = this.selected.some(id => {
+          const u = snap.units.find(uu => uu.id === id);
+          return !!u && u.owner === this.getMyId() && u.kind === 'worker' && u.workerRole !== 'lumberjack' && u.workerRole !== 'miner';
+        });
+        if (canRepair) {
+          this.net.command({ type: 'repair', ids: this.selected, targetId: b.id });
+          return;
+        }
       }
       // Aproximação pela borda do prédio, em vez de ordenar entrada no centro.
       if (b) {
@@ -356,6 +427,7 @@ export class RtsControls {
     if (!snap?.units.some(u => u.owner === this.getMyId() && this.selected.includes(u.id) && canBuildKind(u, kind))) return;
     this.cancelBuild();
     this.buildMode = kind;
+    this.scene.setBuildGridVisible(true, kind);
     const size = BUILDING_SIZE[kind];
     const geo =
       kind === 'tower'
@@ -385,20 +457,27 @@ export class RtsControls {
     if (!hit || !snap) {
       this.ghost.visible = false;
       this.scene.setTowerRange('placement', null);
+      this.scene.setBuildFootprint(null, null, false);
       return;
     }
-    const x = Math.round(hit.x), z = Math.round(hit.z);
+    // Encaixa a construção para ocupar quadrados inteiros: tamanho par cai em
+    // coordenada inteira; tamanho ímpar cai em meia-coordenada (borda inteira).
+    const offset = BUILDING_SIZE[this.buildMode] % 2 === 0 ? 0 : 0.5;
+    const x = Math.round(hit.x - offset) + offset, z = Math.round(hit.z - offset) + offset;
     this.buildTarget = { x, z };
     const me = snap.players.find(p => p.id === this.getMyId());
     const cost = BUILD_COSTS[this.buildMode];
     const hasBuilder = snap.units.some(u => u.owner === this.getMyId() && this.selected.includes(u.id) && canBuildKind(u, this.buildMode!));
-    this.buildValid = !!me && !snap.result && hasBuilder && me.wood >= cost.wood && me.gold >= cost.gold &&
+    const limit = (SPEC_ENTITY_LIMITS as Record<string, number | undefined>)[this.buildMode];
+    const atLimit = limit !== undefined && snap.buildings.filter(b => b.owner === this.getMyId() && b.kind === this.buildMode).length >= limit;
+    this.buildValid = !!me && !snap.result && hasBuilder && !atLimit && me.wood >= cost.wood && me.gold >= cost.gold &&
       canPlaceBuilding(this.scene.map, snap, this.buildMode, x, z);
     const color = this.buildValid ? 0x6ad66a : 0xff4b4b;
     (this.ghost.material as THREE.MeshBasicMaterial).color.setHex(color);
     this.ghost.visible = true;
     this.ghost.position.set(x, this.scene.heightAt(x, z) + (this.buildMode === 'tower' ? 3 : 1.5), z);
     this.scene.setTowerRange('placement', this.buildMode === 'tower' ? this.buildTarget : null, color);
+    this.scene.setBuildFootprint(this.buildTarget, this.buildMode, this.buildValid);
   }
 
   cancelBuild() {
@@ -413,6 +492,8 @@ export class RtsControls {
     this.buildTarget = null;
     this.buildValid = false;
     this.scene.setTowerRange('placement', null);
+    this.scene.setBuildGridVisible(false);
+    this.scene.setBuildFootprint(null, null, false);
     this.onSelectionChanged();
   }
 
@@ -423,13 +504,16 @@ export class RtsControls {
     const hero = snap?.units.find(u => u.owner === this.getMyId() && u.kind === 'worker' && u.hero && u.hp > 0);
     if (!hero) return;
     this.cancelBuild();
+    this.cancelVampireAbility();
     this.abilityMode = this.abilityMode === id ? null : id;
+    if (!this.abilityMode) this.scene.clearAbilityMarker();
     this.onSelectionChanged();
   }
 
   cancelAbility() {
     if (!this.abilityMode) return;
     this.abilityMode = null;
+    this.scene.clearAbilityMarker();
     this.onSelectionChanged();
   }
 
@@ -465,12 +549,14 @@ export class RtsControls {
     this.cancelBuild();
     this.cancelAbility();
     this.vampireAbilityMode = this.vampireAbilityMode === id ? null : id;
+    if (!this.vampireAbilityMode) this.scene.clearAbilityMarker();
     this.onSelectionChanged();
   }
 
   cancelVampireAbility() {
     if (!this.vampireAbilityMode) return;
     this.vampireAbilityMode = null;
+    this.scene.clearAbilityMarker();
     this.onSelectionChanged();
   }
 

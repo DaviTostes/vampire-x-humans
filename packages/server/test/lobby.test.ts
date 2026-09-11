@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { WebSocket } from 'ws';
-import { createRoom, joinRoom, chooseRole, setReady, startRoom, startReason, leaveRoom, lobbyInfo, rooms } from '../src/rooms.js';
+import { createRoom, joinRoom, chooseRole, setReady, startRoom, startReason, stepRoom, leaveRoom, lobbyInfo, rooms } from '../src/rooms.js';
 import { step } from '@vampire/shared';
 
 function join(room: ReturnType<typeof createRoom>, name: string) {
@@ -86,4 +86,24 @@ test('sala tem no máximo 5 jogadores e 4 vagas de humano', () => {
   assert.equal(chooseRole(room, clients[4]!, 'vampire'), null);
   assert.ok('error' in joinRoom(room, {} as WebSocket, 'Extra'));
   assert.equal(room.clients.length, 5);
+});
+
+test('ao terminar a partida a sala volta ao lobby pronta para revanche', () => {
+  const room = createRoom();
+  const host = join(room, 'A');
+  const guest = join(room, 'B');
+  chooseRole(room, host, 'vampire'); chooseRole(room, guest, 'human');
+  setReady(room, host, true); setReady(room, guest, true);
+  assert.equal(startRoom(room, host.id), true);
+  assert.equal(room.status, 'playing');
+  room.session!.state.result = { winner: 'vampire', reason: 'teste' };
+  stepRoom(room);
+  assert.equal(room.status, 'lobby', 'a sala reabre no lobby');
+  assert.equal(room.session, null);
+  assert.ok(room.clients.every(c => !c.ready), 'as confirmações caem');
+  assert.equal(lobbyInfo(room).canStart, false);
+  // Os mesmos jogadores continuam na sala e podem marcar pronto de novo.
+  assert.equal(room.clients.length, 2);
+  setReady(room, host, true); setReady(room, guest, true);
+  assert.equal(lobbyInfo(room).canStart, true);
 });

@@ -13,7 +13,7 @@ var GAME_CONFIG = {
     daySeconds: 60,
     nightSeconds: 100,
     nightsToWin: 10,
-    startingResources: { wood: 0, gold: 0 }
+    startingResources: { wood: 0, gold: 30 }
   },
   lobby: { codeLength: 5 },
   units: {
@@ -50,7 +50,6 @@ var GAME_CONFIG = {
       speedNight: Math.round(400 * MOVE_SPEED_SCALE * 10) / 10,
       attackDamage: 5,
       dayDamageMultiplier: 0.4,
-      attackDamageBuilding: 25,
       attackRange: 2.2,
       attackCooldown: 1.42,
       // Intervalo correspondente a Attack Speed 600 (1,42 × 120/600).
@@ -69,7 +68,7 @@ var GAME_CONFIG = {
   buildings: {
     bank: {
       hp: 500,
-      size: 6,
+      size: 5,
       cost: { wood: 0, gold: 0, time: 5 },
       // nível 1 é gratuito (seção 4)
       // Ciclo de produção CONSTANTE (não muda com o nível). Cada ciclo entrega
@@ -78,13 +77,13 @@ var GAME_CONFIG = {
     },
     taverna: {
       hp: 500,
-      size: 6,
+      size: 5,
       cost: { wood: 0, gold: 128, time: 5 },
       recruit: { wood: 0, gold: 50, time: 2 }
     },
     wall: {
       hp: 30,
-      size: 2,
+      size: 3,
       cost: { wood: 0, gold: 4, time: 2 }
     },
     tower: {
@@ -101,7 +100,7 @@ var GAME_CONFIG = {
     // valores provisórios. Nível 2 é pré-requisito do Banco nível 6.
     market: {
       hp: 500,
-      size: 6,
+      size: 5,
       cost: { wood: 0, gold: 64, time: 4 },
       maxLevel: 2,
       // Chave = nível ATUAL: 1 é o custo de ir do nível 1 para o 2.
@@ -116,7 +115,7 @@ var GAME_CONFIG = {
     // Estrutura neutra e indestrutível. A cripta é a base e vende itens e skills.
     // Ciclo de produção FIXO (como o Banco): só a quantidade por ciclo cresce
     // com os upgrades, o intervalo entre os ticks não muda.
-    crypt: { hp: 4e3, size: 8, cycleSeconds: 1 }
+    crypt: { hp: 4e3, size: 7, cycleSeconds: 1 }
   },
   buildable: ["bank", "taverna", "wall", "tower", "goldMine", "market"],
   // Itens do Vampiro (dano/vida/Attack Speed): ver `spec.vampireItemTiers`.
@@ -188,16 +187,16 @@ var GAME_CONFIG = {
     // rochedos com uma única abertura. O jogador fecha a passagem com um Muro.
     // As posições ficam num anel sobre a ilha inclinada; `facing` aponta a
     // entrada para o centro do mapa.
-    refugeWalls: { thickness: 5, entranceWidth: 3, height: 5.5 },
+    refugeWalls: { thickness: 5, entranceWidth: 8, height: 5.5 },
     refuges: [
-      { name: "Clareira dos Pinheiros", x: 110, z: 86, width: 56, depth: 50, facing: "west" },
-      { name: "Ref\xFAgio da Pedreira", x: 29, z: 123, width: 56, depth: 50, facing: "north" },
-      { name: "Bosque da Lua", x: -69, z: 88, width: 56, depth: 50, facing: "north" },
-      { name: "Abrigo do Poente", x: -126, z: 2, width: 50, depth: 58, facing: "east" },
-      { name: "Clareira da Aurora", x: -110, z: -86, width: 50, depth: 58, facing: "east" },
-      { name: "Ref\xFAgio dos Corvos", x: -29, z: -123, width: 56, depth: 50, facing: "south" },
-      { name: "Vale das Cinzas", x: 69, z: -88, width: 56, depth: 50, facing: "south" },
-      { name: "Bosque da N\xE9voa", x: 126, z: -2, width: 50, depth: 58, facing: "west" }
+      { name: "Clareira dos Pinheiros", x: 110, z: 86, width: 64, depth: 58, facing: "west" },
+      { name: "Ref\xFAgio da Pedreira", x: 29, z: 123, width: 64, depth: 58, facing: "north" },
+      { name: "Bosque da Lua", x: -69, z: 88, width: 64, depth: 58, facing: "north" },
+      { name: "Abrigo do Poente", x: -126, z: 2, width: 58, depth: 66, facing: "east" },
+      { name: "Clareira da Aurora", x: -110, z: -86, width: 58, depth: 66, facing: "east" },
+      { name: "Ref\xFAgio dos Corvos", x: -29, z: -123, width: 64, depth: 58, facing: "south" },
+      { name: "Vale das Cinzas", x: 69, z: -88, width: 64, depth: 58, facing: "south" },
+      { name: "Bosque da N\xE9voa", x: 126, z: -2, width: 58, depth: 66, facing: "west" }
     ],
     // Ilha inclinada: elipse girada com costa irregular, cercada de água.
     // `rotation` em radianos gira o eixo maior; `bays` recortam enseadas.
@@ -488,6 +487,7 @@ var GAME_CONFIG = {
     },
     // ---- Limites de entidades por jogador (seção 28) ----
     entityLimits: {
+      bank: 1,
       wall: 2,
       taverna: 3,
       tower: 30,
@@ -618,6 +618,10 @@ function lumberjackGatherRate(level) {
 function repairerStats(level) {
   const cfg = GAME_CONFIG.spec.workers.repairer;
   return cfg.levels[clampLevel(level, workerMaxLevel("repairer"))];
+}
+function repairerRepairRate(level) {
+  const ratio = repairerStats(level).repairSpeed / repairerStats(1).repairSpeed;
+  return GAME_CONFIG.interaction.repairRate * ratio;
 }
 function repairerTrainingTime(level) {
   return repairerStats(level).trainingTime;
@@ -1887,6 +1891,9 @@ function applyCommand(session, playerId, cmd) {
     case "upgradeVampireItem": {
       if (playerId !== VAMPIRE_PLAYER_ID || !VAMPIRE_ITEM_IDS.includes(cmd.itemId)) return;
       if ((s.vampire.items[cmd.itemId] ?? 0) < 1) return;
+      const vampire = s.units.find((u) => u.kind === "vampire" && u.owner === playerId && !u.dead);
+      const crypt = s.buildings.find((b) => b.kind === "crypt");
+      if (!vampire || vampireShopAccess(s.phase, vampire, crypt)) return;
       buyVampireItem(s, playerId, cmd.itemId);
       break;
     }
@@ -2079,7 +2086,6 @@ function applyCommand(session, playerId, cmd) {
     case "repair": {
       const wall = buildingById(s, cmd.targetId);
       if (!wall || !wall.done || wall.owner !== playerId || wall.kind !== "wall") return;
-      if (wall.hp >= wall.maxHp) return;
       let any = false;
       for (const u of s.units) {
         if (!u.dead && u.owner === playerId && u.kind === "worker" && cmd.ids.includes(u.id) && canRepairRole(u.workerRole)) {
@@ -2205,6 +2211,12 @@ function vampireOutsideCrypt(s) {
   if (!vamp) return false;
   return dist(vamp.x, vamp.z, crypt.x, crypt.z) > CRYPT_RADIUS;
 }
+function vampireAtCrypt(s) {
+  const crypt = s.buildings.find((b) => b.kind === "crypt");
+  const vamp = s.units.find((u) => u.kind === "vampire" && !u.dead);
+  if (!crypt || !vamp) return false;
+  return dist(vamp.x, vamp.z, crypt.x, crypt.z) <= CRYPT_RADIUS;
+}
 function updateGather(s, nav, u, dt, index) {
   const stats = workerStats(u);
   const rawNode = index.nodes.get(u.gatherNodeId ?? -1);
@@ -2260,11 +2272,11 @@ function updateAttackOrder(s, nav, u, dt, index) {
   u.activity = "attacking";
   if (u.attackCd > 0) return;
   u.attackCd = u.kind === "vampire" ? vampireEffectiveCooldown(s.vampire.items) : stats.attackCooldown;
+  const vampireDamage = (VAMPIRE.attackDamage + vampireItemBonuses(s.vampire.items).damage) * vampireSkillMultiplier(s.vampire.skills) * (s.phase === "night" ? 1 : VAMPIRE.dayDamageMultiplier);
+  const dmg = u.kind === "vampire" ? vampireDamage : stats.attackDamage;
   if (targetUnit) {
     if ((targetUnit.fortify ?? 0) > 0) return;
     if (targetUnit.kind === "vampire" && vampireInvulnerable(s)) return;
-    const vampireDamage = (VAMPIRE.attackDamage + vampireItemBonuses(s.vampire.items).damage) * vampireSkillMultiplier(s.vampire.skills);
-    const dmg = u.kind === "vampire" ? vampireDamage * (s.phase === "night" ? 1 : VAMPIRE.dayDamageMultiplier) : stats.attackDamage;
     targetUnit.hp -= dmg;
     if (u.kind === "vampire") creditVampireBloodFromDamage(s, dmg);
     if (targetUnit.hp <= 0) {
@@ -2275,7 +2287,6 @@ function updateAttackOrder(s, nav, u, dt, index) {
     }
   } else if (targetBuilding) {
     if ((targetBuilding.fortify ?? 0) > 0) return;
-    const dmg = u.kind === "vampire" ? (VAMPIRE.attackDamageBuilding + vampireItemBonuses(s.vampire.items).damage) * vampireSkillMultiplier(s.vampire.skills) : stats.attackDamage;
     targetBuilding.hp -= dmg;
     if (u.kind === "vampire") creditVampireBloodFromDamage(s, dmg);
     if (targetBuilding.hp <= 0) {
@@ -2312,14 +2323,18 @@ function updateBuild(s, nav, u, dt, index) {
 function updateRepair(s, nav, u, dt, index) {
   const stats = workerStats(u);
   const wall = index.buildings.get(u.order?.targetId ?? -1);
-  if (!wall || !wall.done || wall.kind !== "wall" || wall.hp >= wall.maxHp) {
+  if (!wall || !wall.done || wall.kind !== "wall") {
     u.order = null;
     return;
   }
   if (!nav.move(u, wall.x, wall.z, stats.speed, dt, INTERACTION.buildRange, buildingHalf(wall))) return;
+  if (wall.hp >= wall.maxHp) {
+    u.activity = "idle";
+    return;
+  }
   u.activity = "repairing";
-  wall.hp = Math.min(wall.maxHp, wall.hp + INTERACTION.repairRate * stats.buildRate * dt);
-  if (wall.hp >= wall.maxHp) u.order = null;
+  const level = u.workerRole === "repairer" ? playerWorkerLevel(s, u.owner, "repairer") : 1;
+  wall.hp = Math.min(wall.maxHp, wall.hp + repairerRepairRate(level) * stats.buildRate * dt);
 }
 function clampVampireToCrypt(s) {
   if (s.phase === "night") return;
@@ -2373,7 +2388,7 @@ function updateUnits(session, dt, index) {
       }
     }
     if (u.kind === "vampire") {
-      if (!vampOut) u.hp = Math.min(u.maxHp, u.hp + VAMPIRE.cryptRegen * dt);
+      if (vampireAtCrypt(s)) u.hp = Math.min(u.maxHp, u.hp + VAMPIRE.cryptRegen * dt);
       else if (s.phase === "night") u.hp = Math.min(u.maxHp, u.hp + VAMPIRE.nightRegen * dt);
     }
     if (u.kind === "vampire") {
@@ -2518,6 +2533,11 @@ function step(session, commands) {
   const s = session.state;
   for (const { playerId, cmd } of commands) {
     applyCommand(session, playerId, cmd);
+    if (s.practice) {
+      for (const p of s.players) {
+        if (p.id !== playerId) applyCommand(session, p.id, cmd);
+      }
+    }
   }
   if (s.result) {
     s.tick++;
@@ -2556,7 +2576,8 @@ function makeSnapshot(s, includeNodes = true) {
       carryRes: u.carryRes,
       activity: u.activity,
       orderType: u.order?.t ?? null,
-      targetId: u.order?.targetId ?? null
+      targetId: u.order?.targetId ?? null,
+      fortify: u.fortify && u.fortify > 0 ? Math.round(u.fortify * 10) / 10 : void 0
     })),
     buildings: s.buildings.map((b) => ({
       id: b.id,
@@ -2571,7 +2592,8 @@ function makeSnapshot(s, includeNodes = true) {
       done: b.done,
       goldProduced: b.goldProduced ?? 0,
       lastShot: b.lastShot ? { ...b.lastShot } : void 0,
-      recruitment: b.recruitment ? { ...b.recruitment } : null
+      recruitment: b.recruitment ? { ...b.recruitment } : null,
+      fortify: b.fortify && b.fortify > 0 ? Math.round(b.fortify * 10) / 10 : void 0
     })),
     nodes: includeNodes ? s.nodes.filter((n) => n.amount > 0) : [],
     players: s.players.map((p) => ({
@@ -2708,6 +2730,15 @@ function broadcastLobby(room) {
   const message = JSON.stringify({ type: "lobby", lobby: lobbyInfo(room) });
   for (const client of room.clients) if (client.ws.readyState === 1) client.ws.send(message);
 }
+function reopenLobby(room) {
+  room.status = "lobby";
+  room.session = null;
+  room.endedAt = void 0;
+  room.queue = [];
+  room.cmdCount.clear();
+  room.nodeAmounts.clear();
+  for (const client of room.clients) client.ready = false;
+}
 function stepRoom(room) {
   if (room.status !== "playing" || !room.session) return;
   const commands = room.queue;
@@ -2726,12 +2757,12 @@ function stepRoom(room) {
     for (const c of room.clients) if (c.ws.readyState === 1) c.ws.send(nodePayload);
   }
   if (room.session.state.result) {
-    room.status = "ended";
-    room.endedAt = Date.now();
     const res = JSON.stringify({ type: "result", result: room.session.state.result });
     for (const c of room.clients) {
       if (c.ws.readyState === 1) c.ws.send(res);
     }
+    reopenLobby(room);
+    broadcastLobby(room);
   }
 }
 var ENDED_ROOM_TTL_MS = 5 * 6e4;

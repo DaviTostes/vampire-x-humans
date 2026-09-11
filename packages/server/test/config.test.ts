@@ -69,10 +69,11 @@ test('produção do Banco vem da tabela central (gold/s)', () => {
   try {
     level1.production = 7;
     const session = createSession([], 1, [0, 4]);
+    const startGold = session.state.players[0]!.gold;
     session.state.buildings.push({ ...session.state.buildings[0]!, id: 1001, kind: 'bank', owner: 0, x: 10, z: 8 });
     run(session, 30); // 2 segundos
     const gold = session.state.players[0]!.gold;
-    assert.ok(gold >= 13 && gold <= 14, `produção contínua em 2s: ${gold}`);
+    assert.ok(gold >= startGold + 13 && gold <= startGold + 14, `produção contínua em 2s: ${gold}`);
   } finally {
     level1.production = before;
   }
@@ -84,13 +85,14 @@ test('o Muro respeita proporções de troca diferentes de 1:1', () => {
   try {
     market.wood = 30; market.gold = 4;
     const session = createSession([], 1, [0, 4]);
+    const startGold = session.state.players[0]!.gold;
     session.state.buildings.push({ ...session.state.buildings[0]!, id: 1001, kind: 'market', owner: 0, x: 10, z: 8 });
     session.state.players[0]!.wood = 30;
     applyCommand(session, 0, { type: 'market', targetId: 1001, trade: 'woodToGold', amount: 30 });
     assert.equal(session.state.players[0]!.wood, 0);
-    assert.equal(session.state.players[0]!.gold, 4);
+    assert.equal(session.state.players[0]!.gold, startGold + 4);
     applyCommand(session, 0, { type: 'market', targetId: 1001, trade: 'goldToWood', amount: 4 });
     assert.equal(session.state.players[0]!.wood, 30);
-    assert.equal(session.state.players[0]!.gold, 0);
+    assert.equal(session.state.players[0]!.gold, startGold);
   } finally { Object.assign(market, before); }
 });

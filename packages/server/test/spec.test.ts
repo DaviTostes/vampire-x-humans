@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { applyCommand, createSession, step, vampireStatus, GAME_CONFIG, SPEC_ENTITY_LIMITS, VAMPIRE_PLAYER_ID, type Building, type Unit, type WorkerRole } from '@vampire/shared';
+import { applyCommand, createSession, step, vampireStatus, GAME_CONFIG, SPEC_ENTITY_LIMITS, VAMPIRE, VAMPIRE_PLAYER_ID, type Building, type Unit, type WorkerRole } from '@vampire/shared';
 
 function fixture() {
   const session = createSession([], 42, [0, 4]);
@@ -270,6 +270,28 @@ test('Vampiro evolui a Cripta com sangue; humano não pode', () => {
   applyCommand(session, 0, { type: 'upgrade', ids: [], targetId: crypt.id });
   assert.equal(crypt.level, 2, 'humano não evolui a cripta');
   assert.equal(session.state.vampire.blood, blood);
+});
+
+test('Vampiro usa o mesmo dano contra unidades e construções (seção 13)', () => {
+  const { session } = fixture();
+  const { state } = session;
+  const vampire = state.units.find(u => u.kind === 'vampire')!;
+  const wall = building(2000, 'wall', 0, 0);
+  wall.hp = 1000; wall.maxHp = 1000;
+  state.buildings.push(wall);
+  Object.assign(vampire, { x: 0, z: 3 });
+  const attackOnce = () => {
+    vampire.attackCd = 0;
+    applyCommand(session, VAMPIRE_PLAYER_ID, { type: 'attack', ids: [vampire.id], targetId: wall.id });
+    step(session, []);
+  };
+  state.phase = 'night';
+  attackOnce();
+  assert.equal(wall.maxHp - wall.hp, VAMPIRE.attackDamage, 'dano noturno no muro = dano do Vampiro');
+  wall.hp = wall.maxHp;
+  state.phase = 'day';
+  attackOnce();
+  assert.equal(wall.maxHp - wall.hp, VAMPIRE.attackDamage * VAMPIRE.dayDamageMultiplier, 'dano diurno no muro');
 });
 
 test('Revelar Área: 1 uso por noite, não acumula e reseta na nova noite', () => {

@@ -17,9 +17,16 @@ import {
   isWaterAtWorld,
   isForestAt,
   RESOURCE_PLACEMENTS,
+  INTERACTION,
+  TERRAIN_MAX_SLOPE,
+  canPlaceBuilding,
+  type BuildKind,
   CRYPT_POSITION,
   VAMPIRE,
   vampireEffectiveCooldown,
+  vampireItemBonuses,
+  vampireSkillMultiplier,
+  SPEC_BLOOD_PER_DAMAGE,
   type BuildingKind,
   WORLD,
   generateMap,
@@ -275,6 +282,16 @@ export class GameScene {
   private terrain!: THREE.Mesh;
   private bridgeDecks: THREE.Mesh[] = [];
   private buildingSelection: THREE.LineLoop | null = null;
+  // Grade de posicionamento: overlay de tiles (livre/bloqueado) no modo de construção.
+  private buildGrid: THREE.Mesh | null = null;
+  private buildGridTexture: THREE.DataTexture | null = null;
+  private buildGridData: Uint8Array | null = null;
+  private readonly buildGridStaticByKind = new Map<BuildKind, Uint8Array>();
+  private buildGridKind: BuildKind | null = null;
+  private buildGridMaterial: THREE.ShaderMaterial | null = null;
+  private buildGridRes = 0;
+  private buildGridVisible = false;
+  private lastSnap: Snapshot | null = null;
   private towerRanges = new Map<'placement' | 'selection', THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>>();
   private mapOccluders: THREE.Mesh[] = [];
   private unitReveal = new UnitReveal();
@@ -305,6 +322,12 @@ export class GameScene {
   };
   private animationTime = 0;
   private effects: Array<{ object: THREE.Object3D; age: number; lifetime: number; velocity: THREE.Vector3; spin: boolean; growth: number; onComplete?: () => void }> = [];
+  // Efeito persistente de Revelar Área (habilidade do Vampiro).
+  private revealEffect: THREE.Group | null = null;
+  private prevRevealKey = '';
+  private revealLabelSecond = -1;
+  // Vida do snapshot anterior (unidades e prédios) para detectar dano recebido.
+  private prevHp = new Map<number, number>();
 
   constructor(container: HTMLElement, seed: number) {
     this.container = container;
@@ -350,6 +373,7 @@ export class GameScene {
     this.buildTerrain();
     this.buildFixedMap();
     this.buildDecorTrees();
+    this.buildPlacementGrid();
     this.buildFogOfWar();
     window.addEventListener('resize', () => this.onResize());
   }
@@ -761,6 +785,11 @@ export class GameScene {
     this.visionSources = sources;
   }
 
+  /** Visibilidade de uma entidade para o jogador local (3D e minimapa). */
+  isVisibleToPlayer(owner: number, x: number, z: number): boolean {
+    return this.isVisibleToLocal(owner, x, z);
+  }
+
   private isVisibleToLocal(owner: number, x: number, z: number): boolean {
     if (this.localOwner < 0) return true;
     if (owner < 0) return true;
@@ -817,8 +846,27 @@ export class GameScene {
   // ---------- sync de entidades ----------
 
   sync(snap: Snapshot) {
+    this.lastSnap = snap;
     this.computeVision(snap);
+    this.syncReveal(snap);
+    // Dano causado neste tick (para o número de dano e o sangue do Vampiro).
+    const drops = new Map<number, number>();
+    for (const u of snap.units) {
+      const prev = this.prevHp.get(u.id);
+      if (prev !== undefined && prev - u.hp >= 1) drops.set(u.id, prev - u.hp);
+    }
+    for (const b of snap.buildings) {
+      const prev = this.prevHp.get(b.id);
+      if (prev !== undefined && prev - b.hp >= 1) drops.set(b.id, prev - b.hp);
+    }
+    if (this.buildGridVisible && this.buildGridKind) this.refreshBuildGrid(snap, this.buildGridKind);
     const seenUnits = new Set<number>();
+    // Alvos atingidos por torres neste tick: o projétil já mostra o dano, então o
+    // feedback genérico de perda de vida não deve duplicar.
+    const towerHits = new Set<number>();
+    for (const b of snap.buildings) {
+      if (b.lastShot && snap.tick - b.lastShot.tick <= 1) towerHits.add(b.lastShot.targetId);
+    }
     for (const u of snap.units) {
       seenUnits.add(u.id);
       let g = this.unitMeshes.get(u.id);
@@ -832,16 +880,21 @@ export class GameScene {
         g.userData.tx = u.x;
         g.userData.tz = u.z;
       }
+      const prevPos = g.userData.snapX !== undefined
+        ? { x: g.userData.snapX as number, z: g.userData.snapZ as number } : null;
       g.userData.tx = u.x;
       g.userData.tz = u.z;
+      g.userData.snapX = u.x;
+      g.userData.snapZ = u.z;
       g.userData.kind = u.kind;
       g.userData.hp = u.hp;
       g.userData.maxHp = u.maxHp;
       g.userData.activity = u.activity;
-      // Velocidade da animação de ataque acompanha o item de velocidade (Frenesi).
-      g.userData.attackScale = u.kind === 'vampire'
-        ? VAMPIRE.attackCooldown / Math.max(1e-3, vampireEffectiveCooldown(snap.vampireItems))
-        : 1;
+      // Duração real de um ataque do vampiro (cooldown efetivo), para casar a
+      // animação com a cadência da simulação.
+      g.userData.attackDuration = u.kind === 'vampire'
+        ? vampireEffectiveCooldown(snap.vampireItems)
+        : undefined;
       g.userData.resource = u.carryRes ?? snap.nodes.find(n => n.id === u.targetId)?.kind;
       const target = snap.nodes.find(n => n.id === u.targetId) ?? snap.buildings.find(b => b.id === u.targetId) ?? snap.units.find(t => t.id === u.targetId);
       if (target && (u.activity === 'gathering' || u.activity === 'building' || u.activity === 'repairing' || u.activity === 'attacking')) {
@@ -854,6 +907,37 @@ export class GameScene {
       this.updateHealthBar(u.id, u.hp, u.maxHp);
       const bar = this.hpBars.get(u.id);
       if (bar) bar.visible = visible;
+
+      // Auras de status e bursts de início (Fortificar vale para todos; o resto é
+      // do Vampiro).
+      const statuses = u.kind === 'vampire' ? snap.vampireStatuses ?? {} : {};
+      const flags: Record<string, boolean> = {
+        fortify: (u.fortify ?? 0) > 0,
+        entangle: (statuses.entangled ?? 0) > 0,
+        silenced: (statuses.silenced ?? 0) > 0,
+        batForm: (statuses.batForm ?? 0) > 0 || (statuses.exitingBatForm ?? 0) > 0,
+        channelingTeleport: (statuses.channelingTeleport ?? 0) > 0,
+      };
+      this.applyStatusAuras(g, flags);
+
+      // Dano recebido (o Vampiro atacando unidades) e teleporte (salto de posição).
+      const dealt = drops.get(u.id);
+      if (dealt !== undefined && !towerHits.has(u.id)) {
+        this.hitFeedback(u.x, u.z, dealt, u.kind === 'vampire' ? 2.6 : 2.0);
+      }
+      // Sangue ganho pelo Vampiro no golpe (80% do dano causado).
+      if (u.kind === 'vampire' && u.targetId != null && drops.has(u.targetId)) {
+        const damage = (VAMPIRE.attackDamage + vampireItemBonuses(snap.vampireItems).damage)
+          * vampireSkillMultiplier(snap.vampireSkills)
+          * (snap.phase === 'night' ? 1 : VAMPIRE.dayDamageMultiplier);
+        const blood = Math.floor(damage * SPEC_BLOOD_PER_DAMAGE);
+        if (blood > 0) {
+          this.bloodFloating(new THREE.Vector3(u.x, this.heightAt(u.x, u.z) + 4.4, u.z), blood);
+        }
+      }
+      if (prevPos && u.activity !== 'moving' && Math.hypot(u.x - prevPos.x, u.z - prevPos.z) > 8) {
+        this.teleportFeedback(prevPos.x, prevPos.z, u.x, u.z);
+      }
     }
     // remove mortos
     for (const [id, g] of this.unitMeshes) {
@@ -911,11 +995,26 @@ export class GameScene {
         this.dustEffect(g.position, '#bca77f');
       }
       g.scale.y = b.done ? 1 : Math.max(0.15, b.progress);
-      if (!g.userData.bar) this.addBuildingHealthBar(g, b.id, b.kind);
-      else if (!this.hpBars.has(b.id)) this.hpBars.set(b.id, g.userData.bar);
-      // Reaproveita a barra ao reconstruir o modelo na conclusão da obra.
-      g.userData.bar = this.hpBars.get(b.id);
-      this.updateHealthBar(b.id, b.hp, b.maxHp);
+      // Aura de Fortificar (o escudo acompanha o tamanho da construção).
+      const buildHalf = BUILDING_SIZE[b.kind] ?? 6;
+      this.applyStatusAuras(g, { fortify: (b.fortify ?? 0) > 0 }, Math.max(1.2, buildHalf * 0.55));
+      const dealtBuilding = drops.get(b.id);
+      if (dealtBuilding !== undefined) {
+        this.hitFeedback(b.x, b.z, dealtBuilding, Math.max(1.6, buildHalf * 0.45));
+      }
+      // A Cripta é indestrutível: não mostra barra de vida.
+      if (b.kind !== 'crypt') {
+        if (!g.userData.bar) this.addBuildingHealthBar(g, b.id, b.kind);
+        else if (!this.hpBars.has(b.id)) this.hpBars.set(b.id, g.userData.bar);
+        // Reaproveita a barra ao reconstruir o modelo na conclusão da obra.
+        g.userData.bar = this.hpBars.get(b.id);
+        this.updateHealthBar(b.id, b.hp, b.maxHp);
+      }
+      // Construções inimigas fora da visão do time também somem (fog de guerra).
+      const visible = this.isVisibleToLocal(b.owner, b.x, b.z);
+      g.visible = visible;
+      g.userData.visionVisible = visible;
+      if (g.userData.bar) g.userData.bar.visible = visible;
     }
     for (const [id, g] of this.buildingMeshes) {
       if (!seenBuildings.has(id)) {
@@ -955,6 +1054,11 @@ export class GameScene {
         this.nodeMeshes.delete(id);
       }
     }
+
+    // Guarda a vida deste tick para o próximo comparar e detectar dano.
+    this.prevHp.clear();
+    for (const u of snap.units) this.prevHp.set(u.id, u.hp);
+    for (const b of snap.buildings) this.prevHp.set(b.id, b.hp);
   }
 
   /** Bosques coletáveis: quatro árvores por nó, instanciadas em uma ou duas chamadas. */
@@ -1114,6 +1218,195 @@ export class GameScene {
     this.scene.add(trees);
   }
 
+  /**
+   * Grade de posicionamento (estilo RTS): quadrados de 1 unidade alinhados às
+   * coordenadas inteiras. Branco = livre, vermelho = bloqueado. As construções
+   * são encaixadas para ocupar quadrados inteiros (ver `updateBuildPreview`).
+   */
+  private buildPlacementGrid() {
+    const res = Math.round(WORLD_SIZE);
+    this.buildGridRes = res;
+    this.buildGridData = new Uint8Array(res * res * 4);
+    const data = this.buildGridData as Uint8Array<ArrayBuffer>;
+    const texture = new THREE.DataTexture(data, res, res, THREE.RGBAFormat);
+    texture.magFilter = THREE.NearestFilter;
+    texture.minFilter = THREE.NearestFilter;
+    texture.wrapS = texture.wrapT = THREE.ClampToEdgeWrapping;
+    texture.needsUpdate = true;
+    this.buildGridTexture = texture;
+
+    // Reaproveita a malha do terreno (já ajustada ao relevo) e sobe um pouco.
+    const geometry = this.terrain.geometry.clone();
+    const position = geometry.attributes.position as THREE.BufferAttribute;
+    for (let i = 0; i < position.count; i++) position.setY(i, position.getY(i) + 0.12);
+
+    const material = new THREE.ShaderMaterial({
+      uniforms: {
+        uGrid: { value: texture },
+        uHalf: { value: WORLD.half },
+        uWorldSize: { value: WORLD_SIZE },
+        // Pegada da construção sob o cursor (minX, minZ, maxX, maxZ) e estado:
+        // 0 = sem pegada, 1 = válida, 2 = inválida.
+        uFootprint: { value: new THREE.Vector4() },
+        uFootprintState: { value: 0 },
+      },
+      transparent: true,
+      depthWrite: false,
+      vertexShader: `
+        varying vec2 vWorld;
+        void main() {
+          vec4 world = modelMatrix * vec4(position, 1.0);
+          vWorld = world.xz;
+          gl_Position = projectionMatrix * viewMatrix * world;
+        }
+      `,
+      fragmentShader: `
+        uniform sampler2D uGrid;
+        uniform float uHalf;
+        uniform float uWorldSize;
+        uniform vec4 uFootprint;
+        uniform float uFootprintState;
+        varying vec2 vWorld;
+        void main() {
+          vec2 uv = (vWorld + uHalf) / uWorldSize;
+          if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) discard;
+          float blocked = 1.0 - texture2D(uGrid, uv).r;
+          vec3 color = mix(vec3(0.93, 0.96, 1.0), vec3(1.0, 0.22, 0.24), blocked);
+          float alpha = mix(0.05, 0.28, blocked);
+          // A pegada da construção cobre exatamente os quadrados do footprint e
+          // responde se cabe ali (verde) ou não (vermelho).
+          if (uFootprintState > 0.5 && vWorld.x >= uFootprint.x && vWorld.x <= uFootprint.z
+              && vWorld.y >= uFootprint.y && vWorld.y <= uFootprint.w) {
+            color = uFootprintState > 1.5 ? vec3(1.0, 0.22, 0.24) : vec3(0.34, 0.94, 0.42);
+            alpha = 0.5;
+          }
+          // Linhas nas coordenadas inteiras: o quadrado fecha certinho no prédio.
+          vec2 g = abs(fract(vWorld + 0.5) - 0.5) / fwidth(vWorld);
+          float line = 1.0 - min(min(g.x, g.y), 1.0);
+          gl_FragColor = vec4(color, clamp(alpha + line * 0.45, 0.0, 0.85));
+        }
+      `,
+    });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.frustumCulled = false;
+    mesh.renderOrder = 2;
+    mesh.visible = false;
+    this.buildGrid = mesh;
+    this.buildGridMaterial = material;
+    this.scene.add(mesh);
+    this.refreshBuildGrid(null, null);
+  }
+
+  /** Encosta íngreme demais (mesma regra do posicionamento autoritativo). */
+  private tooSteepAt(x: number, z: number): boolean {
+    const map = this.map, n = map.tiles, half = WORLD.half, ts = WORLD.tileSize;
+    const ground = (px: number, pz: number) => {
+      const gx = Math.max(0, Math.min(n - 1.0001, (px + half) / ts));
+      const gz = Math.max(0, Math.min(n - 1.0001, (pz + half) / ts));
+      const tx = Math.floor(gx), tz = Math.floor(gz), fx = gx - tx, fz = gz - tz;
+      const h = (dx: number, dz: number) => map.height[Math.min(n - 1, tz + dz) * n + Math.min(n - 1, tx + dx)] ?? 0;
+      return (h(0, 0) * (1 - fx) + h(1, 0) * fx) * (1 - fz) + (h(0, 1) * (1 - fx) + h(1, 1) * fx) * fz;
+    };
+    const step = ts;
+    const h0 = ground(x, z);
+    return Math.max(
+      Math.abs(ground(x + step, z) - h0),
+      Math.abs(ground(x - step, z) - h0),
+      Math.abs(ground(x, z + step) - h0),
+      Math.abs(ground(x, z - step) - h0),
+    ) / step > TERRAIN_MAX_SLOPE;
+  }
+
+  /**
+   * Camada estática exata para a construção: cada célula é avaliada pelo próprio
+   * `canPlaceBuilding` na posição de encaixe (centro da célula). Com todos os
+   * tamanhos ímpares, o encaixe cai sempre no centro, então não há deslocamento.
+   */
+  private staticPlacementGrid(kind: BuildKind): Uint8Array {
+    const cached = this.buildGridStaticByKind.get(kind);
+    if (cached) return cached;
+    const res = this.buildGridRes, worldHalf = WORLD.half;
+    const even = BUILDING_SIZE[kind] % 2 === 0;
+    const empty = { buildings: [], nodes: [], units: [] };
+    const grid = new Uint8Array(res * res);
+    for (let iz = 0; iz < res; iz++) {
+      const cz = iz - worldHalf + 0.5;
+      const sz = even ? Math.round(cz) : cz;
+      for (let ix = 0; ix < res; ix++) {
+        const cx = ix - worldHalf + 0.5;
+        const sx = even ? Math.round(cx) : cx;
+        grid[iz * res + ix] = canPlaceBuilding(this.map, empty, kind, sx, sz) ? 1 : 0;
+      }
+    }
+    this.buildGridStaticByKind.set(kind, grid);
+    return grid;
+  }
+
+  /** Recalcula os quadrados para a construção selecionada (terreno + entidades). */
+  private refreshBuildGrid(snap: Snapshot | null, kind: BuildKind | null) {
+    const data = this.buildGridData;
+    const texture = this.buildGridTexture;
+    if (!data || !texture) return;
+    const res = this.buildGridRes, worldHalf = WORLD.half;
+    const grid = kind ? this.staticPlacementGrid(kind) : null;
+    for (let i = 0; i < res * res; i++) {
+      const free = grid && grid[i] ? 255 : 0;
+      const o = i * 4;
+      data[o] = free; data[o + 1] = free; data[o + 2] = free; data[o + 3] = 255;
+    }
+    if (kind && snap) {
+      const half = BUILDING_SIZE[kind] / 2;
+      // Célula que representa o encaixe: par = canto (x-0.5), ímpar = centro.
+      const shift = BUILDING_SIZE[kind] % 2 === 0 ? 0.5 : 0;
+      const mark = (minX: number, maxX: number, minZ: number, maxZ: number) => {
+        const ix0 = Math.max(0, Math.floor(minX + worldHalf - 0.5 - shift) + 1);
+        const ix1 = Math.min(res - 1, Math.ceil(maxX + worldHalf - 0.5 - shift) - 1);
+        const iz0 = Math.max(0, Math.floor(minZ + worldHalf - 0.5 - shift) + 1);
+        const iz1 = Math.min(res - 1, Math.ceil(maxZ + worldHalf - 0.5 - shift) - 1);
+        for (let iz = iz0; iz <= iz1; iz++) {
+          for (let ix = ix0; ix <= ix1; ix++) {
+            const o = (iz * res + ix) * 4;
+            data[o] = 0; data[o + 1] = 0; data[o + 2] = 0;
+          }
+        }
+      };
+      const clearance = INTERACTION.resourceBuildClearance;
+      for (const b of snap.buildings) {
+        const e = BUILDING_SIZE[b.kind] / 2 + half;
+        mark(b.x - e, b.x + e, b.z - e, b.z + e);
+      }
+      for (const node of snap.nodes) {
+        if (node.amount <= 0) continue;
+        const e = half + clearance;
+        mark(node.x - e, node.x + e, node.z - e, node.z + e);
+      }
+      const unitRange = half + INTERACTION.unitRadius;
+      for (const u of snap.units) mark(u.x - unitRange, u.x + unitRange, u.z - unitRange, u.z + unitRange);
+    }
+    texture.needsUpdate = true;
+  }
+
+  /** Liga/desliga a grade de posicionamento (modo de construção). */
+  setBuildGridVisible(visible: boolean, kind?: BuildKind) {
+    this.buildGridVisible = visible;
+    this.buildGridKind = visible ? (kind ?? this.buildGridKind) : null;
+    if (this.buildGrid) this.buildGrid.visible = visible;
+    if (visible && this.buildGridKind) this.refreshBuildGrid(this.lastSnap, this.buildGridKind);
+  }
+
+  /** Atualiza a pegada destacada na grade (posição, tamanho e se cabe). */
+  setBuildFootprint(center: { x: number; z: number } | null, kind: BuildKind | null, valid: boolean) {
+    const material = this.buildGridMaterial;
+    if (!material) return;
+    if (!center || !kind) {
+      material.uniforms.uFootprintState!.value = 0;
+      return;
+    }
+    const h = BUILDING_SIZE[kind] / 2;
+    (material.uniforms.uFootprint!.value as THREE.Vector4).set(center.x - h, center.z - h, center.x + h, center.z + h);
+    material.uniforms.uFootprintState!.value = valid ? 1 : 2;
+  }
+
   private addHealthBar(unitGroup: THREE.Group, unitId: number) {
     const bar = new THREE.Mesh(
       new THREE.PlaneGeometry(1.4, 0.18),
@@ -1251,11 +1544,57 @@ export class GameScene {
     const texture = new THREE.CanvasTexture(canvas); texture.colorSpace = THREE.SRGBColorSpace;
     const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false, sizeAttenuation: false, toneMapped: false }));
     sprite.userData.feedback = text;
+    sprite.renderOrder = 999;
+    this.sizeLabel(sprite); sprite.position.copy(position);
+    this.addEffect(sprite, new THREE.Vector3(0, 1.8, 0), 1.8);
+  }
+
+  /** Número flutuante de sangue com o ícone de gota (ganho de sangue). */
+  private bloodFloating(position: THREE.Vector3, amount: number, color = '#ff5b7a') {
+    const canvas = document.createElement('canvas');
+    canvas.width = 512; canvas.height = 96;
+    const ctx = canvas.getContext('2d')!;
+    const text = `+${amount}`;
+    ctx.font = 'bold 48px system-ui';
+    const textW = ctx.measureText(text).width;
+    const iconH = 56, gap = 14;
+    const startX = (canvas.width - (iconH * 0.66 + gap + textW)) / 2;
+    const cy = canvas.height / 2;
+    const cx = startX + iconH * 0.33;
+    const grad = ctx.createLinearGradient(cx, cy - iconH / 2, cx, cy + iconH / 2);
+    grad.addColorStop(0, '#ffb3c4');
+    grad.addColorStop(1, '#b3122f');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - iconH / 2);
+    ctx.bezierCurveTo(cx + iconH * 0.44, cy - iconH * 0.02, cx + iconH * 0.34, cy + iconH / 2, cx, cy + iconH / 2);
+    ctx.bezierCurveTo(cx - iconH * 0.34, cy + iconH / 2, cx - iconH * 0.44, cy - iconH * 0.02, cx, cy - iconH / 2);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.beginPath();
+    ctx.ellipse(cx - iconH * 0.1, cy + iconH * 0.1, iconH * 0.06, iconH * 0.12, -0.35, 0, Math.PI * 2);
+    ctx.fill();
+    const tx = startX + iconH * 0.66 + gap;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.lineWidth = 7; ctx.strokeStyle = '#111821';
+    ctx.strokeText(text, tx, cy + 2);
+    ctx.fillStyle = color;
+    ctx.fillText(text, tx, cy + 2);
+    const texture = new THREE.CanvasTexture(canvas); texture.colorSpace = THREE.SRGBColorSpace;
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false, sizeAttenuation: false, toneMapped: false }));
+    sprite.userData.feedback = text;
+    sprite.renderOrder = 999;
     this.sizeLabel(sprite); sprite.position.copy(position);
     this.addEffect(sprite, new THREE.Vector3(0, 1.8, 0), 1.8);
   }
 
   private productionEffect(position: THREE.Vector3, amount: number, label = 'ouro', textColor = '#ffe48b', coinColor = '#f8ca4f') {
+    if (label === 'sangue') {
+      this.bloodFloating(position.clone().add(new THREE.Vector3(0, 12, 0)), amount);
+      return;
+    }
     this.floatingText(`+${amount} ${label}`, position.clone().add(new THREE.Vector3(0, 8, 0)), textColor);
     for (let i = 0; i < Math.min(3, amount + 1); i++) {
       const coin = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.08, 12), new THREE.MeshBasicMaterial({ color: coinColor, transparent: true }));
@@ -1271,6 +1610,366 @@ export class GameScene {
       const dust = new THREE.Mesh(new THREE.IcosahedronGeometry(0.35), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.6, depthWrite: false }));
       dust.position.copy(position).add(new THREE.Vector3(0, 0.5, 0));
       this.addEffect(dust, new THREE.Vector3(Math.sin(a) * 1.5, 0.8, Math.cos(a) * 1.5), 1.2);
+    }
+  }
+
+  // ---------- feedback de habilidades ----------
+
+  /** Pulso de anel no chão (usado por habilidades e teleportes). */
+  private ringPulse(x: number, z: number, color: THREE.ColorRepresentation, radius = 1, growth = 3, duration = 0.9) {
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(radius * 0.78, radius, 40),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9, depthWrite: false, side: THREE.DoubleSide, toneMapped: false }),
+    );
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.set(x, this.heightAt(x, z) + 0.18, z);
+    this.addEffect(ring, new THREE.Vector3(0, 0, 0), duration, false, undefined, growth / Math.max(0.2, radius));
+  }
+
+  /** Explosão curta de partículas coloridas (início de habilidade / impacto). */
+  private sparkBurst(position: THREE.Vector3, color: THREE.ColorRepresentation, count = 12, speed = 4, life = 0.9) {
+    for (let i = 0; i < count; i++) {
+      const a = (i / count) * Math.PI * 2 + Math.random() * 0.5;
+      const spark = new THREE.Mesh(
+        new THREE.IcosahedronGeometry(0.14 + Math.random() * 0.12),
+        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.95, depthWrite: false, toneMapped: false }),
+      );
+      spark.position.copy(position).add(new THREE.Vector3(0, 0.6, 0));
+      this.addEffect(spark, new THREE.Vector3(Math.cos(a) * speed, 1.6 + Math.random() * 2.4, Math.sin(a) * speed), life);
+    }
+  }
+
+  /** Aura presa à entidade, ligada/desligada por status (geometria por tipo). */
+  private setAura(g: THREE.Group, key: string, color: number, active: boolean, radius: number) {
+    const slot = `aura_${key}`;
+    let aura = g.userData[slot] as THREE.Group | undefined;
+    if (!active) {
+      if (aura) aura.visible = false;
+      return;
+    }
+    if (!aura) {
+      aura = this.buildAura(key, color, radius);
+      g.userData[slot] = aura;
+      g.add(aura);
+    }
+    aura.visible = true;
+    const sy = g.scale.y || 1;
+    aura.scale.set(1, 1 / sy, 1);
+    aura.position.y = 0.12 / sy;
+    for (const mat of aura.userData.mats as THREE.MeshBasicMaterial[]) mat.color.setHex(color);
+  }
+
+  /** Constrói a aura de um status: sigilo grande no chão, coluna de luz, selo e orbitadores. */
+  private buildAura(key: string, color: number, radius: number): THREE.Group {
+    const aura = new THREE.Group();
+    const mats: THREE.MeshBasicMaterial[] = [];
+    const mat = (opacity: number, additive = false) => {
+      const m = new THREE.MeshBasicMaterial({
+        color, transparent: true, opacity, depthWrite: false,
+        side: THREE.DoubleSide, toneMapped: false,
+        blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending,
+      });
+      m.userData.baseOpacity = opacity;
+      mats.push(m);
+      return m;
+    };
+    const disc = (r0: number, r1: number, opacity = 0.75, additive = true, seg = 56) => {
+      const m = new THREE.Mesh(new THREE.RingGeometry(r0, r1, seg), mat(opacity, additive));
+      m.rotation.x = -Math.PI / 2;
+      aura.add(m);
+      return m;
+    };
+    const R = radius;
+    const spin = new THREE.Group(); aura.add(spin);
+    const counter = new THREE.Group(); aura.add(counter);
+    const pulse = new THREE.Group(); aura.add(pulse);
+
+    // Base comum: brilho no chão + anel externo + raios + coluna de luz.
+    const glow = new THREE.Mesh(new THREE.CircleGeometry(R * 2.5, 48), mat(0.22, true));
+    glow.rotation.x = -Math.PI / 2;
+    glow.position.y = 0.02;
+    aura.add(glow);
+    disc(R * 1.7, R * 1.85, 0.9);
+    for (let i = 0; i < 16; i++) {
+      const a = (i / 16) * Math.PI * 2;
+      const spoke = new THREE.Mesh(new THREE.PlaneGeometry(0.18, R * 0.62), mat(0.7, true));
+      spoke.rotation.x = -Math.PI / 2;
+      spoke.rotation.z = -a;
+      spoke.position.set(Math.cos(a) * R * 1.45, 0.03, Math.sin(a) * R * 1.45);
+      counter.add(spoke);
+    }
+    const beamH = Math.min(R * 6, 11);
+    const beam = new THREE.Mesh(new THREE.CylinderGeometry(R * 0.95, R * 1.25, beamH, 24, 1, true), mat(0.12, true));
+    beam.position.y = beamH / 2;
+    aura.add(beam);
+    const beamCore = new THREE.Mesh(new THREE.CylinderGeometry(R * 0.36, R * 0.5, beamH, 16, 1, true), mat(0.2, true));
+    beamCore.position.y = beamH / 2;
+    pulse.add(beamCore);
+    counter.userData.spin = -0.6;
+
+    if (key === 'fortify') {
+      disc(R * 0.66, R * 0.78, 0.85);
+      const dome = new THREE.Mesh(new THREE.SphereGeometry(R * 1.05, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2), mat(0.22));
+      dome.scale.y = 1.2; pulse.add(dome);
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2;
+        const plate = new THREE.Mesh(new THREE.BoxGeometry(0.26, R * 0.7, 0.5), mat(0.9, true));
+        plate.position.set(Math.cos(a) * R * 1.0, R * 0.65, Math.sin(a) * R * 1.0);
+        plate.rotation.y = -a;
+        spin.add(plate);
+      }
+      spin.userData.spin = 0.8;
+    } else if (key === 'entangle') {
+      disc(R * 0.6, R * 0.72, 0.85);
+      for (let i = 0; i < 9; i++) {
+        const a = (i / 9) * Math.PI * 2;
+        const spike = new THREE.Mesh(new THREE.ConeGeometry(R * 0.15, R * 1.35, 5), mat(0.9, true));
+        spike.position.set(Math.cos(a) * R * 0.95, R * 0.55, Math.sin(a) * R * 0.95);
+        spike.rotation.z = Math.cos(a) * 0.55;
+        spike.rotation.x = -Math.sin(a) * 0.55;
+        spin.add(spike);
+      }
+      for (const [y, s] of [[0.5, 1.05], [1.05, 0.85], [1.6, 0.6]] as const) {
+        const band = new THREE.Mesh(new THREE.TorusGeometry(R * s, 0.075, 6, 30), mat(0.7, true));
+        band.rotation.x = Math.PI / 2;
+        band.position.y = y * R;
+        counter.add(band);
+      }
+      spin.userData.spin = 0.6;
+    } else if (key === 'silenced') {
+      disc(R * 0.66, R * 0.78, 0.8);
+      for (let i = 0; i < 4; i++) {
+        const wave = new THREE.Mesh(new THREE.TorusGeometry(R * (0.5 + i * 0.24), 0.07, 6, 34), mat(0.62 - i * 0.09, true));
+        wave.rotation.x = Math.PI / 2;
+        wave.position.y = R * (0.4 + i * 0.44);
+        wave.userData.pulse = 0.16 + i * 0.05;
+        wave.userData.phase = i * 1.7;
+        pulse.add(wave);
+      }
+      spin.userData.spin = 1.1;
+    } else if (key === 'batForm') {
+      disc(R * 0.72, R * 0.86, 0.75);
+      for (let i = 0; i < 9; i++) {
+        const a = (i / 9) * Math.PI * 2;
+        const shard = new THREE.Mesh(new THREE.TetrahedronGeometry(R * (0.2 + (i % 3) * 0.06)), mat(0.6, true));
+        shard.position.set(Math.cos(a) * R * 0.8, R * (0.35 + (i % 4) * 0.4), Math.sin(a) * R * 0.8);
+        spin.add(shard);
+      }
+      const mist = new THREE.Mesh(new THREE.SphereGeometry(R * 1.0, 16, 10), mat(0.18, true));
+      mist.scale.y = 1.5; pulse.add(mist);
+      spin.userData.spin = 1.9;
+    } else if (key === 'channelingTeleport') {
+      disc(R * 0.62, R * 0.76, 0.85);
+      disc(R * 0.28, R * 0.36, 0.7);
+      for (let i = 0; i < 12; i++) {
+        const a = (i / 12) * Math.PI * 2;
+        const tick = new THREE.Mesh(new THREE.PlaneGeometry(0.16, R * 0.34), mat(0.9, true));
+        tick.rotation.x = -Math.PI / 2;
+        tick.rotation.z = -a;
+        tick.position.set(Math.cos(a) * R * 0.92, 0.03, Math.sin(a) * R * 0.92);
+        spin.add(tick);
+      }
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2;
+        const spark = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.4, 0.14), mat(0.95, true));
+        spark.position.set(Math.cos(a) * R * 0.85, 0.2, Math.sin(a) * R * 0.85);
+        spark.userData.rise = 2 + i * 0.25;
+        spark.userData.maxY = R * 3.4;
+        pulse.add(spark);
+      }
+      spin.userData.spin = 0.7;
+    } else {
+      disc(R * 0.72, R * 0.86, 0.7);
+      spin.userData.spin = 0.8;
+    }
+
+    aura.userData.mats = mats;
+    aura.userData.spinGroup = spin;
+    aura.userData.counterGroup = counter;
+    aura.userData.pulseGroup = pulse;
+    return aura;
+  }
+
+  /** Liga as auras de status da entidade e dispara bursts quando um status começa. */
+  private applyStatusAuras(g: THREE.Group, flags: Record<string, boolean>, scale = 1) {
+    const prev = g.userData.statusFlags as Record<string, boolean> | undefined;
+    const started = (k: string) => !!flags[k] && !prev?.[k];
+    this.setAura(g, 'fortify', 0xffd76a, !!flags.fortify, 1.15 * scale);
+    this.setAura(g, 'entangle', 0x6ad06a, !!flags.entangle, 1.1);
+    this.setAura(g, 'silenced', 0xb06aff, !!flags.silenced, 1.32);
+    this.setAura(g, 'batForm', 0x9a3bff, !!flags.batForm, 1.5);
+    this.setAura(g, 'channelingTeleport', 0x5aa9ff, !!flags.channelingTeleport, 1.7);
+    const pos = g.position.clone();
+    const head = pos.clone().add(new THREE.Vector3(0, 3.1 * scale, 0));
+    if (started('fortify')) { this.ringPulse(pos.x, pos.z, 0xffd76a, 1.2 * scale, 2.6, 0.7); this.floatingText('Fortificado', head, '#ffe7a6'); }
+    if (started('entangle')) { this.sparkBurst(pos, 0x7ee07e, 14, 3.5, 0.9); this.floatingText('Enredado', head, '#b7f5a8'); }
+    if (started('silenced')) { this.sparkBurst(pos, 0xc78aff, 14, 3.5, 0.9); this.floatingText('Silenciado', head, '#dcbcff'); }
+    if (started('batForm')) { this.sparkBurst(pos, 0x7a4dff, 20, 4.2, 1); this.floatingText('Forma de Morcego', head, '#c9b6ff'); }
+    if (started('channelingTeleport')) { this.ringPulse(pos.x, pos.z, 0x5aa9ff, 1.1, 2.4, 0.8); this.floatingText('Canalizando…', head, '#bcdcff'); }
+    g.userData.statusFlags = flags;
+  }
+
+  /** Feedback de dano recebido: número flutuante e faíscas. */
+  private hitFeedback(x: number, z: number, amount: number, height: number) {
+    const base = new THREE.Vector3(x, this.heightAt(x, z), z);
+    this.floatingText(`−${amount} HP`, base.clone().add(new THREE.Vector3(0, height, 0)), '#ff8585');
+    this.sparkBurst(base.clone().add(new THREE.Vector3(0, height * 0.6, 0)), 0xff6a5a, 5, 2.2, 0.5);
+  }
+
+  /** Feedback de teleporte: rastro na origem e explosão no destino. */
+  private teleportFeedback(fromX: number, fromZ: number, toX: number, toZ: number) {
+    this.ringPulse(fromX, fromZ, 0x9fd0ff, 1, 2.6, 0.6);
+    this.sparkBurst(new THREE.Vector3(toX, this.heightAt(toX, toZ), toZ), 0xbfe0ff, 14, 3.2, 0.8);
+    this.ringPulse(toX, toZ, 0xbfe0ff, 1.1, 2.4, 0.7);
+  }
+
+  /** Efeito persistente de Revelar Área (visível só para o Vampiro) + burst ao iniciar. */
+  private syncReveal(snap: Snapshot) {
+    const reveal = snap.vampireReveal;
+    const visible = !!reveal && teamOf(this.localOwner) === 'vampire';
+    if (!visible) {
+      if (this.revealEffect) this.revealEffect.visible = false;
+      this.prevRevealKey = '';
+      this.revealLabelSecond = -1;
+      return;
+    }
+    const r = reveal!;
+    const key = `${r.x.toFixed(1)}:${r.z.toFixed(1)}:${r.radius}`;
+    if (!this.revealEffect || this.revealEffect.userData.radius !== r.radius) {
+      if (this.revealEffect) this.disposeEffect(this.revealEffect);
+      this.revealEffect = this.buildRevealEffect(r.radius);
+      this.scene.add(this.revealEffect);
+    }
+    this.revealEffect.visible = true;
+    this.revealEffect.position.set(r.x, this.heightAt(r.x, r.z), r.z);
+    if (key !== this.prevRevealKey) {
+      this.prevRevealKey = key;
+      this.revealLabelSecond = -1;
+      this.ringPulse(r.x, r.z, 0x9fd0ff, r.radius * 0.15, 8, 1);
+      this.floatingText('Revelar Área', new THREE.Vector3(r.x, this.heightAt(r.x, r.z) + 6, r.z), '#bfe4ff');
+    }
+    // Contagem regressiva legível enquanto a área fica revelada.
+    const second = Math.ceil(r.remaining);
+    if (second !== this.revealLabelSecond && second > 0) {
+      this.revealLabelSecond = second;
+      this.floatingText(`${second}s`, new THREE.Vector3(r.x, this.heightAt(r.x, r.z) + 3.4, r.z), '#cfe6ff');
+    }
+  }
+
+  /** Círculo ritual de Revelar Área: brilho, anéis girando, raios e colunas. */
+  private buildRevealEffect(radius: number): THREE.Group {
+    const fx = new THREE.Group();
+    fx.userData.radius = radius;
+    const mats: THREE.MeshBasicMaterial[] = [];
+    const mat = (opacity: number) => {
+      const m = new THREE.MeshBasicMaterial({
+        color: 0x9fd0ff, transparent: true, opacity, depthWrite: false,
+        side: THREE.DoubleSide, toneMapped: false, blending: THREE.AdditiveBlending,
+      });
+      m.userData.baseOpacity = opacity;
+      mats.push(m);
+      return m;
+    };
+    const flat = (mesh: THREE.Mesh, y: number) => { mesh.rotation.x = -Math.PI / 2; mesh.position.y = y; return mesh; };
+    const spin = new THREE.Group(); fx.add(spin);
+    const counter = new THREE.Group(); fx.add(counter);
+    const pulse = new THREE.Group(); fx.add(pulse);
+
+    const glow = flat(new THREE.Mesh(new THREE.CircleGeometry(radius, 96), mat(0.14)), 0.03);
+    fx.add(glow);
+    counter.add(flat(new THREE.Mesh(new THREE.RingGeometry(radius * 0.86, radius * 1.02, 96), mat(0.28)), 0.04));
+    fx.add(flat(new THREE.Mesh(new THREE.RingGeometry(radius * 0.965, radius, 96), mat(0.9)), 0.06));
+    spin.add(flat(new THREE.Mesh(new THREE.RingGeometry(radius * 0.7, radius * 0.73, 96), mat(0.7)), 0.07));
+    counter.add(flat(new THREE.Mesh(new THREE.RingGeometry(radius * 0.42, radius * 0.45, 96), mat(0.55)), 0.07));
+
+    // Raios radiais girando (marca bem o círculo de longe).
+    for (let i = 0; i < 28; i++) {
+      const a = (i / 28) * Math.PI * 2;
+      const spoke = new THREE.Mesh(new THREE.PlaneGeometry(0.5, radius * 0.18), mat(0.8));
+      flat(spoke, 0.08);
+      spoke.rotation.z = -a;
+      spoke.position.set(Math.cos(a) * radius * 0.84, 0.08, Math.sin(a) * radius * 0.84);
+      spin.add(spoke);
+    }
+
+    // Colunas na borda e uma coluna central, para o volume saltar à vista.
+    for (let i = 0; i < 12; i++) {
+      const a = (i / 12) * Math.PI * 2;
+      const pillar = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.55, 7, 10, 1, true), mat(0.5));
+      pillar.position.set(Math.cos(a) * radius * 0.995, 3.4, Math.sin(a) * radius * 0.995);
+      pillar.userData.pulse = 0.25;
+      pillar.userData.phase = i * 0.7;
+      pulse.add(pillar);
+    }
+    const column = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 1.1, 11, 20, 1, true), mat(0.4));
+    column.position.y = 5.4;
+    pulse.add(column);
+
+    fx.userData.mats = mats;
+    fx.userData.spin = spin;
+    fx.userData.counter = counter;
+    fx.userData.pulse = pulse;
+    return fx;
+  }
+
+  /** Gira, pulsa e anima as auras de status das entidades. */
+  private animateAuras(g: THREE.Group, dt: number) {
+    const t = this.animationTime;
+    for (const key of Object.keys(g.userData)) {
+      if (!key.startsWith('aura_')) continue;
+      const aura = g.userData[key] as THREE.Group;
+      if (!aura.visible) continue;
+      const spin = aura.userData.spinGroup as THREE.Group | undefined;
+      const counter = aura.userData.counterGroup as THREE.Group | undefined;
+      const pulse = aura.userData.pulseGroup as THREE.Group | undefined;
+      if (spin) spin.rotation.y += dt * ((spin.userData.spin as number) ?? 0.8);
+      if (counter) counter.rotation.y += dt * ((counter.userData.spin as number) ?? -0.8);
+      if (pulse) {
+        pulse.children.forEach((child, i) => {
+          if (child.userData.rise) {
+            child.position.y += dt * (child.userData.rise as number);
+            if (child.position.y > (child.userData.maxY as number)) child.position.y = 0.2;
+          }
+          if (child.userData.pulse) {
+            const s = 1 + Math.sin(t * 4.5 + (child.userData.phase as number ?? i)) * (child.userData.pulse as number);
+            child.scale.setScalar(s);
+          }
+        });
+        const breath = 1 + Math.sin(t * 2.2) * 0.035;
+        pulse.scale.set(breath, 1, breath);
+      }
+      const mats = aura.userData.mats as THREE.MeshBasicMaterial[];
+      for (let i = 0; i < mats.length; i++) {
+        const mat = mats[i]!;
+        const base = (mat.userData.baseOpacity as number) ?? 0.6;
+        mat.opacity = Math.max(0.05, base * (0.78 + Math.sin(t * 4 + i * 1.3) * 0.22));
+      }
+    }
+  }
+
+  /** Gira e pulsa o círculo de Revelar Área. */
+  private animateReveal(dt: number) {
+    const fx = this.revealEffect;
+    if (!fx?.visible) return;
+    const t = this.animationTime;
+    const spin = fx.userData.spin as THREE.Group | undefined;
+    const counter = fx.userData.counter as THREE.Group | undefined;
+    const pulse = fx.userData.pulse as THREE.Group | undefined;
+    if (spin) spin.rotation.y += dt * 0.4;
+    if (counter) counter.rotation.y -= dt * 0.7;
+    if (pulse) {
+      pulse.children.forEach((child, i) => {
+        if (child.userData.pulse) {
+          const s = 1 + Math.sin(t * 3 + (child.userData.phase as number ?? i)) * (child.userData.pulse as number);
+          child.scale.set(1, s, 1);
+        }
+      });
+    }
+    const mats = fx.userData.mats as THREE.MeshBasicMaterial[];
+    for (let i = 0; i < mats.length; i++) {
+      const mat = mats[i]!;
+      const base = (mat.userData.baseOpacity as number) ?? 0.5;
+      mat.opacity = Math.max(0.04, base * (0.72 + Math.sin(t * 2.6 + i * 0.9) * 0.28));
     }
   }
 
@@ -1422,6 +2121,44 @@ export class GameScene {
     this.hoverRing.visible = true;
   }
 
+  // ---------- marcador de habilidade ----------
+
+  private abilityMarker: THREE.Group | null = null;
+
+  /** Anel de pré-visualização da habilidade no chão (raio 0 = marcador de alvo). */
+  setAbilityMarker(x: number, z: number, radius: number, color: number): void {
+    if (!this.abilityMarker) {
+      const group = new THREE.Group();
+      const ring = new THREE.Mesh(
+        new THREE.RingGeometry(0.94, 1, 64),
+        new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.75, depthWrite: false, side: THREE.DoubleSide, toneMapped: false }),
+      );
+      ring.name = 'ring';
+      ring.rotation.x = -Math.PI / 2;
+      const dot = new THREE.Mesh(
+        new THREE.RingGeometry(0.2, 0.32, 24),
+        new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.9, depthWrite: false, side: THREE.DoubleSide, toneMapped: false }),
+      );
+      dot.name = 'dot';
+      dot.rotation.x = -Math.PI / 2;
+      group.add(ring, dot);
+      group.renderOrder = 6;
+      this.abilityMarker = group;
+      this.scene.add(group);
+    }
+    const ring = this.abilityMarker.getObjectByName('ring') as THREE.Mesh;
+    const dot = this.abilityMarker.getObjectByName('dot') as THREE.Mesh;
+    ring.scale.setScalar(Math.max(1.2, radius));
+    (ring.material as THREE.MeshBasicMaterial).color.setHex(color);
+    (dot.material as THREE.MeshBasicMaterial).color.setHex(color);
+    this.abilityMarker.position.set(x, this.heightAt(x, z) + 0.14, z);
+    this.abilityMarker.visible = true;
+  }
+
+  clearAbilityMarker(): void {
+    if (this.abilityMarker) this.abilityMarker.visible = false;
+  }
+
   // ---------- dia / noite ----------
 
   /** Ponto do chão que a câmera observa; usado para posicionar a sombra. */
@@ -1536,7 +2273,7 @@ export class GameScene {
     if (unitId !== undefined) return { unitId };
     // Entre estruturas e recursos, conserva a ordem de profundidade.
     const hits = this.raycaster.intersectObjects([
-      ...this.buildingMeshes.values(), ...this.nodeMeshes.values(),
+      ...[...this.buildingMeshes.values()].filter(g => g.visible), ...this.nodeMeshes.values(),
       ...this.woodInstances,
       ...this.mapOccluders, this.terrain,
     ], true);
@@ -1560,12 +2297,19 @@ export class GameScene {
     return buildingId === undefined ? {} : { buildingId };
   }
 
+  /** Prédio (visível) mais próximo do cursor, para seleção tolerante. */
+  buildingUnderCursor(nx: number, ny: number): number | undefined {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    return this.buildingAtScreen(nx, ny, rect);
+  }
+
   /** Prédio cujo centro projetado está mais perto do cursor, dentro da folga. */
   private buildingAtScreen(nx: number, ny: number, rect: DOMRect): number | undefined {
     let nearest = 28;
     let found: number | undefined;
     const center = new THREE.Vector3();
     for (const [id, g] of this.buildingMeshes) {
+      if (!g.visible) continue;
       new THREE.Box3().setFromObject(g).getCenter(center);
       const v = center.project(this.camera);
       if (v.z < -1 || v.z > 1) continue;
@@ -1603,6 +2347,9 @@ export class GameScene {
         }
       });
     }
+    for (const g of this.unitMeshes.values()) this.animateAuras(g, dt);
+    for (const g of this.buildingMeshes.values()) this.animateAuras(g, dt);
+    this.animateReveal(dt);
     for (const g of this.buildingMeshes.values()) {
       const sign = g.getObjectByName('tavernSign');
       if (sign) sign.rotation.z = Math.sin(this.animationTime * 1.8 + g.position.x) * 0.08;
@@ -1624,7 +2371,7 @@ export class GameScene {
             : walking
               ? 'walking'
               : 'idle';
-        updateExternalAnimation(g, animation, dt, animation === 'attack' ? (g.userData.attackScale as number | undefined) : undefined);
+        updateExternalAnimation(g, animation, dt, animation === 'attack' ? (g.userData.attackDuration as number | undefined) : undefined);
       }
       const swing = Math.sin(this.animationTime * (working ? 11 : 9));
       for (const [name, sign] of [['leftLeg', 1], ['rightLeg', -1]] as const) {

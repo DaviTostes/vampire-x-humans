@@ -155,12 +155,12 @@ export interface Snapshot {
   phaseTime: number;
   day: number;
   result: GameResult;
-  units: Array<Pick<Unit, 'id' | 'kind' | 'hero' | 'workerRole' | 'owner' | 'x' | 'z' | 'hp' | 'maxHp' | 'carrying' | 'carryRes' | 'activity'> & {
+  units: Array<Pick<Unit, 'id' | 'kind' | 'hero' | 'workerRole' | 'owner' | 'x' | 'z' | 'hp' | 'maxHp' | 'carrying' | 'carryRes' | 'activity' | 'fortify'> & {
     orderType: Order['t'] | null;
     targetId: number | null;
   }>;
   buildings: Array<
-    Pick<Building, 'id' | 'kind' | 'owner' | 'x' | 'z' | 'hp' | 'maxHp' | 'level' | 'progress' | 'done' | 'goldProduced' | 'lastShot' | 'recruitment'>
+    Pick<Building, 'id' | 'kind' | 'owner' | 'x' | 'z' | 'hp' | 'maxHp' | 'level' | 'progress' | 'done' | 'goldProduced' | 'lastShot' | 'recruitment' | 'fortify'>
   >;
   nodes: ResourceNode[];
   players: Array<Pick<PlayerState, 'id' | 'wood' | 'gold' | 'alive' | 'workerLevels' | 'abilityCooldowns'>>;

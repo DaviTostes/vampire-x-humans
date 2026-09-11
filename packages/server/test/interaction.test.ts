@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { applyCommand, bankProduction, canPlace, createSession, step, makeSnapshot, HUMAN_SPAWNS, RECRUIT, SURVIVE_NIGHTS_TO_WIN, TOWER, towerDamage, VAMPIRE, WORLD, type Building, type Session, type Unit, type WorkerRole } from '@vampire/shared';
+import { applyCommand, bankProduction, canPlace, createSession, step, makeSnapshot, HUMAN_SPAWNS, RECRUIT, START_RESOURCES, SURVIVE_NIGHTS_TO_WIN, TOWER, towerDamage, VAMPIRE, WORLD, type Building, type Session, type Unit, type WorkerRole } from '@vampire/shared';
 import { createRoom, startRoom } from '../src/rooms.js';
 
 function fixture() {
@@ -52,8 +52,8 @@ test('mapa fixo: cada humano começa com um boneco no seu ponto de spawn, sem re
     const { state } = createSession([], seed);
     for (let id = 0; id < 4; id++) {
       assert.equal(state.units.filter(u => u.owner === id).length, 1);
-      assert.equal(state.players[id]!.wood, 0);
-      assert.equal(state.players[id]!.gold, 0);
+      assert.equal(state.players[id]!.wood, START_RESOURCES.wood);
+      assert.equal(state.players[id]!.gold, START_RESOURCES.gold);
       assert.equal(state.buildings.filter(b => b.owner === id).length, 0);
       const unit = state.units.find(u => u.owner === id)!;
       const spawn = HUMAN_SPAWNS[id]!;
@@ -338,9 +338,9 @@ test('vampiro ataca prédio grande pela borda, respeitando o cooldown', () => {
   vampire.z = 0;
   applyCommand(session, 4, { type: 'attack', ids: [vampire.id], targetId: keep.id });
   advance(session, 1, () => assert.ok(session.navigation.canStand(vampire, vampire.x, vampire.z)));
-  assert.equal(keep.hp, 475);
+  assert.equal(keep.hp, 500 - VAMPIRE.attackDamage);
   advance(session, 2);
-  assert.ok(keep.hp < 475);
+  assert.ok(keep.hp < 500 - VAMPIRE.attackDamage);
 });
 
 test('retomar obra usa o canteiro existente sem cobrar novamente', () => {
@@ -394,6 +394,7 @@ test('muro na única entrada deixa humano passar, mas vampiro só entra após de
   const worker = session.state.units[0]!;
   const vampire = session.state.units[4]!;
   const wall = building(1001, 'wall', door.x, door.z);
+  wall.hp = wall.maxHp = 30; // Muro nível 1
   session.state.buildings.push(wall);
   session.state.phase = 'night';
   Object.assign(worker, { x: door.x + out.x * 5, z: door.z + out.z * 5 });
@@ -404,7 +405,7 @@ test('muro na única entrada deixa humano passar, mas vampiro só entra após de
   assert.ok(Math.hypot(worker.x - compound.x, worker.z - compound.z) < 1);
   assert.ok((vampire.x - door.x) * out.x + (vampire.z - door.z) * out.z > 0);
   applyCommand(session, 4, { type: 'attack', ids: [vampire.id], targetId: wall.id });
-  advance(session, 45); // ~1,42s por golpe × 25 de dano contra 500 HP
+  advance(session, 45); // ~1,42s por golpe × 5 de dano contra 30 HP
   assert.ok(!session.state.buildings.includes(wall));
   applyCommand(session, 4, { type: 'move', ids: [vampire.id], x: compound.x, z: compound.z + 3 });
   advance(session, 6);

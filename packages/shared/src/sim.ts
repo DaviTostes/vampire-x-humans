@@ -46,6 +46,7 @@ import {
   lumberjackGatherRate,
   minerGoldRate,
   repairerTrainingTime,
+  repairerRepairRate,
   type BuildKind,
   type HumanAbilityId,
   type SpecPrerequisite,
@@ -384,9 +385,13 @@ export function applyCommand(session: Session, playerId: number, cmd: Command): 
       break;
     }
     case 'upgradeVampireItem': {
-      // Upar nível de item já possuído: sem restrição de dia/cripta, a qualquer hora.
+      // Melhorar um item já possuído também exige a cripta (dia + proximidade).
+      // A HUD do Vampiro não oferece mais esse atalho.
       if (playerId !== VAMPIRE_PLAYER_ID || !VAMPIRE_ITEM_IDS.includes(cmd.itemId)) return;
       if ((s.vampire.items[cmd.itemId] ?? 0) < 1) return;
+      const vampire = s.units.find(u => u.kind === 'vampire' && u.owner === playerId && !u.dead);
+      const crypt = s.buildings.find((b) => b.kind === 'crypt');
+      if (!vampire || vampireShopAccess(s.phase, vampire, crypt)) return;
       buyVampireItem(s, playerId, cmd.itemId);
       break;
     }
@@ -590,7 +595,8 @@ export function applyCommand(session: Session, playerId: number, cmd: Command): 
     case 'repair': {
       const wall = buildingById(s, cmd.targetId);
       if (!wall || !wall.done || wall.owner !== playerId || wall.kind !== 'wall') return;
-      if (wall.hp >= wall.maxHp) return;
+      // A ordem pode ser dada mesmo com o muro cheio: a unidade fica de prontidão
+      // e repara sozinha quando ele levar dano (evita reclicar a cada golpe).
       let any = false;
       for (const u of s.units) {
         if (!u.dead && u.owner === playerId && u.kind === 'worker' && cmd.ids.includes(u.id) && canRepairRole(u.workerRole)) {
@@ -730,6 +736,14 @@ function vampireOutsideCrypt(s: GameState): boolean {
   return dist(vamp.x, vamp.z, crypt.x, crypt.z) > CRYPT_RADIUS;
 }
 
+/** O Vampiro está sobre a cripta? (usa a distância real, independente da fase). */
+function vampireAtCrypt(s: GameState): boolean {
+  const crypt = s.buildings.find((b) => b.kind === 'crypt');
+  const vamp = s.units.find((u) => u.kind === 'vampire' && !u.dead);
+  if (!crypt || !vamp) return false;
+  return dist(vamp.x, vamp.z, crypt.x, crypt.z) <= CRYPT_RADIUS;
+}
+
 function updateGather(s: GameState, nav: Navigation, u: Unit, dt: number, index: TickIndex): void {
   const stats = workerStats(u);
   const rawNode = index.nodes.get(u.gatherNodeId ?? -1);
@@ -790,13 +804,17 @@ function updateAttackOrder(s: GameState, nav: Navigation, u: Unit, dt: number, i
   if (u.attackCd > 0) return;
   u.attackCd = u.kind === 'vampire' ? vampireEffectiveCooldown(s.vampire.items) : stats.attackCooldown;
 
+  // O Vampiro tem um único dano (seção 13): vale para unidades e construções,
+  // somando itens e Golpe Sombrio e sofrendo o redutor diurno.
+  const vampireDamage = (VAMPIRE.attackDamage + vampireItemBonuses(s.vampire.items).damage)
+    * vampireSkillMultiplier(s.vampire.skills) * (s.phase === 'night' ? 1 : VAMPIRE.dayDamageMultiplier);
+  const dmg = u.kind === 'vampire' ? vampireDamage : stats.attackDamage;
+
   if (targetUnit) {
     // Fortificar torna o alvo invulnerável (seção 2.2): o golpe acontece, mas sem dano.
     if ((targetUnit.fortify ?? 0) > 0) return;
     // Forma de Morcego também é invulnerável (seção 16).
     if (targetUnit.kind === 'vampire' && vampireInvulnerable(s)) return;
-    const vampireDamage = (VAMPIRE.attackDamage + vampireItemBonuses(s.vampire.items).damage) * vampireSkillMultiplier(s.vampire.skills);
-    const dmg = u.kind === 'vampire' ? vampireDamage * (s.phase === 'night' ? 1 : VAMPIRE.dayDamageMultiplier) : stats.attackDamage;
     targetUnit.hp -= dmg;
     // Sangue por dano (seção 18 adaptada): substitui o antigo bloodPerHit.
     if (u.kind === 'vampire') creditVampireBloodFromDamage(s, dmg);
@@ -808,7 +826,6 @@ function updateAttackOrder(s: GameState, nav: Navigation, u: Unit, dt: number, i
     }
   } else if (targetBuilding) {
     if ((targetBuilding.fortify ?? 0) > 0) return;
-    const dmg = u.kind === 'vampire' ? (VAMPIRE.attackDamageBuilding + vampireItemBonuses(s.vampire.items).damage) * vampireSkillMultiplier(s.vampire.skills) : stats.attackDamage;
     targetBuilding.hp -= dmg;
     // Sangue por dano (seção 18 adaptada): substitui o antigo bloodPerHit.
     if (u.kind === 'vampire') creditVampireBloodFromDamage(s, dmg);
@@ -849,14 +866,21 @@ function updateBuild(s: GameState, nav: Navigation, u: Unit, dt: number, index: 
 function updateRepair(s: GameState, nav: Navigation, u: Unit, dt: number, index: TickIndex): void {
   const stats = workerStats(u);
   const wall = index.buildings.get(u.order?.targetId ?? -1);
-  if (!wall || !wall.done || wall.kind !== 'wall' || wall.hp >= wall.maxHp) {
+  if (!wall || !wall.done || wall.kind !== 'wall') {
     u.order = null;
     return;
   }
+  // Vai até o muro e permanece de prontidão. A ordem só é mantida para que a
+  // unidade repare automaticamente assim que o muro levar dano.
   if (!nav.move(u, wall.x, wall.z, stats.speed, dt, INTERACTION.buildRange, buildingHalf(wall))) return;
+  if (wall.hp >= wall.maxHp) {
+    u.activity = 'idle';
+    return;
+  }
   u.activity = 'repairing';
-  wall.hp = Math.min(wall.maxHp, wall.hp + INTERACTION.repairRate * stats.buildRate * dt);
-  if (wall.hp >= wall.maxHp) u.order = null;
+  // Reparador escala com a pesquisa da função; o herói (sem papel) usa o nível 1.
+  const level = u.workerRole === 'repairer' ? playerWorkerLevel(s, u.owner, 'repairer') : 1;
+  wall.hp = Math.min(wall.maxHp, wall.hp + repairerRepairRate(level) * stats.buildRate * dt);
 }
 
 /** De dia, o vampiro não pode se afastar da cripta */
@@ -925,8 +949,9 @@ function updateUnits(session: Session, dt: number, index: TickIndex): void {
     }
 
     if (u.kind === 'vampire') {
-      // Dentro da cripta a regeneração é quase instantânea; fora, só à noite.
-      if (!vampOut) u.hp = Math.min(u.maxHp, u.hp + VAMPIRE.cryptRegen * dt);
+      // Sobre a cripta a regeneração é quase instantânea; fora, só à noite e no
+      // ritmo normal (independente da fase para achar a cripta).
+      if (vampireAtCrypt(s)) u.hp = Math.min(u.maxHp, u.hp + VAMPIRE.cryptRegen * dt);
       else if (s.phase === 'night') u.hp = Math.min(u.maxHp, u.hp + VAMPIRE.nightRegen * dt);
     }
     if (u.kind === 'vampire') {
@@ -1066,6 +1091,13 @@ export function step(session: Session, commands: Array<{ playerId: number; cmd: 
   const s = session.state;
   for (const { playerId, cmd } of commands) {
     applyCommand(session, playerId, cmd);
+    // No teste solo o mesmo jogador controla os dois lados: repete o comando
+    // para os demais jogadores (a validação de posse de cada comando decide).
+    if (s.practice) {
+      for (const p of s.players) {
+        if (p.id !== playerId) applyCommand(session, p.id, cmd);
+      }
+    }
   }
   if (s.result) {
     s.tick++;
@@ -1110,6 +1142,7 @@ export function makeSnapshot(s: GameState, includeNodes = true): Snapshot {
         activity: u.activity,
         orderType: u.order?.t ?? null,
         targetId: u.order?.targetId ?? null,
+        fortify: u.fortify && u.fortify > 0 ? Math.round(u.fortify * 10) / 10 : undefined,
       })),
     buildings: s.buildings.map((b) => ({
       id: b.id,
@@ -1125,6 +1158,7 @@ export function makeSnapshot(s: GameState, includeNodes = true): Snapshot {
       goldProduced: b.goldProduced ?? 0,
       lastShot: b.lastShot ? { ...b.lastShot } : undefined,
       recruitment: b.recruitment ? { ...b.recruitment } : null,
+      fortify: b.fortify && b.fortify > 0 ? Math.round(b.fortify * 10) / 10 : undefined,
     })),
     nodes: includeNodes ? s.nodes.filter((n) => n.amount > 0) : [],
     players: s.players.map((p) => ({

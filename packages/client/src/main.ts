@@ -21,16 +21,22 @@ const unsubscribe = net.subscribe(() => {
     startGame(net);
   });
 });
-void net.connect().catch(() => lobby.render());
+void net.connect().then(() => { lobby.maybeRejoin(); }).catch(() => lobby.render());
 
 function startGame(net: Net) {
   const scene = new GameScene(app, net.lobby!.seed);
   // Fog de guerra: esconde unidades inimigas fora da visão do time local.
   scene.setLocalPlayer(net.myId);
+  // No teste solo o jogador controla os dois lados: o "dono ativo" segue a
+  // seleção atual (unidade/prédio) em vez do jogador conectado.
+  let actingId = net.myId;
+  let practice = false;
+  const getActingId = () => actingId;
   let hud: Hud;
-  const controls = new RtsControls(scene, net, app, () => net.myId, () => net.latestSnap,
-    () => { if (hud && net.latestSnap) hud.update(net.latestSnap, net.myId); });
-  hud = new Hud(scene, controls, net, () => net.myId);
+  const controls = new RtsControls(scene, net, app, getActingId, () => net.latestSnap,
+    () => { if (hud && net.latestSnap) hud.update(net.latestSnap, getActingId()); },
+    (owner: number) => { actingId = owner; });
+  hud = new Hud(scene, controls, net, getActingId);
   let lastSnapTick = -1;
   let last = performance.now();
   let focused = false;
@@ -42,6 +48,8 @@ function startGame(net: Net) {
     const snap = net.latestSnap;
     if (snap && snap.tick !== lastSnapTick) {
       lastSnapTick = snap.tick;
+      // Teste solo: sem névoa, para enxergar e comandar as duas facções.
+      if (snap.practice && !practice) { practice = true; scene.setLocalPlayer(-1); }
       scene.sync(snap);
       if (!focused) {
         const mine = snap.units.find(u => u.owner === net.myId);
@@ -52,7 +60,7 @@ function startGame(net: Net) {
           focused = true;
         }
       }
-      hud.update(snap, net.myId);
+      hud.update(snap, getActingId());
     }
     controls.update(dt);
     if (snap) scene.updateDayNight(snap.phase, snap.phaseTime, snap.day);

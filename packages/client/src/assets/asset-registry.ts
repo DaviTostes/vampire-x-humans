@@ -242,7 +242,12 @@ function firstMaterial(root: THREE.Object3D): THREE.Material | null {
   return found;
 }
 
-export function updateExternalAnimation(root: THREE.Group, requested: AnimationState, dt: number, timeScale?: number) {
+/**
+ * Toca a animação pedida. `targetDuration` (usado no ataque) força o clipe a
+ * durar exatamente esse tempo em segundos, casando a animação com a cadência
+ * real da simulação (ex.: cooldown de ataque do Vampiro).
+ */
+export function updateExternalAnimation(root: THREE.Group, requested: AnimationState, dt: number, targetDuration?: number) {
   const mixer = root.userData.animationMixer as THREE.AnimationMixer | undefined;
   const actions = root.userData.animationActions as Map<AnimationState, THREE.AnimationAction> | undefined;
   if (!mixer || !actions?.size) return;
@@ -254,16 +259,21 @@ export function updateExternalAnimation(root: THREE.Group, requested: AnimationS
   if (desired) {
     const next = actions.get(desired)!;
     const scales = root.userData.animationTimeScales as Map<AnimationState, number> | undefined;
+    const clipDuration = next.getClip().duration;
+    // Duração alvo (ataque): um ciclo do clipe por ataque real.
+    const timeScale = targetDuration && targetDuration > 0 && clipDuration > 0
+      ? clipDuration / targetDuration
+      : (scales?.get(desired) ?? 1);
     if (root.userData.animationState !== desired) {
       const previousName = root.userData.animationState as AnimationState | undefined;
       const previous = previousName ? actions.get(previousName) : undefined;
       next.enabled = true;
       next.setLoop(THREE.LoopRepeat, Infinity);
-      next.timeScale = timeScale ?? scales?.get(desired) ?? 1;
+      next.timeScale = timeScale;
       next.reset().fadeIn(0.15).play();
       previous?.fadeOut(0.15);
       root.userData.animationState = desired;
-    } else if (timeScale !== undefined) {
+    } else if (targetDuration !== undefined) {
       // Ajusta a velocidade em tempo real (ex.: velocidade de ataque do vampiro).
       next.timeScale = timeScale;
     }

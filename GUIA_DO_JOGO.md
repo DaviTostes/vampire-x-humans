@@ -94,12 +94,11 @@ O Vampiro começa próximo à sua cripta, afastado da praça central.
 | Característica | Valor |
 |---|---:|
 | Vida máxima | 500 |
-| Dano contra unidades à noite | 40 por ataque |
-| Dano contra unidades de dia | 16 por ataque |
-| Dano contra construções | 25 por ataque |
-| Intervalo entre ataques | Aproximadamente 1,1 segundo |
+| Dano (unidades e construções) à noite | 5 por ataque |
+| Dano (unidades e construções) de dia | 2 por ataque |
+| Intervalo entre ataques | Aproximadamente 1,42 segundo |
 | Regeneração noturna | 2 de vida por segundo |
-| Sangue por golpe acertado | 2 (em unidades ou construções; destruir não dá bônus extra) |
+| Sangue por golpe acertado | 80% do dano causado (arredondado para baixo) |
 
 O Vampiro recebe ordens de movimento e ataque como as outras unidades. À noite, ele se move mais rápido e recupera vida gradualmente.
 
@@ -131,7 +130,7 @@ Durante o **dia**, o Vampiro pode trocar sangue por equipamento na sua base, no 
 - Todos os itens são comprados na cripta e são **infinitos**: podem ser comprados quantas vezes o sangue permitir, e cada nível custa mais que o anterior.
 - Depois da primeira compra de um item, ele pode ser upado **a qualquer hora pelo painel do vampiro**, sem voltar à base.
 - Os itens equipados aparecem na ficha do Vampiro e no painel da base.
-- As Garras também recebem o modificador de dano diurno nos ataques contra unidades.
+- As Garras também recebem o modificador de dano diurno nos ataques contra unidades e construções.
 - O Coração soma seu bônus à vida atual e à máxima, preservando o dano já sofrido; não é uma cura completa.
 - Os itens permanecem ativos durante a noite. Uma nova partida começa com o inventário vazio.
 - Preços, bônus e a distância de compra podem ser ajustados na configuração do jogo.

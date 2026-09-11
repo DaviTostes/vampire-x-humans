@@ -2,6 +2,28 @@
 import type { Command, LobbyInfo, ResourceNode, Role, Snapshot } from '@vampire/shared';
 export type { LobbyInfo } from '@vampire/shared';
 
+// Após o fim da partida, o cliente lembra o código da sala para voltar
+// automaticamente ao lobby no próximo carregamento ("Voltar para a sala").
+const REJOIN_KEY = 'vxh.rejoin';
+
+export function rememberRejoin(code: string): void {
+  try { sessionStorage.setItem(REJOIN_KEY, code); } catch { /* armazenamento indisponível */ }
+}
+
+/** Lê e apaga o código de reentrada pendente (uma única tentativa). */
+export function takeRejoinCode(): string | null {
+  try {
+    const code = sessionStorage.getItem(REJOIN_KEY);
+    if (code) sessionStorage.removeItem(REJOIN_KEY);
+    return code;
+  } catch { return null; }
+}
+
+/** Descarta a reentrada pendente (ex.: jogador escolheu voltar ao início). */
+export function forgetRejoin(): void {
+  try { sessionStorage.removeItem(REJOIN_KEY); } catch { /* armazenamento indisponível */ }
+}
+
 export class Net {
   ws: WebSocket | null = null;
   myId = -1;

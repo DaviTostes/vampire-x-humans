@@ -169,6 +169,20 @@ export function broadcastLobby(room: Room) {
   for (const client of room.clients) if (client.ws.readyState === 1) client.ws.send(message);
 }
 
+/**
+ * Depois do resultado, devolve a sala ao lobby mantendo os mesmos jogadores,
+ * para uma revanche. As equipes são mantidas; só as confirmações caem.
+ */
+export function reopenLobby(room: Room): void {
+  room.status = 'lobby';
+  room.session = null;
+  room.endedAt = undefined;
+  room.queue = [];
+  room.cmdCount.clear();
+  room.nodeAmounts.clear();
+  for (const client of room.clients) client.ready = false;
+}
+
 export function stepRoom(room: Room): void {
   if (room.status !== 'playing' || !room.session) return;
   const commands = room.queue;
@@ -193,12 +207,14 @@ export function stepRoom(room: Room): void {
     for (const c of room.clients) if (c.ws.readyState === 1) c.ws.send(nodePayload);
   }
   if (room.session.state.result) {
-    room.status = 'ended';
-    room.endedAt = Date.now();
     const res = JSON.stringify({ type: 'result', result: room.session.state.result });
     for (const c of room.clients) {
       if (c.ws.readyState === 1) c.ws.send(res);
     }
+    // Volta ao lobby com os mesmos jogadores para permitir uma revanche sem
+    // precisar recriar a sala. O resultado enviado acima ainda é exibido.
+    reopenLobby(room);
+    broadcastLobby(room);
   }
 }
 
