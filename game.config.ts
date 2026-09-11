@@ -30,9 +30,16 @@ const MOVE_SPEED_SCALE = 7 / 367;
 
 export const GAME_CONFIG = {
   match: {
+    // Um único dia curto (construção) e uma única noite longa (sobrevivência).
+    // Os humanos vencem ao ver o amanhecer depois da noite.
     daySeconds: 60,
-    nightSeconds: 100,
-    nightsToWin: 10,
+    nightSeconds: 1200,
+    nightsToWin: 1,
+    // Faixas aceitas no lobby (segundos). O anfitrião pode alterar antes de iniciar.
+    daySecondsMin: 15,
+    daySecondsMax: 300,
+    nightSecondsMin: 60,
+    nightSecondsMax: 3600,
     startingResources: { wood: 0, gold: 30 },
   },
   lobby: { codeLength: 5 },

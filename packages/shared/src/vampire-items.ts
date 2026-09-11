@@ -104,13 +104,15 @@ export function vampireSkillMultiplier(skills: VampireState['skills'] = {}): num
   return 1;
 }
 
-/** Mesmas condições de abertura usadas pela simulação e pelo painel da loja. */
+/**
+ * Mesmas condições de abertura usadas pela simulação e pelo painel da loja.
+ * A cripta atende o Vampiro em qualquer fase (dia ou noite); basta estar perto.
+ */
 export function vampireShopAccess(
-  phase: 'day' | 'night',
+  _phase: 'day' | 'night',
   vampire: Pick<Unit, 'kind' | 'hp' | 'x' | 'z'> | undefined,
   crypt: Pick<Building, 'kind' | 'done' | 'hp' | 'x' | 'z'> | undefined,
 ): string | null {
-  if (phase !== 'day') return 'A loja da cripta só abre durante o dia';
   if (!vampire || vampire.kind !== 'vampire' || vampire.hp <= 0) return 'Vampiro indisponível';
   if (!crypt || crypt.kind !== 'crypt' || !crypt.done || crypt.hp <= 0) return 'Cripta indisponível';
   const distance = Math.hypot(vampire.x - crypt.x, vampire.z - crypt.z);

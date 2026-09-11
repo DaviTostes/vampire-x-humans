@@ -10,9 +10,16 @@ import { WebSocketServer } from "ws";
 var MOVE_SPEED_SCALE = 7 / 367;
 var GAME_CONFIG = {
   match: {
+    // Um único dia curto (construção) e uma única noite longa (sobrevivência).
+    // Os humanos vencem ao ver o amanhecer depois da noite.
     daySeconds: 60,
-    nightSeconds: 100,
-    nightsToWin: 10,
+    nightSeconds: 1200,
+    nightsToWin: 1,
+    // Faixas aceitas no lobby (segundos). O anfitrião pode alterar antes de iniciar.
+    daySecondsMin: 15,
+    daySecondsMax: 300,
+    nightSecondsMin: 60,
+    nightSecondsMax: 3600,
     startingResources: { wood: 0, gold: 30 }
   },
   lobby: { codeLength: 5 },
@@ -514,6 +521,10 @@ var WORLD = {
 var DAY_LENGTH = GAME_CONFIG.match.daySeconds;
 var NIGHT_LENGTH = GAME_CONFIG.match.nightSeconds;
 var SURVIVE_NIGHTS_TO_WIN = GAME_CONFIG.match.nightsToWin;
+var DAY_LENGTH_MIN = GAME_CONFIG.match.daySecondsMin;
+var DAY_LENGTH_MAX = GAME_CONFIG.match.daySecondsMax;
+var NIGHT_LENGTH_MIN = GAME_CONFIG.match.nightSecondsMin;
+var NIGHT_LENGTH_MAX = GAME_CONFIG.match.nightSecondsMax;
 var START_RESOURCES = GAME_CONFIG.match.startingResources;
 var MAX_HUMANS = GAME_CONFIG.map.humanSpawns.length;
 var VAMPIRE_PLAYER_ID = MAX_HUMANS;
@@ -1090,7 +1101,7 @@ function createPlayers(names, ids = Array.from({ length: MAX_PLAYERS }, (_, i) =
     alive: true
   }));
 }
-function createGameState(names, _seed = MAP_SEED, playerIds = Array.from({ length: MAX_PLAYERS }, (_, i) => i)) {
+function createGameState(names, _seed = MAP_SEED, playerIds = Array.from({ length: MAX_PLAYERS }, (_, i) => i), daySeconds = DAY_LENGTH, nightSeconds = NIGHT_LENGTH) {
   const ids = [.../* @__PURE__ */ new Set([...playerIds, VAMPIRE_PLAYER_ID])].filter((id) => id >= 0 && id < MAX_PLAYERS).sort((a, b) => a - b);
   const units = ids.map((owner) => {
     const vampire = owner === VAMPIRE_PLAYER_ID;
@@ -1127,7 +1138,9 @@ function createGameState(names, _seed = MAP_SEED, playerIds = Array.from({ lengt
     tick: 0,
     time: 0,
     phase: "day",
-    phaseTime: DAY_LENGTH,
+    phaseTime: daySeconds,
+    daySeconds,
+    nightSeconds,
     day: 1,
     result: null,
     players: createPlayers(names, ids),
@@ -1679,8 +1692,7 @@ function vampireSkillMultiplier(skills = {}) {
   }
   return 1;
 }
-function vampireShopAccess(phase, vampire, crypt) {
-  if (phase !== "day") return "A loja da cripta s\xF3 abre durante o dia";
+function vampireShopAccess(_phase, vampire, crypt) {
   if (!vampire || vampire.kind !== "vampire" || vampire.hp <= 0) return "Vampiro indispon\xEDvel";
   if (!crypt || crypt.kind !== "crypt" || !crypt.done || crypt.hp <= 0) return "Cripta indispon\xEDvel";
   const distance = Math.hypot(vampire.x - crypt.x, vampire.z - crypt.z);
@@ -1697,8 +1709,8 @@ function buildTickIndex(s) {
   for (const n of s.nodes) nodes.set(n.id, n);
   return { units, buildings, nodes };
 }
-function createSession(names, seed, playerIds) {
-  const state = createGameState(names, seed, playerIds);
+function createSession(names, seed, playerIds, daySeconds, nightSeconds) {
+  const state = createGameState(names, seed, playerIds, daySeconds, nightSeconds);
   const map = generateMap(seed);
   return { state, map, commandSeq: {}, navigation: new Navigation(state, map) };
 }
@@ -1964,7 +1976,7 @@ function applyCommand(session, playerId, cmd) {
         s.vampire.blood += cmd.amount;
       } else if (cmd.action === "phase" && (cmd.phase === "day" || cmd.phase === "night")) {
         s.phase = cmd.phase;
-        s.phaseTime = cmd.phase === "day" ? DAY_LENGTH : NIGHT_LENGTH;
+        s.phaseTime = cmd.phase === "day" ? s.daySeconds : s.nightSeconds;
         if (cmd.phase === "night") s.vampire.revealUses = 1;
       } else if (cmd.action === "heal") {
         for (const unit of s.units) if (unit.owner === playerId && !unit.dead) unit.hp = unit.maxHp;
@@ -2187,14 +2199,14 @@ function updatePhase(s, dt) {
   if (s.phaseTime > 0) return;
   if (s.phase === "day") {
     s.phase = "night";
-    s.phaseTime = NIGHT_LENGTH;
+    s.phaseTime = s.nightSeconds;
     s.vampire.revealUses = 1;
   } else {
     s.phase = "day";
-    s.phaseTime = DAY_LENGTH;
+    s.phaseTime = s.daySeconds;
     s.day++;
     if (s.day > SURVIVE_NIGHTS_TO_WIN) {
-      s.result = { winner: "human", reason: `Os humanos sobreviveram a ${SURVIVE_NIGHTS_TO_WIN} noites!` };
+      s.result = { winner: "human", reason: SURVIVE_NIGHTS_TO_WIN === 1 ? "Os humanos sobreviveram \xE0 noite!" : `Os humanos sobreviveram a ${SURVIVE_NIGHTS_TO_WIN} noites!` };
     }
   }
 }
@@ -2560,6 +2572,8 @@ function makeSnapshot(s, includeNodes = true) {
     time: s.time,
     phase: s.phase,
     phaseTime: s.phaseTime,
+    daySeconds: s.daySeconds,
+    nightSeconds: s.nightSeconds,
     day: s.day,
     result: s.result,
     units: s.units.filter((u) => !u.dead).map((u) => ({
@@ -2634,6 +2648,8 @@ function createRoom() {
     status: "lobby",
     session: null,
     seed: MAP_SEED,
+    daySeconds: GAME_CONFIG.match.daySeconds,
+    nightSeconds: GAME_CONFIG.match.nightSeconds,
     queue: [],
     cmdCount: /* @__PURE__ */ new Map(),
     nodeAmounts: /* @__PURE__ */ new Map()
@@ -2677,6 +2693,17 @@ function setReady(room, client, ready) {
   client.ready = ready;
   return null;
 }
+function setRoomDurations(room, client, daySeconds, nightSeconds) {
+  if (room.status !== "lobby") return "A partida j\xE1 come\xE7ou";
+  if (client.id !== room.hostId) return "Somente o anfitri\xE3o pode alterar os tempos";
+  const clamp = (value, min, max) => Number.isFinite(value) ? Math.min(max, Math.max(min, Math.round(value))) : null;
+  const day = clamp(daySeconds, DAY_LENGTH_MIN, DAY_LENGTH_MAX);
+  const night = clamp(nightSeconds, NIGHT_LENGTH_MIN, NIGHT_LENGTH_MAX);
+  if (day == null || night == null) return "Tempos inv\xE1lidos";
+  room.daySeconds = day;
+  room.nightSeconds = night;
+  return null;
+}
 function startReason(room) {
   if (room.status !== "lobby") return "A partida j\xE1 come\xE7ou";
   if (room.clients.length === 0) return "A sala est\xE1 vazia";
@@ -2701,7 +2728,7 @@ function startRoom(room, requesterId) {
     playerIds.push(0);
     names[0] = "Humano (treino)";
   }
-  room.session = createSession(names, room.seed, playerIds);
+  room.session = createSession(names, room.seed, playerIds, room.daySeconds, room.nightSeconds);
   room.session.state.practice = solo;
   room.nodeAmounts.clear();
   for (const node of room.session.state.nodes) room.nodeAmounts.set(node.id, node.amount);
@@ -2796,6 +2823,8 @@ function lobbyInfo(room) {
     hostId: room.hostId,
     players: room.clients.map(({ id, playerId, name, role, ready }) => ({ id, playerId, name, role, ready })),
     seed: room.seed,
+    daySeconds: room.daySeconds,
+    nightSeconds: room.nightSeconds,
     canStart: startReason(room) === null,
     startReason: startReason(room)
   };
@@ -3037,6 +3066,18 @@ wss.on("connection", (ws) => {
       clientRoom.delete(ws);
       ws.send(JSON.stringify({ type: "left" }));
       broadcastLobby(room);
+      return;
+    }
+    if (msg.type === "settings") {
+      const room = clientRoom.get(ws);
+      const client = room?.clients.find((c) => c.ws === ws);
+      if (!room || !client) {
+        error("Entre em uma sala primeiro");
+        return;
+      }
+      const message = setRoomDurations(room, client, Number(msg.daySeconds), Number(msg.nightSeconds));
+      if (message) error(message);
+      else broadcastLobby(room);
       return;
     }
     if (msg.type === "role" || msg.type === "ready") {

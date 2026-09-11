@@ -6,9 +6,7 @@ import {
   BUILDABLE,
   BUILDING_SIZE,
   CRYPT_RADIUS,
-  DAY_LENGTH,
   DT,
-  NIGHT_LENGTH,
   SURVIVE_NIGHTS_TO_WIN,
   MARKET,
   TOWER,
@@ -110,8 +108,14 @@ function buildTickIndex(s: GameState): TickIndex {
   return { units, buildings, nodes };
 }
 
-export function createSession(names: string[], seed: number, playerIds?: number[]): Session {
-  const state = createGameState(names, seed, playerIds);
+export function createSession(
+  names: string[],
+  seed: number,
+  playerIds?: number[],
+  daySeconds?: number,
+  nightSeconds?: number,
+): Session {
+  const state = createGameState(names, seed, playerIds, daySeconds, nightSeconds);
   const map = generateMap(seed); // determinístico — mesmo resultado do client
   return { state, map, commandSeq: {}, navigation: new Navigation(state, map) };
 }
@@ -466,7 +470,7 @@ export function applyCommand(session: Session, playerId: number, cmd: Command): 
         s.vampire.blood += cmd.amount;
       } else if (cmd.action === 'phase' && (cmd.phase === 'day' || cmd.phase === 'night')) {
         s.phase = cmd.phase;
-        s.phaseTime = cmd.phase === 'day' ? DAY_LENGTH : NIGHT_LENGTH;
+        s.phaseTime = cmd.phase === 'day' ? s.daySeconds : s.nightSeconds;
         if (cmd.phase === 'night') s.vampire.revealUses = 1;
       } else if (cmd.action === 'heal') {
         for (const unit of s.units) if (unit.owner === playerId && !unit.dead) unit.hp = unit.maxHp;
@@ -706,16 +710,18 @@ function updatePhase(s: GameState, dt: number): void {
 
   if (s.phase === 'day') {
     s.phase = 'night';
-    s.phaseTime = NIGHT_LENGTH;
+    s.phaseTime = s.nightSeconds;
     // Revelar Área volta a 1 uso exatamente ao começar a noite (seção 15).
     s.vampire.revealUses = 1;
   } else {
-    // amanhecer
+    // amanhecer: sobreviver à noite (ou às noites configuradas) vence o jogo.
     s.phase = 'day';
-    s.phaseTime = DAY_LENGTH;
+    s.phaseTime = s.daySeconds;
     s.day++;
     if (s.day > SURVIVE_NIGHTS_TO_WIN) {
-      s.result = { winner: 'human', reason: `Os humanos sobreviveram a ${SURVIVE_NIGHTS_TO_WIN} noites!` };
+      s.result = { winner: 'human', reason: SURVIVE_NIGHTS_TO_WIN === 1
+        ? 'Os humanos sobreviveram à noite!'
+        : `Os humanos sobreviveram a ${SURVIVE_NIGHTS_TO_WIN} noites!` };
     }
   }
 }
@@ -1123,6 +1129,8 @@ export function makeSnapshot(s: GameState, includeNodes = true): Snapshot {
     time: s.time,
     phase: s.phase,
     phaseTime: s.phaseTime,
+    daySeconds: s.daySeconds,
+    nightSeconds: s.nightSeconds,
     day: s.day,
     result: s.result,
     units: s.units

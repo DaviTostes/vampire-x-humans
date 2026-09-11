@@ -13,6 +13,9 @@ export interface LobbyInfo {
   hostId: string | null;
   players: LobbyPlayer[];
   seed: number;
+  // Durações configuradas pelo anfitrião (segundos), aplicadas ao iniciar.
+  daySeconds: number;
+  nightSeconds: number;
   canStart: boolean;
   startReason: string | null;
 }

@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { WebSocket } from 'ws';
-import { createRoom, joinRoom, chooseRole, setReady, startRoom, startReason, stepRoom, leaveRoom, lobbyInfo, rooms } from '../src/rooms.js';
-import { step } from '@vampire/shared';
+import { createRoom, joinRoom, chooseRole, setReady, setRoomDurations, startRoom, startReason, stepRoom, leaveRoom, lobbyInfo, rooms } from '../src/rooms.js';
+import { step, DAY_LENGTH_MIN, NIGHT_LENGTH_MAX } from '@vampire/shared';
 
 function join(room: ReturnType<typeof createRoom>, name: string) {
   const ws = { readyState: 1, send() {} } as unknown as WebSocket;
@@ -86,6 +86,27 @@ test('sala tem no máximo 5 jogadores e 4 vagas de humano', () => {
   assert.equal(chooseRole(room, clients[4]!, 'vampire'), null);
   assert.ok('error' in joinRoom(room, {} as WebSocket, 'Extra'));
   assert.equal(room.clients.length, 5);
+});
+
+test('o anfitrião configura as durações do dia e da noite; convidados não', () => {
+  const room = createRoom();
+  const host = join(room, 'A');
+  const guest = join(room, 'B');
+  assert.equal(setRoomDurations(room, guest, 120, 600), 'Somente o anfitrião pode alterar os tempos');
+  assert.equal(setRoomDurations(room, host, 120, 600), null);
+  assert.equal(lobbyInfo(room).daySeconds, 120);
+  assert.equal(lobbyInfo(room).nightSeconds, 600);
+  // Fora da faixa fica preso aos limites.
+  setRoomDurations(room, host, 1, 999999);
+  assert.equal(lobbyInfo(room).daySeconds, DAY_LENGTH_MIN);
+  assert.equal(lobbyInfo(room).nightSeconds, NIGHT_LENGTH_MAX);
+  // A partida inicia com as durações configuradas.
+  setRoomDurations(room, host, 90, 300);
+  chooseRole(room, host, 'vampire'); chooseRole(room, guest, 'human');
+  setReady(room, host, true); setReady(room, guest, true);
+  assert.equal(startRoom(room, host.id), true);
+  assert.equal(room.session!.state.daySeconds, 90);
+  assert.equal(room.session!.state.nightSeconds, 300);
 });
 
 test('ao terminar a partida a sala volta ao lobby pronta para revanche', () => {

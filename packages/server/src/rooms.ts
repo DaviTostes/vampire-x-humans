@@ -2,7 +2,7 @@
 
 import type { WebSocket } from 'ws';
 import { randomUUID } from 'node:crypto';
-import { createSession, makeSnapshot, step, MAP_SEED, GAME_CONFIG, MAX_HUMANS, MAX_PLAYERS, VAMPIRE_PLAYER_ID, type Session } from '@vampire/shared';
+import { createSession, makeSnapshot, step, MAP_SEED, GAME_CONFIG, MAX_HUMANS, MAX_PLAYERS, VAMPIRE_PLAYER_ID, DAY_LENGTH_MIN, DAY_LENGTH_MAX, NIGHT_LENGTH_MIN, NIGHT_LENGTH_MAX, type Session } from '@vampire/shared';
 import type { Command, Role, LobbyInfo, ResourceNode, Snapshot } from '@vampire/shared';
 
 // Snapshot enviado na rede: os nós saem por mensagem própria, então podem ser
@@ -25,6 +25,9 @@ export interface Room {
   status: 'lobby' | 'playing' | 'ended';
   session: Session | null;
   seed: number;
+  // Durações do ciclo configuradas no lobby (segundos).
+  daySeconds: number;
+  nightSeconds: number;
   queue: Array<{ playerId: number; cmd: Command }>;
   // Comandos aceitos por jogador no tick atual; limita flood de um cliente.
   cmdCount: Map<number, number>;
@@ -57,6 +60,8 @@ export function createRoom(): Room {
     status: 'lobby',
     session: null,
     seed: MAP_SEED,
+    daySeconds: GAME_CONFIG.match.daySeconds,
+    nightSeconds: GAME_CONFIG.match.nightSeconds,
     queue: [],
     cmdCount: new Map(),
     nodeAmounts: new Map(),
@@ -106,6 +111,23 @@ export function setReady(room: Room, client: Client, ready: boolean): string | n
   return null;
 }
 
+/**
+ * Ajusta as durações do dia/noite. Só o anfitrião, no lobby, dentro das faixas
+ * permitidas. O valor é aplicado quando a partida começa.
+ */
+export function setRoomDurations(room: Room, client: Client, daySeconds: number, nightSeconds: number): string | null {
+  if (room.status !== 'lobby') return 'A partida já começou';
+  if (client.id !== room.hostId) return 'Somente o anfitrião pode alterar os tempos';
+  const clamp = (value: number, min: number, max: number) =>
+    Number.isFinite(value) ? Math.min(max, Math.max(min, Math.round(value))) : null;
+  const day = clamp(daySeconds, DAY_LENGTH_MIN, DAY_LENGTH_MAX);
+  const night = clamp(nightSeconds, NIGHT_LENGTH_MIN, NIGHT_LENGTH_MAX);
+  if (day == null || night == null) return 'Tempos inválidos';
+  room.daySeconds = day;
+  room.nightSeconds = night;
+  return null;
+}
+
 export function startReason(room: Room): string | null {
   if (room.status !== 'lobby') return 'A partida já começou';
   if (room.clients.length === 0) return 'A sala está vazia';
@@ -133,7 +155,7 @@ export function startRoom(room: Room, requesterId: string): boolean {
     playerIds.push(0);
     names[0] = 'Humano (treino)';
   }
-  room.session = createSession(names, room.seed, playerIds);
+  room.session = createSession(names, room.seed, playerIds, room.daySeconds, room.nightSeconds);
   room.session.state.practice = solo;
   room.nodeAmounts.clear();
   for (const node of room.session.state.nodes) room.nodeAmounts.set(node.id, node.amount);
@@ -249,6 +271,8 @@ export function lobbyInfo(room: Room): LobbyInfo {
     hostId: room.hostId,
     players: room.clients.map(({ id, playerId, name, role, ready }) => ({ id, playerId, name, role, ready })),
     seed: room.seed,
+    daySeconds: room.daySeconds,
+    nightSeconds: room.nightSeconds,
     canStart: startReason(room) === null,
     startReason: startReason(room),
   };

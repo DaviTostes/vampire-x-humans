@@ -49,7 +49,7 @@ O teste solo serve para experimentar construções, economia, controles e combat
 O objetivo é construir uma defesa capaz de resistir à caçada. A equipe vence se:
 
 - **eliminar o Vampiro**; ou
-- **sobreviver a duas noites**, alcançando o amanhecer seguinte.
+- **sobreviver à noite inteira**, alcançando o amanhecer seguinte. Ao raiar o dia novamente, os humanos vencem.
 
 Os jogadores humanos são aliados, embora cada um tenha suas próprias unidades e seus próprios recursos.
 
@@ -106,10 +106,10 @@ O Vampiro recebe ordens de movimento e ataque como as outras unidades. À noite,
 
 ### Base do Vampiro: a cripta
 
-Durante o **dia**, o Vampiro pode trocar sangue por equipamento na sua base, no centro do vale. Tudo é comprado na **Cripta**: itens e skills.
+A qualquer momento, **de dia ou de noite**, o Vampiro pode trocar sangue por equipamento na sua base, no centro do vale. Tudo é comprado na **Cripta**: itens e skills.
 
 1. Acumule sangue acertando ataques.
-2. Durante o dia, aproxime o Vampiro da cripta.
+2. Aproxime o Vampiro da cripta (o dia ou a noite não importam).
 3. Clique na cripta para abrir a loja no HUD.
 4. Escolha o item ou a skill. O sangue é descontado e o equipamento fica ativo imediatamente.
 
@@ -122,11 +122,11 @@ Durante o **dia**, o Vampiro pode trocar sangue por equipamento na sua base, no 
 
 ### Skill do Vampiro: Golpe Sombrio
 
-- **Apenas as skills são compradas na cripta.** Durante o dia, o Vampiro desbloqueia o **Golpe Sombrio** por 80 de sangue.
+- **Apenas as skills são compradas na cripta.** Perto da cripta, o Vampiro desbloqueia o **Golpe Sombrio** por 80 de sangue.
 - Depois de desbloqueada, a skill aparece no painel do vampiro e pode ser ativada **a qualquer hora**, sem custo extra.
 - Ao ativar, o dano dobra por 8 segundos, com 50 segundos de recarga.
 
-- A cripta só atende o Vampiro durante o dia, em qualquer ponto da região da base.
+- A cripta atende o Vampiro a qualquer momento, desde que ele esteja na região da base.
 - Todos os itens são comprados na cripta e são **infinitos**: podem ser comprados quantas vezes o sangue permitir, e cada nível custa mais que o anterior.
 - Depois da primeira compra de um item, ele pode ser upado **a qualquer hora pelo painel do vampiro**, sem voltar à base.
 - Os itens equipados aparecem na ficha do Vampiro e no painel da base.
@@ -139,19 +139,20 @@ Durante o **dia**, o Vampiro pode trocar sangue por equipamento na sua base, no 
 
 ## 4. Dia e noite
 
-### Dia — 4 minutos
+A partida tem **um dia curto** (60 segundos por padrão) e **uma noite longa** (20 minutos por padrão). O anfitrião pode alterar as duas durações no lobby, antes de iniciar. Os valores padrão e as faixas permitidas ficam em `match` no `game.config.ts`.
 
-- Os Humanos usam esse período para coletar recursos, escolher um refúgio e construir.
+### Dia — 1 minuto (padrão)
+
+- Serve quase só para os Humanos coletarem o básico, escolherem um refúgio e levantarem a base inicial.
 - O Vampiro fica limitado à região da cripta, em um raio de 14 unidades do mapa.
-- Ele pode se movimentar nessa região, mas não sair para caçar pelo vale.
+- Ele pode se movimentar nessa região, comprar itens e melhorar a cripta, mas não sair para caçar pelo vale.
 
-O dia é a principal oportunidade para organizar a economia e proteger a entrada da base.
+### Noite — 20 minutos (padrão)
 
-### Noite — 2 minutos e 30 segundos
-
-- O Vampiro pode circular pelo mapa.
+- O Vampiro pode circular pelo mapa, caçar e comprar itens na cripta como faria de dia.
 - Sua velocidade aumenta e sua regeneração fica ativa.
-- A iluminação do cenário muda e as defesas passam a ser fundamentais para a sobrevivência.
+- A iluminação do cenário muda e as defesas são o que garante a sobrevivência.
+- **Se os humanos aguentarem a noite inteira, o amanhecer chega e eles vencem.**
 
 O relógio no topo da tela mostra a fase atual e o tempo restante. As torres funcionam **tanto de dia quanto à noite**, desde que estejam prontas e o Vampiro esteja ao alcance.
 

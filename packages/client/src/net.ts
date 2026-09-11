@@ -163,6 +163,9 @@ export class Net {
   join(code: string, name: string) { this.request('join', { code, name }); }
   chooseRole(role: Role) { this.request('role', { role }); }
   ready(ready: boolean) { this.request('ready', { ready }); }
+  // Alteração de tempos não passa por `pending`: o host pode ajustar várias
+  // vezes seguidas e o servidor confirma com um novo `lobby`.
+  settings(daySeconds: number, nightSeconds: number) { this.send({ type: 'settings', daySeconds, nightSeconds }); }
   start() { this.request('start'); }
   leave() { this.request('leave'); }
 }

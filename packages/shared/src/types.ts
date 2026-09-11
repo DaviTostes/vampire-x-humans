@@ -107,6 +107,8 @@ export interface GameState {
   time: number; // segundos desde o início
   phase: 'day' | 'night';
   phaseTime: number; // tempo restante da fase
+  daySeconds: number; // duração configurada do dia
+  nightSeconds: number; // duração configurada da noite
   day: number;
   result: GameResult;
   units: Unit[];
@@ -153,6 +155,8 @@ export interface Snapshot {
   time: number;
   phase: 'day' | 'night';
   phaseTime: number;
+  daySeconds: number;
+  nightSeconds: number;
   day: number;
   result: GameResult;
   units: Array<Pick<Unit, 'id' | 'kind' | 'hero' | 'workerRole' | 'owner' | 'x' | 'z' | 'hp' | 'maxHp' | 'carrying' | 'carryRes' | 'activity' | 'fortify'> & {

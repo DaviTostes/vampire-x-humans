@@ -2,8 +2,6 @@
 
 import * as THREE from 'three';
 import {
-  DAY_LENGTH,
-  NIGHT_LENGTH,
   MAX_HUMANS,
   BUILDING_SIZE,
   TOWER,
@@ -2184,13 +2182,13 @@ export class GameScene {
     this.sun.target.updateMatrixWorld();
   }
 
-  updateDayNight(phase: 'day' | 'night', phaseTime: number, day: number) {
+  updateDayNight(phase: 'day' | 'night', phaseTime: number, day: number, phaseTotal: number) {
     const DAY_SKY = new THREE.Color(0x87b5e0);
     const NIGHT_SKY = new THREE.Color(0x0a0d1f);
     const DUSK_SKY = new THREE.Color(0xc07050);
 
-    // t: 0 início do dia → 1 fim
-    const total = phase === 'day' ? DAY_LENGTH : NIGHT_LENGTH;
+    // t: 0 início da fase → 1 fim (duração configurada no lobby)
+    const total = Math.max(1, phaseTotal);
     const elapsed = total - phaseTime;
     const t = Math.min(1, elapsed / total);
 

@@ -7,8 +7,6 @@ import {
   VAMPIRE,
   VAMPIRE_PLAYER_ID,
   workerStats,
-  DAY_LENGTH,
-  NIGHT_LENGTH,
   MARKET,
   BUILD_COSTS,
   WALL_MAX_LEVEL,
@@ -80,7 +78,7 @@ const BUILDING_HELP: Record<BuildingKind, string> = {
   wall: 'Humanos atravessam; o vampiro precisa destruí-lo.', tower: 'Ataca o vampiro automaticamente quando ele entra no alcance.',
   market: 'Única construção onde se troca madeira por ouro e vice-versa.',
   goldMine: 'Fonte de ouro: o Minerador extrai ouro dela.',
-  crypt: 'Base do Vampiro. Compre itens e desbloqueie skills durante o dia.',
+  crypt: 'Base do Vampiro. Compre itens e desbloqueie skills a qualquer momento.',
 };
 // Itens vendidos na cripta (dano/vida/Attack Speed).
 
@@ -511,7 +509,7 @@ export class Hud {
     this.blood.textContent = String(snap.blood);
 
     // relógio
-    const total = snap.phase === 'day' ? DAY_LENGTH : NIGHT_LENGTH;
+    const total = snap.phase === 'day' ? snap.daySeconds : snap.nightSeconds;
     const rem = Math.max(0, Math.ceil(snap.phaseTime));
     const icon = snap.phase === 'day' ? '☀️' : '🌙';
     const label = `${snap.practice ? 'Teste solo · ' : ''}${snap.phase === 'day' ? 'Dia' : 'Noite'} ${snap.day}`;
@@ -759,7 +757,7 @@ export class Hud {
       }
     } else if (isVamp) {
       // Itens e skills só se compram/melhoram na Cripta (painel da construção).
-      html = '<span>Compre e melhore itens e skills na Cripta, durante o dia.</span>';
+      html = '<span>Compre e melhore itens e skills na Cripta, de dia ou de noite.</span>';
     } else if (hasSel) {
       const selectedUnits = snap.units.filter(u => this.controls.selected.includes(u.id));
       // Só o Humano e o Minerador constroem; a Mina de Ouro é exclusiva do Minerador.

@@ -44,11 +44,10 @@ test('itens são comprados na cripta com sangue e evoluem por nível', () => {
   assert.equal(session.state.vampire.items.damage, 1, 'snapshot não pode compartilhar o inventário mutável');
 });
 
-test('a cripta rejeita compras à noite, longe, sem sangue ou por humanos', () => {
-  for (const scenario of ['night', 'far', 'poor', 'human', 'dead', 'wrong-building', 'unknown-item'] as const) {
+test('a cripta rejeita compras longe, sem sangue ou por humanos', () => {
+  for (const scenario of ['far', 'poor', 'human', 'dead', 'wrong-building', 'unknown-item'] as const) {
     const { session, vampire, crypt } = fixture();
     standAt(vampire, crypt);
-    if (scenario === 'night') session.state.phase = 'night';
     if (scenario === 'far') { vampire.x = crypt.x; vampire.z = crypt.z + 60; }
     if (scenario === 'poor') session.state.vampire.blood = 0;
     if (scenario === 'dead') { vampire.hp = 0; vampire.dead = true; }
@@ -60,6 +59,14 @@ test('a cripta rejeita compras à noite, longe, sem sangue ou por humanos', () =
     assert.deepEqual(session.state.vampire.items, {}, scenario);
     assert.equal(session.state.vampire.blood, before, scenario);
   }
+});
+
+test('o Vampiro compra na cripta também durante a noite', () => {
+  const { session, vampire, crypt } = fixture();
+  session.state.phase = 'night';
+  standAt(vampire, crypt);
+  applyCommand(session, VAMPIRE_PLAYER_ID, { type: 'buyVampireItem', cryptId: crypt.id, itemId: 'damage' });
+  assert.deepEqual(session.state.vampire.items, { damage: 1 });
 });
 
 test('Attack Speed respeita o limite de 600 e bloqueia níveis indefinidos', () => {

@@ -1,4 +1,8 @@
-import { GAME_CONFIG, MAX_HUMANS, MAX_PLAYERS, type Role } from '@vampire/shared';
+import {
+  GAME_CONFIG, MAX_HUMANS, MAX_PLAYERS,
+  DAY_LENGTH_MIN, DAY_LENGTH_MAX, NIGHT_LENGTH_MIN, NIGHT_LENGTH_MAX,
+  type Role,
+} from '@vampire/shared';
 import { Net, takeRejoinCode } from './net.js';
 import { portrait } from './portraits.js';
 import './lobby.css';
@@ -15,6 +19,11 @@ function loadName() {
 
 function saveName(name: string) {
   try { localStorage.setItem(NAME_STORAGE_KEY, name); } catch { /* armazenamento indisponível */ }
+}
+
+/** Segundos → minutos para os campos do lobby (ex.: 60 → "1", 90 → "1.5"). */
+function secondsToMinutes(seconds: number): string {
+  return String(Math.round((seconds / 60) * 100) / 100);
 }
 
 export class Lobby {
@@ -35,6 +44,13 @@ export class Lobby {
         this.code = input.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, GAME_CONFIG.lobby.codeLength);
         input.value = this.code;
       }
+    });
+    this.el.addEventListener('change', e => {
+      const input = e.target as HTMLInputElement;
+      if (input.id !== 'v-day' && input.id !== 'v-night') return;
+      const day = Number(this.el.querySelector<HTMLInputElement>('#v-day')?.value);
+      const night = Number(this.el.querySelector<HTMLInputElement>('#v-night')?.value);
+      if (Number.isFinite(day) && Number.isFinite(night)) this.net.settings(day * 60, night * 60);
     });
     this.el.addEventListener('keydown', e => {
       if (e.key !== 'Enter' || this.net.pending || this.net.connection !== 'online') return;
@@ -157,6 +173,18 @@ export class Lobby {
         ${roleCard('human', humans, MAX_HUMANS)}${roleCard('vampire', vampires, 1)}
         <button data-action="ready" class="lobby-ready-button ${me?.ready ? 'confirmed' : ''}" ${busy || !me?.role ? 'disabled' : ''}>${me?.ready ? '✓ Pronto — cancelar' : 'Estou pronto'}</button>
       </section></div>
+      <section class="lobby-card lobby-settings">
+        <div class="lobby-section-title"><h2>Tempos da partida</h2><span>${isHost ? 'Você define' : 'Definido pelo anfitrião'}</span></div>
+        <div class="lobby-settings-grid">
+          <div class="lobby-setting"><label for="v-day">Duração do dia <span>(min)</span></label>
+            <input id="v-day" type="number" inputmode="decimal" min="${DAY_LENGTH_MIN / 60}" max="${DAY_LENGTH_MAX / 60}" step="0.5" value="${secondsToMinutes(lobby.daySeconds)}" ${!isHost || busy ? 'disabled' : ''}>
+            <small>Tempo inicial só para os humanos construírem a base.</small></div>
+          <div class="lobby-setting"><label for="v-night">Duração da noite <span>(min)</span></label>
+            <input id="v-night" type="number" inputmode="decimal" min="${NIGHT_LENGTH_MIN / 60}" max="${NIGHT_LENGTH_MAX / 60}" step="1" value="${secondsToMinutes(lobby.nightSeconds)}" ${!isHost || busy ? 'disabled' : ''}>
+            <small>Período em que os humanos precisam sobreviver.</small></div>
+        </div>
+        <p class="lobby-help">Se o dia raiar de novo, os humanos vencem. O vampiro compra itens na Cripta a qualquer momento.</p>
+      </section>
       <div class="lobby-start-bar"><div><strong>${lobby.canStart ? (lobby.players.length === 1 ? 'Pronto para testar sozinho.' : 'Todos prontos.') : escapeHtml(lobby.startReason ?? '')}</strong></div>
         <button data-action="start" class="lobby-primary" ${busy || !isHost || !lobby.canStart ? 'disabled' : ''}>${this.net.pending === 'start' ? 'Iniciando…' : isHost ? (lobby.players.length === 1 ? 'Iniciar teste solo' : 'Iniciar partida') : 'Aguardando anfitrião'} <span>→</span></button></div>
     </main>`;

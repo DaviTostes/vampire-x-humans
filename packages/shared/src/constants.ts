@@ -17,6 +17,11 @@ export const WORLD = {
 export const DAY_LENGTH = GAME_CONFIG.match.daySeconds;
 export const NIGHT_LENGTH = GAME_CONFIG.match.nightSeconds;
 export const SURVIVE_NIGHTS_TO_WIN = GAME_CONFIG.match.nightsToWin;
+// Faixas de configuração de duração aceitas no lobby.
+export const DAY_LENGTH_MIN = GAME_CONFIG.match.daySecondsMin;
+export const DAY_LENGTH_MAX = GAME_CONFIG.match.daySecondsMax;
+export const NIGHT_LENGTH_MIN = GAME_CONFIG.match.nightSecondsMin;
+export const NIGHT_LENGTH_MAX = GAME_CONFIG.match.nightSecondsMax;
 export const START_RESOURCES = GAME_CONFIG.match.startingResources;
 export const MAX_HUMANS = GAME_CONFIG.map.humanSpawns.length;
 export const VAMPIRE_PLAYER_ID = MAX_HUMANS;

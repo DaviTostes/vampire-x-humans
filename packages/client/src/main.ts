@@ -63,7 +63,7 @@ function startGame(net: Net) {
       hud.update(snap, getActingId());
     }
     controls.update(dt);
-    if (snap) scene.updateDayNight(snap.phase, snap.phaseTime, snap.day);
+    if (snap) scene.updateDayNight(snap.phase, snap.phaseTime, snap.day, snap.phase === 'day' ? snap.daySeconds : snap.nightSeconds);
     scene.render(dt);
   }
   requestAnimationFrame(loop);
