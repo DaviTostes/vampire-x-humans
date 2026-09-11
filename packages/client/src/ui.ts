@@ -911,7 +911,8 @@ export class Hud {
     const who = prev.hero === false ? `Peão do Humano ${prev.owner + 1}` : `Humano ${prev.owner + 1}`;
     this.pushFeed(`☠ ${who} tombou`);
     this.deathMarks.push({ x: prev.x, z: prev.z, until: performance.now() + 6000 });
-    this.scene.deathPulse(prev.x, prev.z, who);
+    // O pulso no mundo só aparece se a morte foi vista (o aviso na lista é global).
+    if (this.scene.isVisibleToPlayer(prev.owner, prev.x, prev.z)) this.scene.deathPulse(prev.x, prev.z, who);
   }
 
   private pushFeed(text: string) {

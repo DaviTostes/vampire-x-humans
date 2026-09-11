@@ -922,11 +922,11 @@ export class GameScene {
 
       // Dano recebido (o Vampiro atacando unidades) e teleporte (salto de posição).
       const dealt = drops.get(u.id);
-      if (dealt !== undefined && !towerHits.has(u.id)) {
+      if (visible && dealt !== undefined && !towerHits.has(u.id)) {
         this.hitFeedback(u.x, u.z, dealt, u.kind === 'vampire' ? 2.6 : 2.0);
       }
       // Sangue ganho pelo Vampiro no golpe (80% do dano causado).
-      if (u.kind === 'vampire' && u.targetId != null && drops.has(u.targetId)) {
+      if (visible && u.kind === 'vampire' && u.targetId != null && drops.has(u.targetId)) {
         const damage = (VAMPIRE.attackDamage + vampireItemBonuses(snap.vampireItems).damage)
           * vampireSkillMultiplier(snap.vampireSkills)
           * (snap.phase === 'night' ? 1 : VAMPIRE.dayDamageMultiplier);
@@ -935,7 +935,7 @@ export class GameScene {
           this.bloodFloating(new THREE.Vector3(u.x, this.heightAt(u.x, u.z) + 4.4, u.z), blood);
         }
       }
-      if (prevPos && u.activity !== 'moving' && Math.hypot(u.x - prevPos.x, u.z - prevPos.z) > 8) {
+      if (visible && prevPos && u.activity !== 'moving' && Math.hypot(u.x - prevPos.x, u.z - prevPos.z) > 8) {
         this.teleportFeedback(prevPos.x, prevPos.z, u.x, u.z);
       }
     }
@@ -973,6 +973,7 @@ export class GameScene {
         this.scene.add(g);
         g.userData.pick = { buildingId: b.id };
       }
+      const visible = this.isVisibleToLocal(b.owner, b.x, b.z);
       g.userData.kind = b.kind;
       g.userData.hp = b.hp;
       g.userData.maxHp = b.maxHp;
@@ -980,17 +981,22 @@ export class GameScene {
       g.userData.level = b.level;
       g.userData.goldProduced = b.goldProduced ?? 0;
       g.userData.recruiting = !!b.recruitment;
-      if (recruited) this.floatingText('Peão pronto', g.position.clone().add(new THREE.Vector3(0, 5, 0)), '#c0e4a7');
+      if (visible && recruited) this.floatingText('Peão pronto', g.position.clone().add(new THREE.Vector3(0, 5, 0)), '#c0e4a7');
       if (b.lastShot && b.lastShot.tick !== g.userData.lastShotTick) {
-        if (g.userData.lastShotTick !== undefined || snap.tick - b.lastShot.tick <= 2) this.towerShotEffect(g, b.lastShot);
+        if (g.userData.lastShotTick !== undefined || snap.tick - b.lastShot.tick <= 2) {
+          if (visible) this.towerShotEffect(g, b.lastShot);
+        }
         g.userData.lastShotTick = b.lastShot.tick;
       }
-      if (goldDelta > 0) {
+      if (visible && goldDelta > 0) {
         const isCrypt = b.kind === 'crypt';
-        this.productionEffect(g.position, goldDelta, isCrypt ? 'sangue' : 'ouro',
-          isCrypt ? '#ff8b8b' : '#ffe48b', isCrypt ? '#a51f30' : '#f8ca4f');
+        // O sangue da Cripta é informação do Vampiro.
+        if (!isCrypt || teamOf(this.localOwner) === 'vampire') {
+          this.productionEffect(g.position, goldDelta, isCrypt ? 'sangue' : 'ouro',
+            isCrypt ? '#ff8b8b' : '#ffe48b', isCrypt ? '#a51f30' : '#f8ca4f');
+        }
       }
-      if (completed) {
+      if (visible && completed) {
         this.floatingText('Obra concluída', g.position.clone().add(new THREE.Vector3(0, 5, 0)), '#c0e4a7');
         this.dustEffect(g.position, '#bca77f');
       }
@@ -999,7 +1005,7 @@ export class GameScene {
       const buildHalf = BUILDING_SIZE[b.kind] ?? 6;
       this.applyStatusAuras(g, { fortify: (b.fortify ?? 0) > 0 }, Math.max(1.2, buildHalf * 0.55));
       const dealtBuilding = drops.get(b.id);
-      if (dealtBuilding !== undefined) {
+      if (visible && dealtBuilding !== undefined) {
         this.hitFeedback(b.x, b.z, dealtBuilding, Math.max(1.6, buildHalf * 0.45));
       }
       // A Cripta é indestrutível: não mostra barra de vida.
@@ -1011,7 +1017,6 @@ export class GameScene {
         this.updateHealthBar(b.id, b.hp, b.maxHp);
       }
       // Construções inimigas fora da visão do time também somem (fog de guerra).
-      const visible = this.isVisibleToLocal(b.owner, b.x, b.z);
       g.visible = visible;
       g.userData.visionVisible = visible;
       if (g.userData.bar) g.userData.bar.visible = visible;
