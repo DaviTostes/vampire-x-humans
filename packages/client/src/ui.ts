@@ -931,31 +931,11 @@ export class Hud {
    */
   private get minimapView() {
     if (this.minimapViewCache) return this.minimapViewCache;
-    const model = this.scene.model;
     const S = 210;
-    let minX = Infinity, minZ = Infinity, maxX = -Infinity, maxZ = -Infinity;
-    const include = (x: number, z: number, pad: number) => {
-      if (!Number.isFinite(x) || !Number.isFinite(z)) return;
-      minX = Math.min(minX, x - pad); maxX = Math.max(maxX, x + pad);
-      minZ = Math.min(minZ, z - pad); maxZ = Math.max(maxZ, z + pad);
-    };
-    include(model.cryptPosition.x, model.cryptPosition.z, 40);
-    for (const p of model.humanSpawns) include(p.x, p.z, 20);
-    for (const c of model.compounds) include(c.x, c.z, Math.max(c.width, c.depth) / 2 + 8);
-    for (const b of model.bridges) include(b.x, b.z, Math.max(b.width, b.depth) / 2 + 8);
-    // Paredes e maciços delimitam a área jogável (ex.: o miolo do labirinto).
-    // Recursos ficam de fora: no labirinto as árvores cobrem o mundo todo.
-    for (const o of model.obstacles) {
-      include(o.x - o.width / 2, o.z - o.depth / 2, 0);
-      include(o.x + o.width / 2, o.z + o.depth / 2, 0);
-    }
-    if (!Number.isFinite(minX)) {
-      const half = WORLD.half;
-      this.minimapViewCache = { minX: -half, minZ: -half, scale: S / (half * 2), offX: 0, offZ: 0 };
-      return this.minimapViewCache;
-    }
+    const { minX: bMinX, minZ: bMinZ, maxX: bMaxX, maxZ: bMaxZ } = this.scene.playableBounds();
     const margin = 8;
-    minX -= margin; maxX += margin; minZ -= margin; maxZ += margin;
+    const minX = bMinX - margin, maxX = bMaxX + margin;
+    const minZ = bMinZ - margin, maxZ = bMaxZ + margin;
     const w = maxX - minX, h = maxZ - minZ;
     const scale = S / Math.max(w, h);
     this.minimapViewCache = { minX, minZ, scale, offX: (S - w * scale) / 2, offZ: (S - h * scale) / 2 };

@@ -738,6 +738,36 @@ export class GameScene {
     this.localOwner = owner;
   }
 
+  /**
+   * Limites da área jogável: refúgios, cripta, spawns, pontes e obstáculos
+   * (as fileiras de pedra). Usado pela câmera e pelo minimapa para não mostrar
+   * o vazio inacessível além da borda.
+   */
+  playableBounds(): { minX: number; minZ: number; maxX: number; maxZ: number } {
+    const model = this.model;
+    let minX = Infinity, minZ = Infinity, maxX = -Infinity, maxZ = -Infinity;
+    const include = (x: number, z: number, pad: number) => {
+      if (!Number.isFinite(x) || !Number.isFinite(z)) return;
+      minX = Math.min(minX, x - pad); maxX = Math.max(maxX, x + pad);
+      minZ = Math.min(minZ, z - pad); maxZ = Math.max(maxZ, z + pad);
+    };
+    include(model.cryptPosition.x, model.cryptPosition.z, 40);
+    for (const p of model.humanSpawns) include(p.x, p.z, 20);
+    for (const c of model.compounds) include(c.x, c.z, Math.max(c.width, c.depth) / 2 + 8);
+    for (const b of model.bridges) include(b.x, b.z, Math.max(b.width, b.depth) / 2 + 8);
+    // Recursos (inclusive as árvores de coleta) delimitam o mapa jogável real —
+    // sem eles, o recorte cortava as laterais da ilha no mapa clássico.
+    for (const p of model.resourcePlacements) include(p.x, p.z, 6);
+    for (const o of model.obstacles) {
+      include(o.x - o.width / 2, o.z - o.depth / 2, 0);
+      include(o.x + o.width / 2, o.z + o.depth / 2, 0);
+    }
+    if (!Number.isFinite(minX)) return { minX: -WORLD.half, minZ: -WORLD.half, maxX: WORLD.half, maxZ: WORLD.half };
+    // Folga extra: mostra um pouco da área bloqueada em vez de cortar as bordas.
+    const pad = 20;
+    return { minX: minX - pad, minZ: minZ - pad, maxX: maxX + pad, maxZ: maxZ + pad };
+  }
+
   private computeVision(snap: Snapshot) {
     const sources: typeof this.visionSources = [];
     const myTeam = teamOf(this.localOwner);
@@ -1189,15 +1219,39 @@ export class GameScene {
     const obstacles = this.map.obstacles;
     const step = 2.8;
     const half = WORLD.half - 4;
+    const cryptX = this.model.cryptPosition.x, cryptZ = this.model.cryptPosition.z;
+    // No labirinto, atrás das fileiras de pedra não existe floresta; mantém a
+    // floresta de dentro. O limite acompanha os refúgios.
+    const maze = this.model.config.maze;
+    const mapScale = this.model.config.scale;
+    const playableForestRadius = maze
+      ? this.model.compounds.reduce(
+        (max, c) => Math.max(max, Math.hypot(c.x - cryptX, c.z - cryptZ) + Math.max(c.width, c.depth) / 2), 0) + 6 * mapScale
+      : Infinity;
+    // Centro (spawn) hoje vazio: preenche com árvores, sem tocar nos tiles da cripta.
+    const centerRadius = 42;
+    const cryptTileRadius = CRYPT_DECAL_RADIUS + 3;
+    const spawns = this.model.humanSpawns;
+    const vampireSpawn = {
+      x: cryptX + this.model.vampireSpawnOffset.x,
+      z: cryptZ + this.model.vampireSpawnOffset.z,
+    };
     const spots: Array<[number, number, number, number]> = [];
     for (let gx = -half; gx <= half; gx += step) {
       for (let gz = -half; gz <= half; gz += step) {
         const jx = (decorHash(gx * 0.7, gz * 1.3) - 0.5) * step * 0.9;
         const jz = (decorHash(gz * 1.1, gx * 0.5) - 0.5) * step * 0.9;
         const x = gx + jx, z = gz + jz;
-        if (!this.model.isForestAt(x, z)) continue;
-        // Mantém a base do Vampiro (cripta e praça) livre de árvores decorativas.
-        if (Math.hypot(x - this.model.cryptPosition.x, z - this.model.cryptPosition.z) < CRYPT_DECAL_RADIUS + 10) continue;
+        const r = Math.hypot(x - cryptX, z - cryptZ);
+        if (this.model.isForestAt(x, z)) {
+          if (playableForestRadius !== Infinity && r > playableForestRadius) continue;
+        } else {
+          // Fora da floresta só entra no centro, longe dos tiles da cripta.
+          if (r >= centerRadius || r < cryptTileRadius) continue;
+          if (this.model.distanceToTrails(x, z) < 5) continue;
+          if (spawns.some(s => Math.hypot(x - s.x, z - s.z) < 7)) continue;
+          if (Math.hypot(x - vampireSpawn.x, z - vampireSpawn.z) < 7) continue;
+        }
         if (occupied.has(`${Math.floor(x / cell)},${Math.floor(z / cell)}`)) continue;
         if (obstacles.some(o => Math.abs(x - o.x) < o.width / 2 + 1.6 && Math.abs(z - o.z) < o.depth / 2 + 1.6)) continue;
         spots.push([x, z, decorHash(x, z), decorHash(z, x)]);

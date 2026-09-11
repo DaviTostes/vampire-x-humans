@@ -122,6 +122,11 @@ function buildMapModel(id: MapPresetId, cfg: MapPresetConfig): MapModel {
   }));
 
 
+  // Limite da área jogável do labirinto: até onde vão os refúgios. Fora disso as
+  // fileiras de pedra bloqueiam a passagem e não deve haver floresta/árvores.
+  const refugeRadius = compounds.reduce(
+    (max, c) => Math.max(max, Math.hypot(c.x, c.z) + Math.max(c.width, c.depth) / 2), 0) + S(6);
+
   // ---- ilha ----
   const COAST = {
     ...cfg.coast,
@@ -824,6 +829,8 @@ function buildMapModel(id: MapPresetId, cfg: MapPresetConfig): MapModel {
         const jz = (hash01(Math.round(gz * 10), Math.round(gx * 10)) - 0.5) * step * 0.6;
         const x = Math.round((gx + jx) * 2) / 2, z = Math.round((gz + jz) * 2) / 2;
         if (!isForestAt(x, z)) continue;
+        // Labirinto: nada de floresta fora da área jogável (atrás das pedras).
+        if (cfg.maze && Math.hypot(x - cryptPosition.x, z - cryptPosition.z) > refugeRadius) continue;
         if ([-S(3), S(3)].some(dx => [-S(3), S(3)].some(dz => isWaterTile(x + dx, z + dz)))) continue;
         pts.push({ kind: 'wood', x, z });
       }

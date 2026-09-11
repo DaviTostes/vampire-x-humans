@@ -1,7 +1,7 @@
 // Controles RTS: câmera, seleção, ordens, ghost de construção
 
 import * as THREE from 'three';
-import { BUILDING_SIZE, BUILD_COSTS, BUILDABLE, WORLD, VAMPIRE_PLAYER_ID, SPEC_ENTITY_LIMITS, HUMAN_ABILITIES, VAMPIRE_ABILITIES, canBuildKind, canPlaceBuilding, type BuildKind, type HumanAbilityId, type Snapshot, type VampireAbilityId } from '@vampire/shared';
+import { BUILDING_SIZE, BUILD_COSTS, BUILDABLE, VAMPIRE_PLAYER_ID, SPEC_ENTITY_LIMITS, HUMAN_ABILITIES, VAMPIRE_ABILITIES, canBuildKind, canPlaceBuilding, type BuildKind, type HumanAbilityId, type Snapshot, type VampireAbilityId } from '@vampire/shared';
 import type { GameScene } from './scene.js';
 import type { Net } from './net.js';
 import { RTS_CAMERA } from './camera.js';
@@ -104,14 +104,18 @@ export class RtsControls {
     const farG = h / Math.tan(Math.max(0.02, pitch - vf));
     const D = dist * RTS_CAMERA.depth;
     const hf = Math.atan(Math.tan(vf) * this.scene.camera.aspect);
-    const half = WORLD.half;
-    const cap = half * 0.9;
-    // Margem de segurança de 12% para variações de relevo/aspecto.
-    const marginX = Math.min(cap, farG * Math.tan(hf) * 1.12);
+    // Limita à área jogável (não ao mundo inteiro): sem isso a câmera anda
+    // muito além das fileiras de pedra e mostra o vazio inacessível.
+    const { minX, minZ, maxX, maxZ } = this.scene.playableBounds();
+    const cap = Math.min(maxX - minX, maxZ - minZ) * 0.5;
+    // Margem de segurança pequena: com a folga do recorte, não corta as bordas.
+    const marginX = Math.min(cap, farG * Math.tan(hf) * 1.05);
     const marginZback = Math.min(cap, farG - D); // lado oposto à câmera (topo)
     const marginZfront = Math.min(cap, Math.max(0, D - near)); // lado da câmera (base)
-    this.camTarget.x = THREE.MathUtils.clamp(this.camTarget.x, -half + marginX, half - marginX);
-    this.camTarget.z = THREE.MathUtils.clamp(this.camTarget.z, -half + marginZback, half - marginZfront);
+    const loX = minX + marginX, hiX = maxX - marginX;
+    const loZ = minZ + marginZback, hiZ = maxZ - marginZfront;
+    this.camTarget.x = loX <= hiX ? THREE.MathUtils.clamp(this.camTarget.x, loX, hiX) : (minX + maxX) / 2;
+    this.camTarget.z = loZ <= hiZ ? THREE.MathUtils.clamp(this.camTarget.z, loZ, hiZ) : (minZ + maxZ) / 2;
   }
 
   private updateCamera(dt: number) {

@@ -91,21 +91,25 @@ var LABYRINTH_MAP = {
   scale: 0.8,
   tiles: 280,
   tileSize: 2,
-  humanSpawns: [{ x: -34, z: -22 }, { x: 32, z: -32 }, { x: -30, z: 34 }, { x: 34, z: 26 }],
+  // Humanos nascem todos na clareira logo acima da cripta (lado -z), livres
+  // das paredes do labirinto. Quatro pontos = quatro vagas humanas.
+  humanSpawns: [{ x: -16, z: -20 }, { x: 16, z: -20 }, { x: -16, z: -30 }, { x: 16, z: -30 }],
   crypt: { x: 0, z: 0 },
   vampireSpawnOffset: { x: 14, z: 12 },
   refugeWalls: { thickness: 5, entranceWidth: 6, height: 6 },
-  // Refúgios com tamanho padrão moderado (40..48 de projeto) e formatos
-  // variados. Cada um tem UMA entrada, onde o Muro fecha a passagem.
+  // Refúgios com câmaras de tamanhos diferentes (em células da grade). Cada um
+  // tem UMA entrada, onde o Muro fecha a passagem. `roomWidth`/`roomDepth`
+  // valem só neste mapa-labirinto. Tamanho máximo 3×3 células (48), mínimo
+  // 2×2 (32), o mesmo menor de antes; nenhum fica pequeno demais.
   refuges: [
-    { name: "Port\xE3o de Ferro", x: 139, z: 57, width: 44, depth: 40, facing: "west", style: "gate", variant: 1, entranceWidth: 6, wallThickness: 5, wallHeight: 6, approach: 18 },
-    { name: "Muralha Quebrada", x: 57, z: 139, width: 40, depth: 44, facing: "north", style: "jagged", variant: 3, entranceWidth: 6, wallThickness: 5, wallHeight: 6 },
-    { name: "Bosque Serpentino", x: -57, z: 139, width: 44, depth: 44, facing: "north", style: "bastion", variant: 0, entranceWidth: 6, wallThickness: 5, wallHeight: 6, approach: 14 },
-    { name: "Boca do Po\xE7o", x: -139, z: 57, width: 40, depth: 46, facing: "east", style: "canyon", variant: 2, entranceWidth: 6, wallThickness: 5, wallHeight: 6 },
-    { name: "Anel da Aurora", x: -139, z: -57, width: 44, depth: 44, facing: "east", style: "ring", variant: 1, entranceWidth: 6, wallThickness: 5, wallHeight: 6 },
-    { name: "Corvos Engaiolados", x: -57, z: -139, width: 40, depth: 44, facing: "south", style: "gate", variant: 2, entranceWidth: 6, wallThickness: 5, wallHeight: 6, approach: 16 },
-    { name: "Cinzas G\xEAmeas", x: 57, z: -139, width: 44, depth: 40, facing: "south", style: "jagged", variant: 0, entranceWidth: 6, wallThickness: 5, wallHeight: 6 },
-    { name: "N\xE9voa Profunda", x: 139, z: -57, width: 42, depth: 46, facing: "west", style: "ring", variant: 3, entranceWidth: 6, wallThickness: 5, wallHeight: 6 }
+    { name: "Port\xE3o de Ferro", x: 139, z: 57, width: 44, depth: 40, facing: "west", style: "gate", variant: 1, entranceWidth: 6, wallThickness: 5, wallHeight: 6, approach: 18, roomWidth: 3, roomDepth: 3 },
+    { name: "Muralha Quebrada", x: 57, z: 139, width: 40, depth: 44, facing: "north", style: "jagged", variant: 3, entranceWidth: 6, wallThickness: 5, wallHeight: 6, roomWidth: 2, roomDepth: 3 },
+    { name: "Bosque Serpentino", x: -57, z: 139, width: 44, depth: 44, facing: "north", style: "bastion", variant: 0, entranceWidth: 6, wallThickness: 5, wallHeight: 6, approach: 14, roomWidth: 3, roomDepth: 2 },
+    { name: "Boca do Po\xE7o", x: -139, z: 57, width: 40, depth: 46, facing: "east", style: "canyon", variant: 2, entranceWidth: 6, wallThickness: 5, wallHeight: 6, roomWidth: 3, roomDepth: 3 },
+    { name: "Anel da Aurora", x: -139, z: -57, width: 44, depth: 44, facing: "east", style: "ring", variant: 1, entranceWidth: 6, wallThickness: 5, wallHeight: 6, roomWidth: 2, roomDepth: 3 },
+    { name: "Corvos Engaiolados", x: -57, z: -139, width: 40, depth: 44, facing: "south", style: "gate", variant: 2, entranceWidth: 6, wallThickness: 5, wallHeight: 6, approach: 16, roomWidth: 3, roomDepth: 2 },
+    { name: "Cinzas G\xEAmeas", x: 57, z: -139, width: 44, depth: 40, facing: "south", style: "jagged", variant: 0, entranceWidth: 6, wallThickness: 5, wallHeight: 6, roomWidth: 2, roomDepth: 2 },
+    { name: "N\xE9voa Profunda", x: 139, z: -57, width: 42, depth: 46, facing: "west", style: "ring", variant: 3, entranceWidth: 6, wallThickness: 5, wallHeight: 6, roomWidth: 2, roomDepth: 2 }
   ],
   // Terra firme cobrindo todo o mundo quadrado (sem água dentro do labirinto).
   coast: {
@@ -143,7 +147,7 @@ var LABYRINTH_MAP = {
   },
   // Sem colchão de pedras: câmaras grandes espalhariam pedras até a praça.
   baseRocksScale: 0,
-  // Muito mais madeira: a floresta cobre as paredes por onde passa.
+  // Floresta densa cobrindo o mundo (menos as pedras dos refúgios/labirinto).
   resources: {
     centralWoodX: [-30, -18, 18, 30],
     centralWoodZ: [-16, -8, 0, 8, 16],
@@ -155,7 +159,7 @@ var LABYRINTH_MAP = {
       { x: -46, z: 0 },
       { x: 46, z: 0 }
     ],
-    forestNodeSpacing: 4
+    forestNodeSpacing: 2.5
   }
 };
 var MAP_PRESETS = {
@@ -309,6 +313,8 @@ var GAME_CONFIG = {
     depth: 0.62,
     panSpeed: 60,
     smoothing: 6,
+    heightSmoothing: 8,
+    // Suaviza a altura do alvo ao passar por platôs degraus
     fov: 50
   },
   admin: { defaultResourceAmount: 1e3, maxResourceAmount: 1e5 },
@@ -839,8 +845,14 @@ function buildMapModel(id, cfg) {
     entranceWidth: S(c.entranceWidth ?? cfg.refugeWalls.entranceWidth),
     wallThickness: S(c.wallThickness ?? cfg.refugeWalls.thickness),
     wallHeight: S(c.wallHeight ?? cfg.refugeWalls.height),
-    approach: S(c.approach ?? 0)
+    approach: S(c.approach ?? 0),
+    roomWidth: c.roomWidth,
+    roomDepth: c.roomDepth
   }));
+  const refugeRadius = compounds.reduce(
+    (max, c) => Math.max(max, Math.hypot(c.x, c.z) + Math.max(c.width, c.depth) / 2),
+    0
+  ) + S(6);
   const COAST = {
     ...cfg.coast,
     ru: S(cfg.coast.ru),
@@ -1033,33 +1045,40 @@ function buildMapModel(id, cfg) {
     const rooms2 = [];
     const roomCells = /* @__PURE__ */ new Set();
     const centerClear = Math.max(2, Math.ceil(S(m.centerRadius) / cell));
-    const roomHalf = 1;
+    const roomCellKeys = (i, j, rw, rd) => {
+      const out = [];
+      for (let dx = 0; dx < rw; dx++) for (let dy = 0; dy < rd; dy++) out.push(K(i + dx, j + dy));
+      return out;
+    };
     for (const c of compounds) {
       const ai0 = Math.round(c.x / cell);
       const aj0 = Math.round(c.z / cell);
+      const rw = Math.max(2, Math.min(halfN, Math.round(c.roomWidth ?? 2)));
+      const rd = Math.max(2, Math.min(halfN, Math.round(c.roomDepth ?? 2)));
       let placed = null;
-      for (let r = 0; r <= 4 && !placed; r++) {
+      for (let r = 0; r <= 5 && !placed; r++) {
         for (let da = -r; da <= r && !placed; da++) for (let db = -r; db <= r; db++) {
           if (Math.max(Math.abs(da), Math.abs(db)) !== r) continue;
           const i = ai0 + da, j = aj0 + db;
-          const cheb = Math.max(Math.abs(i), Math.abs(i + roomHalf), Math.abs(j), Math.abs(j + roomHalf));
+          let cheb = 0;
+          for (let dx = 0; dx < rw; dx++) for (let dy = 0; dy < rd; dy++) {
+            cheb = Math.max(cheb, Math.abs(i + dx), Math.abs(j + dy));
+          }
           if (cheb > halfN - 1 || cheb <= centerClear) continue;
-          const all2 = [K(i, j), K(i + 1, j), K(i, j + 1), K(i + 1, j + 1)];
-          if (all2.some((x) => roomCells.has(x))) continue;
-          for (const x of all2) roomCells.add(x);
-          placed = { ai: i, aj: j };
+          const cells = roomCellKeys(i, j, rw, rd);
+          if (cells.some((x) => roomCells.has(x))) continue;
+          for (const x of cells) roomCells.add(x);
+          placed = { ai: i, aj: j, cells };
           break;
         }
       }
       if (!placed) continue;
-      const all = [K(placed.ai, placed.aj), K(placed.ai + 1, placed.aj), K(placed.ai, placed.aj + 1), K(placed.ai + 1, placed.aj + 1)];
-      const cells = all;
       rooms2.push({
-        cells,
+        cells: placed.cells,
         minI: placed.ai,
-        maxI: placed.ai + 1,
+        maxI: placed.ai + rw - 1,
         minJ: placed.aj,
-        maxJ: placed.aj + 1,
+        maxJ: placed.aj + rd - 1,
         entrance: null,
         facing: c.facing
       });
@@ -1374,7 +1393,36 @@ function buildMapModel(id, cfg) {
     return bridges.some((b) => Math.abs(x - b.x) <= b.width / 2 && Math.abs(z - b.z) <= b.depth / 2);
   }
   const MEADOWS = cfg.meadows.map((m) => ({ ...m, x: S(m.x), z: S(m.z), rx: S(m.rx), rz: S(m.rz) }));
-  const BASE_TREES = cfg.maze ? [] : compounds.flatMap((c, ci) => {
+  const BASE_TREES = cfg.maze ? (() => {
+    const cell = S(cfg.maze.cell);
+    const out = [];
+    compounds.forEach((c, ci) => {
+      const cx = c.x - cell / 2, cz = c.z - cell / 2;
+      const horizontal = c.facing === "north" || c.facing === "south";
+      const halfF = (horizontal ? c.depth : c.width) / 2;
+      const halfT = (horizontal ? c.width : c.depth) / 2;
+      const a = FACING_ANGLE[c.facing];
+      const fx = Math.cos(a), fz = Math.sin(a);
+      const tx = -fz, tz = fx;
+      const margin = S(4);
+      const placed = [];
+      for (let k = 0; k < 3; k++) {
+        let x = cx, z = cz;
+        for (let attempt = 0; attempt < 10; attempt++) {
+          const rf = hash01(ci * 17 + k * 3 + attempt * 53 + 1, ci * 5 + k * 7 + attempt * 11 + 2);
+          const rs = hash01(ci * 11 + k * 5 + attempt * 29 + 3, ci * 13 + k * 2 + attempt * 17 + 4);
+          const fwd = -(margin + rf * Math.max(0, halfF - margin * 2));
+          const side = (rs - 0.5) * 2 * Math.max(0, halfT - margin);
+          x = cx + fx * fwd + tx * side;
+          z = cz + fz * fwd + tz * side;
+          if (placed.every((p) => Math.hypot(p.x - x, p.z - z) > S(6))) break;
+        }
+        placed.push({ x, z });
+        out.push({ kind: "wood", x, z });
+      }
+    });
+    return out;
+  })() : compounds.flatMap((c, ci) => {
     const horizontal = c.facing === "north" || c.facing === "south";
     const a = FACING_ANGLE[c.facing];
     const fx = Math.cos(a), fz = Math.sin(a);
@@ -1398,14 +1446,20 @@ function buildMapModel(id, cfg) {
   function isWaterTile(x, z) {
     return isWaterAtWorld(tileToWorld(worldToTile(x)), tileToWorld(worldToTile(z)));
   }
+  const CHAMBER_TREE_MARGIN = S(6);
   function isForestAt(x, z) {
     if (!isLandAt(x, z) || isWaterTile(x, z)) return false;
     if (isBridgeAtWorld(x, z)) return false;
     if (cfg.maze) {
       for (const b of chamberBoxes) {
-        if (x > b.minX && x < b.maxX && z > b.minZ && z < b.maxZ) return false;
+        if (x > b.minX - CHAMBER_TREE_MARGIN && x < b.maxX + CHAMBER_TREE_MARGIN && z > b.minZ - CHAMBER_TREE_MARGIN && z < b.maxZ + CHAMBER_TREE_MARGIN) return false;
       }
       if (exactTrailDistance(x, z) < S(cfg.maze.cell) * 0.28) return false;
+      const rr = Math.hypot(x, z);
+      if (rr > S(200)) {
+        const keep = rr > S(270) ? 0.12 : 0.4;
+        if (hash01(Math.round(x * 3), Math.round(z * 3)) > keep) return false;
+      }
       return !withinCryptClearance(x, z);
     }
     const trailClear = Math.max(S(5.5), 4.2);
@@ -1433,6 +1487,7 @@ function buildMapModel(id, cfg) {
         const jz = (hash01(Math.round(gz * 10), Math.round(gx * 10)) - 0.5) * step2 * 0.6;
         const x = Math.round((gx + jx) * 2) / 2, z = Math.round((gz + jz) * 2) / 2;
         if (!isForestAt(x, z)) continue;
+        if (cfg.maze && Math.hypot(x - cryptPosition.x, z - cryptPosition.z) > refugeRadius) continue;
         if ([-S(3), S(3)].some((dx) => [-S(3), S(3)].some((dz) => isWaterTile(x + dx, z + dz)))) continue;
         pts.push({ kind: "wood", x, z });
       }
@@ -1452,6 +1507,11 @@ function buildMapModel(id, cfg) {
   const RAMP_FEATHER = 2.5;
   const HILL_LIFT = 0.2;
   const BASE_RAISE = 0.13;
+  const REFUGE_LIFT = 0.45;
+  const REFUGE_PAD = S(3.4);
+  const REFUGE_EDGE = S(1.2);
+  const REFUGE_RAMP_LEN = S(9);
+  const REFUGE_RAMP_HALF = S(5);
   function terrainHeight(x, z, coast) {
     let h = BASE_H;
     h += 0.018 * Math.sin(x * 0.021 + 0.5) * Math.cos(z * 0.024 - 0.7);
@@ -1476,6 +1536,7 @@ function buildMapModel(id, cfg) {
     const bridge = new Uint8Array(n * n);
     const forest = new Float32Array(n * n);
     const FLAT_BLEND = S(6);
+    const mazeCell = cfg.maze ? S(cfg.maze.cell) : 0;
     for (let z = 0; z < n; z++) for (let x = 0; x < n; x++) {
       const wx = tileToWorld(x), wz = tileToWorld(z), i = z * n + x;
       const coast = coastDistance(wx, wz);
@@ -1491,20 +1552,50 @@ function buildMapModel(id, cfg) {
           const t = smoothstep((d - radius) / FLAT_BLEND);
           h = h * t + (BASE_H + lift) * (1 - t);
         };
-        for (const c of compounds) {
-          const r = Math.max(c.width, c.depth) / 2;
-          flatten(c.x, c.z, r, HILL_LIFT);
-          const a = FACING_ANGLE[c.facing], fx = Math.cos(a), fz = Math.sin(a);
-          const tx = -fz, tz = fx;
-          const dx = wx - c.x, dz = wz - c.z;
-          const d = Math.hypot(dx, dz);
-          const fwd = dx * fx + dz * fz, side = dx * tx + dz * tz;
-          let width = 1.2;
-          if (fwd > 0 && Math.abs(side) < RAMP_HALF && d < r * 1.4 + 14) {
-            const trailNear = 1 - smoothstep((exactTrailDistance(wx, wz) - RAMP_HALF) / RAMP_FEATHER);
-            width += trailNear * 9;
+        if (cfg.maze) {
+          for (const c of compounds) {
+            const horizontal = c.facing === "north" || c.facing === "south";
+            const halfF = (horizontal ? c.depth : c.width) / 2 + REFUGE_PAD;
+            const halfT = (horizontal ? c.width : c.depth) / 2 + REFUGE_PAD;
+            const a = FACING_ANGLE[c.facing], fx = Math.cos(a), fz = Math.sin(a);
+            const tx = -fz, tz = fx;
+            const cx0 = c.x - mazeCell / 2, cz0 = c.z - mazeCell / 2;
+            const dx = wx - cx0, dz = wz - cz0;
+            const fwd = dx * fx + dz * fz;
+            const side = dx * tx + dz * tz;
+            const outF = Math.max(0, Math.abs(fwd) - halfF);
+            const outT = Math.max(0, Math.abs(side) - halfT);
+            if (outF === 0 && outT === 0) {
+              h = BASE_H + REFUGE_LIFT;
+              continue;
+            }
+            const out = Math.hypot(outF, outT);
+            const door = compoundEntrance(c);
+            const doorSide = (door.x - cx0) * tx + (door.z - cz0) * tz;
+            const dTrail = exactTrailDistance(wx, wz);
+            const inDoorLane = fwd > 0 && Math.abs(side - doorSide) < REFUGE_RAMP_HALF && dTrail < REFUGE_RAMP_HALF;
+            const trailNear = inDoorLane ? Math.max(0, 1 - dTrail / REFUGE_RAMP_HALF) : 0;
+            const rampness = smoothstep(Math.min(1, trailNear));
+            const blend = REFUGE_EDGE + (REFUGE_RAMP_LEN - REFUGE_EDGE) * rampness;
+            const t = smoothstep(Math.min(1, out / blend));
+            h = h * t + (BASE_H + REFUGE_LIFT) * (1 - t);
           }
-          h += BASE_RAISE * smoothstep((r * 1.4 + width - d) / width);
+        } else {
+          for (const c of compounds) {
+            const r = Math.max(c.width, c.depth) / 2;
+            flatten(c.x, c.z, r, HILL_LIFT);
+            const a = FACING_ANGLE[c.facing], fx = Math.cos(a), fz = Math.sin(a);
+            const tx = -fz, tz = fx;
+            const dx = wx - c.x, dz = wz - c.z;
+            const d = Math.hypot(dx, dz);
+            const fwd = dx * fx + dz * fz, side = dx * tx + dz * tz;
+            let width = 1.2;
+            if (fwd > 0 && Math.abs(side) < RAMP_HALF && d < r * 1.4 + 14) {
+              const trailNear = 1 - smoothstep((exactTrailDistance(wx, wz) - RAMP_HALF) / RAMP_FEATHER);
+              width += trailNear * 9;
+            }
+            h += BASE_RAISE * smoothstep((r * 1.4 + width - d) / width);
+          }
         }
         for (const b of bridges) flatten(b.x, b.z, Math.max(b.width, b.depth) / 2 + S(6));
         height[i] = h;
@@ -1662,8 +1753,9 @@ var UNIT_RADIUS = INTERACTION.unitRadius;
 var SIZE = WORLD.tiles * WORLD.tileSize;
 var BUCKET_SIZE = 8;
 var BUCKET_COUNT = Math.ceil(SIZE / BUCKET_SIZE);
-var PATH_STEPS_PER_TICK = 512;
+var PATH_STEPS_PER_TICK = 2048;
 var PATH_MS_PER_TICK = 12;
+var PATH_MAX_EXPANSIONS = 8e4;
 function distanceToTarget(p, target, half = 0) {
   const dx = Math.max(0, Math.abs(p.x - target.x) - half);
   const dz = Math.max(0, Math.abs(p.z - target.z) - half);
@@ -1931,25 +2023,35 @@ var Navigation = class {
         const ddz = Math.max(0, Math.abs(pz - goal.z) - goal.half);
         return Math.max(0, Math.sqrt(ddx * ddx + ddz * ddz) - goal.range);
       };
+      const buildPath = (endId) => {
+        const path2 = [];
+        for (let id = endId; id !== start; id = parent[id]) {
+          path2.push({ x: id % SIZE - WORLD.half + 0.5, z: (id / SIZE | 0) - WORLD.half + 0.5 });
+        }
+        path2.reverse();
+        return path2;
+      };
       stamp[start] = gen;
       costs[start] = 0;
       parent[start] = -1;
       closed[start] = 0;
+      let bestId = start;
+      let bestH = heuristic(start);
+      let expansions = 0;
       push(start, heuristic(start));
       while (heap.length) {
+        if (expansions++ >= PATH_MAX_EXPANSIONS) break;
         yield;
         const current = pop();
         if (stamp[current] === gen && closed[current]) continue;
         stamp[current] = gen;
         closed[current] = 1;
-        if (heuristic(current) <= 1e-3 && walkable(current)) {
-          const path2 = [];
-          for (let id = current; id !== start; id = parent[id]) {
-            path2.push({ x: id % SIZE - WORLD.half + 0.5, z: (id / SIZE | 0) - WORLD.half + 0.5 });
-          }
-          path2.reverse();
-          return path2;
+        const h = heuristic(current);
+        if (h < bestH) {
+          bestH = h;
+          bestId = current;
         }
+        if (h <= 1e-3 && walkable(current)) return buildPath(current);
         const cx = current % SIZE, cz = current / SIZE | 0;
         const cwx = current === start ? u.x : cx - WORLD.half + 0.5;
         const cwz = current === start ? u.z : cz - WORLD.half + 0.5;
@@ -1960,7 +2062,7 @@ var Navigation = class {
           const next = z * SIZE + x;
           if (stamp[next] === gen && closed[next] || !walkable(next)) continue;
           if (dx && dz && (!walkable(cz * SIZE + x) || !walkable(z * SIZE + cx))) continue;
-          if (!this.clearSegmentXZ(u, cwx, cwz, x - WORLD.half + 0.5, z - WORLD.half + 0.5)) continue;
+          if (!this.canStand(u, cwx + dx * 0.5, cwz + dz * 0.5)) continue;
           const cost = costs[current] + (dx && dz ? Math.SQRT2 : 1);
           if (stamp[next] === gen && cost >= costs[next]) continue;
           stamp[next] = gen;
@@ -1970,7 +2072,7 @@ var Navigation = class {
           push(next, cost + heuristic(next));
         }
       }
-      return [];
+      return bestId === start ? [] : buildPath(bestId);
     } finally {
       this.releasePathBuffers(buffers);
     }
