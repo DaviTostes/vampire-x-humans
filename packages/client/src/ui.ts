@@ -2,6 +2,7 @@
 
 import {
   BUILDABLE,
+  GAME_CONFIG,
   WORLD,
   TOWER,
   VAMPIRE,
@@ -34,11 +35,10 @@ import {
   BANK_CYCLE_SECONDS,
   cryptProduction,
   CRYPT_CYCLE_SECONDS,
-  BRIDGES,
-  distanceToTrails,
   type BuildingKind,
   type BuildKind,
   type HumanAbilityId,
+  type MapPresetId,
   type SpecPrerequisite,
   type Snapshot,
   type VampireAbilityId,
@@ -52,9 +52,12 @@ import { activityLabel, resourceLabel } from './activity.js';
 import { AdminPanel } from './admin.js';
 import hudTheme from './hud-theme.css?inline';
 import { commandArt, factionCrest } from './hud-icons.js';
+import { resourceIcon } from './resource-icons.js';
+import { createLocaleSwitcher, onLocaleChange, t, tServer } from './i18n.js';
+import { createVolumeControl } from './music.js';
 import { VAMPIRE_ITEM_IDS, VAMPIRE_ITEM_INFO, VAMPIRE_SKILLS, vampireAttackSpeed, vampireEffectiveCooldown, vampireEffectiveSpeed, vampireItemBonuses, vampireItemCost, vampireItemBonus, vampireItemMaxLevel, vampireItemNextLevel, vampireShopAccess, vampireSkillMultiplier, repairerRepairRate, type VampireItemId, type VampireSkillId } from '@vampire/shared';
 
-const WORKER_ROLE_NAMES: Record<WorkerRole, string> = {
+const WORKER_ROLE_SOURCES: Record<WorkerRole, string> = {
   lumberjack: 'Lenhador', miner: 'Minerador', repairer: 'Reparador',
 };
 const WORKER_ROLES: WorkerRole[] = ['lumberjack', 'miner', 'repairer'];
@@ -62,16 +65,20 @@ const HUMAN_ABILITY_IDS: HumanAbilityId[] = ['entangle', 'fortify', 'teleport', 
 const HUMAN_ABILITY_KEYS = ['Q', 'E', 'R', 'T'];
 const VAMPIRE_ABILITY_KEYS: Record<string, string> = { revealArea: 'Q', batForm: 'E', teleportHome: 'R' };
 
-function unitDisplayName(u: { kind: string; hero?: boolean; workerRole?: WorkerRole }): string {
-  if (u.kind === 'vampire') return 'Vampiro';
-  if (u.hero === false) return u.workerRole ? WORKER_ROLE_NAMES[u.workerRole] : 'Peão';
-  return 'Humano';
+function workerRoleName(role: WorkerRole): string {
+  return t(WORKER_ROLE_SOURCES[role]);
 }
-const BUILDING_NAMES: Record<BuildingKind, string> = {
+
+function unitDisplayName(u: { kind: string; hero?: boolean; workerRole?: WorkerRole }): string {
+  if (u.kind === 'vampire') return t('Vampiro');
+  if (u.hero === false) return u.workerRole ? workerRoleName(u.workerRole) : t('Peão');
+  return t('Humano');
+}
+const BUILDING_NAME_SOURCES: Record<BuildingKind, string> = {
   keep: 'Sede da vila', bank: 'Banco', taverna: 'Taverna', wall: 'Muro', tower: 'Torre',
   goldMine: 'Mina de Ouro', market: 'Mercado', crypt: 'Cripta do Vampiro',
 };
-const BUILDING_HELP: Record<BuildingKind, string> = {
+const BUILDING_HELP_SOURCES: Record<BuildingKind, string> = {
   keep: 'Base principal da vila.',
   bank: 'Gera ouro a cada ciclo; o valor dobra a cada melhoria (1 → 2 → 4…).',
   taverna: 'Recruta Peões auxiliares para coletar e construir.',
@@ -80,6 +87,19 @@ const BUILDING_HELP: Record<BuildingKind, string> = {
   goldMine: 'Fonte de ouro: o Minerador extrai ouro dela.',
   crypt: 'Base do Vampiro. Compre itens e desbloqueie skills a qualquer momento.',
 };
+function buildingName(kind: BuildingKind): string {
+  return t(BUILDING_NAME_SOURCES[kind]);
+}
+function buildingHelp(kind: BuildingKind): string {
+  return t(BUILDING_HELP_SOURCES[kind]);
+}
+
+/** Traduz o motivo do resultado (vem do servidor em português). */
+function localizeResultReason(reason: string): string {
+  const survived = /^Os humanos sobreviveram a (\d+) noites!$/.exec(reason);
+  if (survived) return t('Os humanos sobreviveram a {n} noites!', { n: survived[1]! });
+  return tServer(reason);
+}
 // Itens vendidos na cripta (dano/vida/Attack Speed).
 
 const CSS = `
@@ -141,6 +161,9 @@ const CSS = `
   color: #f0e2c2; text-shadow: 0 2px 6px #000; }
 .vxh-modal-text { margin: 0 0 20px; font-size: 14px; line-height: 1.5; color: #c9bda1; opacity: .9; }
 .vxh-modal-actions { display: flex; gap: 12px; justify-content: center; }
+.vxh-menu-lang { display: flex; align-items: center; justify-content: center; gap: 10px; margin: 4px 0 18px; }
+.vxh-menu-lang > span { font-size: 11px; letter-spacing: 2px; text-transform: uppercase; color: #a89673; }
+.vxh-menu-lang .vxh-lang-switch button { background: #1c1f25; }
 .vxh-modal-btn { pointer-events: auto; min-width: 130px; padding: 10px 18px; border: 1px solid #08090c;
   border-radius: 4px; cursor: pointer; color: #e8d8b8;
   font: 650 14px 'Palatino Linotype','Book Antiqua',Palatino,Georgia,serif;
@@ -172,6 +195,10 @@ const CSS = `
   box-shadow: inset 0 0 0 2px var(--iron-lit), inset 0 0 0 3px #10131a, inset 0 1px 0 rgba(233,211,160,.08), 0 6px 18px #000a; }
 .vxh-topbar b { font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: .5px; text-shadow: 0 1px 2px #000; }
 .vxh-topbar .res-icon { color: var(--gold-hi); font-size: 21px; filter: drop-shadow(0 0 4px rgba(201,168,106,.35)); }
+.vxh-res-icon { display: inline-block; width: 1.15em; height: 1.15em; object-fit: contain; vertical-align: -0.2em; filter: drop-shadow(0 1px 2px #000); }
+.vxh-topbar .vxh-res-icon { width: 22px; height: 22px; vertical-align: -5px; filter: drop-shadow(0 0 4px rgba(201,168,106,.35)); }
+.vxh-topbar .res[data-blood] .vxh-res-icon { filter: drop-shadow(0 0 4px rgba(180,40,60,.45)); }
+.vxh-res-emoji { font-size: 1.1em; line-height: 1; }
 .vxh-hero { position: absolute; top: 10px; left: 14px; width: 68px; padding: 3px; cursor: pointer;
   border: 1px solid #08090c; border-radius: 4px; background: linear-gradient(160deg,#23262d,#0b0d12 70%);
   box-shadow: inset 0 0 0 2px var(--iron-lit), inset 0 0 0 3px #10131a, 0 4px 12px #000b; pointer-events: auto; }
@@ -190,8 +217,7 @@ const CSS = `
   box-shadow: 0 0 6px #000b; }
 .vxh-frame::before { left: -8px; top: -8px; } .vxh-frame::after { right: -8px; bottom: -8px; }
 .vxh-mapframe { margin-top: -14px; padding: 4px; }
-.vxh-mapframe::after { width: auto; height: auto; transform: none; right: 0; left: 0; bottom: 0;
-  content: 'VALE DA VIGÍLIA'; font: 10px Georgia,serif; letter-spacing: 3px; text-align: center; padding: 3px;
+.vxh-map-caption { display: block; font: 10px Georgia,serif; letter-spacing: 3px; text-align: center; padding: 3px;
   background: #0a0c10ee; color: var(--gold); border-top: 1px solid #10131a; text-shadow: 0 1px 1px #000; }
 .vxh-minimap { position: static; display: block; width: 100%; height: 100%; border: 1px solid #10131a; border-radius: 0; }
 .vxh-portrait { position: relative; top: auto; left: auto; width: auto; padding: 5px; gap: 3px;
@@ -311,16 +337,16 @@ export class Hud {
     this.el.className = 'vxh-hud';
     this.el.dataset.faction = this.getMyId() === VAMPIRE_PLAYER_ID ? 'vampire' : 'human';
     this.el.innerHTML = `
-      <button class="vxh-hero" title="Selecionar e centralizar seu personagem (Espaço)">${portrait(this.getMyId() === VAMPIRE_PLAYER_ID)}<div class="vxh-bar"><div style="width:100%;background:#539541"></div></div><span class="vxh-hero-crest" aria-hidden="true">${factionCrest(this.getMyId() === VAMPIRE_PLAYER_ID)}</span></button>
+      <button class="vxh-hero" title="${t('Selecionar e centralizar seu personagem (Espaço)')}">${portrait(this.getMyId() === VAMPIRE_PLAYER_ID)}<div class="vxh-bar"><div style="width:100%;background:#539541"></div></div><span class="vxh-hero-crest" aria-hidden="true">${factionCrest(this.getMyId() === VAMPIRE_PLAYER_ID)}</span></button>
       <div class="vxh-topbar">
-        <span class="res" data-wood>🪵 <b class="wood">0</b></span>
-        <span class="res" data-gold>🪙 <b class="gold">0</b></span>
-        <span class="res" data-blood style="display:none">🩸 <b class="blood">0</b></span>
-        <button class="vxh-quit" title="Sair da partida e voltar ao início">✕ Sair</button>
+        <span class="res" data-wood>${resourceIcon('wood')} <b class="wood">0</b></span>
+        <span class="res" data-gold>${resourceIcon('gold')} <b class="gold">0</b></span>
+        <span class="res" data-blood style="display:none">${resourceIcon('blood')} <b class="blood">0</b></span>
+        <button class="vxh-quit vxh-menu-btn" title="${t('Menu')}">☰ ${t('Menu')}</button>
       </div>
       <div class="vxh-clock"><span class="icon">☀️</span><span class="time">--</span></div>
       <div class="vxh-bottom">
-      <div class="vxh-frame vxh-mapframe"><div class="vxh-compass" aria-hidden="true"><span>N</span></div><canvas class="vxh-minimap" width="210" height="210"></canvas><span class="vxh-map-caption">VALE DA VIGÍLIA</span></div>
+      <div class="vxh-frame vxh-mapframe"><div class="vxh-compass" aria-hidden="true"><span>N</span></div><canvas class="vxh-minimap" width="210" height="210"></canvas><span class="vxh-map-caption"></span></div>
       <div class="vxh-portrait vxh-frame">
         <div class="vxh-portrait-art">${portrait(this.getMyId() === VAMPIRE_PLAYER_ID)}</div>
         <span class="name">—</span>
@@ -328,10 +354,10 @@ export class Hud {
         <div class="vxh-activity vxh-portrait-activity">—</div>
       </div>
       <div class="vxh-frame vxh-sheet">
-        <div class="vxh-sheet-heading">ATRIBUTOS</div>
+        <div class="vxh-sheet-heading">${t('ATRIBUTOS')}</div>
         <div class="vxh-selinfo"></div>
         <div class="vxh-abilities-block">
-          <div class="vxh-abilities-heading">HABILIDADES</div>
+          <div class="vxh-abilities-heading">${t('HABILIDADES')}</div>
           <div class="vxh-abilities-grid"></div>
         </div>
       </div>
@@ -346,18 +372,20 @@ export class Hud {
     this.quitModal = document.createElement('div');
     this.quitModal.className = 'vxh-modal';
     this.quitModal.hidden = true;
-    this.quitModal.innerHTML = `
-      <div class="vxh-modal-panel" role="dialog" aria-modal="true" aria-labelledby="vxh-quit-title">
-        <div class="vxh-modal-crest" aria-hidden="true">${factionCrest(this.getMyId() === VAMPIRE_PLAYER_ID)}</div>
-        <h2 class="vxh-modal-title" id="vxh-quit-title">Sair da partida?</h2>
-        <p class="vxh-modal-text">Suas unidades ficarão abandonadas na sala. Deseja realmente voltar ao início?</p>
-        <div class="vxh-modal-actions">
-          <button class="vxh-modal-btn" data-quit="cancel">Cancelar</button>
-          <button class="vxh-modal-btn danger" data-quit="confirm">Sair da partida</button>
-        </div>
-      </div>
-    `;
     this.el.appendChild(this.quitModal);
+    this.renderMenuModal();
+    onLocaleChange(() => {
+      if (this.mapCaptionId) {
+        const caption = this.el.querySelector('.vxh-map-caption');
+        if (caption) caption.textContent = t(GAME_CONFIG.mapPresets[this.mapCaptionId]?.name ?? '');
+      }
+      const menuBtn = this.el.querySelector<HTMLElement>('.vxh-menu-btn');
+      if (menuBtn) menuBtn.textContent = `☰ ${t('Menu')}`;
+      this.renderMenuModal();
+      // Força os painéis a se re-renderizarem no próximo snapshot.
+      this.panelHtml = '';
+      this.abilityHtml = '';
+    });
 
     this.gold = this.el.querySelector('.gold')!;
     this.wood = this.el.querySelector('.wood')!;
@@ -474,9 +502,10 @@ export class Hud {
 
     this.minimap.addEventListener('pointerdown', (e) => {
       const r = this.minimap.getBoundingClientRect();
-      const wx = ((e.clientX - r.left) / r.width - 0.5) * WORLD.half * 2;
-      const wz = ((e.clientY - r.top) / r.height - 0.5) * WORLD.half * 2;
-      this.controls.focusOn(wx, wz);
+      const view = this.minimapView;
+      const px = ((e.clientX - r.left) / r.width) * this.minimap.width;
+      const py = ((e.clientY - r.top) / r.height) * this.minimap.height;
+      this.controls.focusOn(view.minX + (px - view.offX) / view.scale, view.minZ + (py - view.offZ) / view.scale);
     });
   }
 
@@ -493,6 +522,7 @@ export class Hud {
       this.gold.textContent = String(resPlayer.gold);
       this.wood.textContent = String(resPlayer.wood);
     }
+    this.updateMapCaption(snap.mapId);
     this.el.dataset.phase = snap.phase;
     // Facção ativa (segue a seleção no teste solo) define o tema e o retrato.
     this.el.dataset.faction = isVamp ? 'vampire' : 'human';
@@ -512,7 +542,7 @@ export class Hud {
     const total = snap.phase === 'day' ? snap.daySeconds : snap.nightSeconds;
     const rem = Math.max(0, Math.ceil(snap.phaseTime));
     const icon = snap.phase === 'day' ? '☀️' : '🌙';
-    const label = `${snap.practice ? 'Teste solo · ' : ''}${snap.phase === 'day' ? 'Dia' : 'Noite'} ${snap.day}`;
+    const label = `${snap.practice ? t('Teste solo · ') : ''}${snap.phase === 'day' ? t('Dia') : t('Noite')} ${snap.day}`;
     this.clock.className = `vxh-clock ${snap.phase}`;
     this.clock.innerHTML = `<span class="icon">${icon}</span><span class="time">${label} · ${Math.floor(rem / 60)}:${String(rem % 60).padStart(2, '0')}</span>`;
 
@@ -522,29 +552,32 @@ export class Hud {
       .filter(Boolean);
     const building = snap.buildings.find(b => b.id === this.controls.selectedBuilding);
     if (building) {
-      this.selInfo.innerHTML = `<b>${BUILDING_NAMES[building.kind]} · nível ${building.level}</b>
-        <div>${building.hp}/${building.maxHp} HP${building.done ? '' : ` · Obra: ${Math.floor(building.progress * 100)}%`}${(building.fortify ?? 0) > 0 ? ` · 🛡 Fortificado (${Math.ceil(building.fortify!)}s)` : ''}</div>
-        ${building.kind === 'bank' && building.done ? `<div>Produção: ${bankProduction(building.level)} ouro / ${BANK_CYCLE_SECONDS}s</div>` : ''}
-        ${building.kind === 'crypt' && building.done ? `<div>Produção: ${cryptProduction(building.level)} sangue / ${CRYPT_CYCLE_SECONDS}s</div>` : ''}
-        ${building.kind === 'wall' && building.done ? `<div>Vida máxima: ${building.maxHp}${building.level < WALL_MAX_LEVEL ? ` · Nível ${building.level + 1}: ${wallMaxHp(building.level + 1)} HP` : ' · Nível máximo'}</div>` : ''}
-        ${building.kind === 'wall' && building.done && building.hp < building.maxHp ? `<div class="vxh-activity">Danificado — clique com o botão direito com um Humano/Peão para reparar</div>` : ''}`;
+      const level = building.level;
+      this.selInfo.innerHTML = `<b>${buildingName(building.kind)} · ${t('nível {n}', { n: level })}</b>
+        <div>${building.hp}/${building.maxHp} HP${building.done ? '' : ` · ${t('Obra: {pct}%', { pct: Math.floor(building.progress * 100) })}`}${(building.fortify ?? 0) > 0 ? ` · ${t('🛡 Fortificado ({s}s)', { s: Math.ceil(building.fortify!) })}` : ''}</div>
+        ${building.kind === 'bank' && building.done ? `<div>${resourceIcon('gold')} ${t('Produção: {amount} ouro / {s}s', { amount: bankProduction(level), s: BANK_CYCLE_SECONDS })}</div>` : ''}
+        ${building.kind === 'crypt' && building.done ? `<div>${resourceIcon('blood')} ${t('Produção: {amount} sangue / {s}s', { amount: cryptProduction(level), s: CRYPT_CYCLE_SECONDS })}</div>` : ''}
+        ${building.kind === 'wall' && building.done ? `<div>${level < WALL_MAX_LEVEL
+          ? t('Vida máxima: {hp} · Nível {next}: {nextHp} HP', { hp: building.maxHp, next: level + 1, nextHp: wallMaxHp(level + 1) })
+          : `${t('Vida máxima: {hp}', { hp: building.maxHp })} ${t('· Nível máximo')}`}</div>` : ''}
+        ${building.kind === 'wall' && building.done && building.hp < building.maxHp ? `<div class="vxh-activity">${t('Danificado — clique com o botão direito com um Humano/Peão para reparar')}</div>` : ''}`;
       if (building.recruitment) {
         const progress = 1 - building.recruitment.remaining / building.recruitment.total;
-        const recruitingName = building.recruitment.role ? WORKER_ROLE_NAMES[building.recruitment.role] : 'Peão';
-        this.selInfo.innerHTML += `<div class="vxh-activity">${building.recruitment.remaining > 0 ? `Treinando ${recruitingName} · ${Math.ceil(building.recruitment.remaining)}s` : 'Aguardando uma saída livre'}</div>
+        const recruitingName = building.recruitment.role ? workerRoleName(building.recruitment.role) : t('Peão');
+        this.selInfo.innerHTML += `<div class="vxh-activity">${building.recruitment.remaining > 0 ? t('Treinando {name} · {s}s', { name: recruitingName, s: Math.ceil(building.recruitment.remaining) }) : t('Aguardando uma saída livre')}</div>
           <div class="vxh-progress"><div style="width:${progress * 100}%"></div></div>`;
       }
       if (building.kind === 'tower') {
         const vampire = snap.units.find(u => u.kind === 'vampire' && Math.hypot(u.x - building.x, u.z - building.z) <= TOWER.range);
-        this.selInfo.innerHTML += `<div>Alcance: ${TOWER.range} · Dano: ${towerDamage(building.level)} / ${TOWER.cooldown}s</div>
-          <div class="vxh-activity">${!building.done ? 'Aguardando conclusão da obra' : vampire ? `Alvo: Vampiro — ${vampire.hp}/${vampire.maxHp} HP` : 'Sem alvo no alcance'}</div>`;
+        this.selInfo.innerHTML += `<div>${t('Alcance: {range} · Dano: {dmg} / {cd}s', { range: TOWER.range, dmg: towerDamage(level), cd: TOWER.cooldown })}</div>
+          <div class="vxh-activity">${!building.done ? t('Aguardando conclusão da obra') : vampire ? t('Alvo: Vampiro — {hp}/{max} HP', { hp: vampire.hp, max: vampire.maxHp }) : t('Sem alvo no alcance')}</div>`;
       }
       if (building.kind === 'crypt') {
         const vampire = snap.units.find(u => u.kind === 'vampire');
         if (isVamp) {
           const shopAccess = vampireShopAccess(snap.phase, vampire, building);
-          if (shopAccess) this.selInfo.innerHTML += `<div class="vxh-activity">${shopAccess}</div>`;
-          this.selInfo.innerHTML += `<div>Sangue disponível: ${snap.blood}</div>${this.inventoryMarkup(snap)}`;
+          if (shopAccess) this.selInfo.innerHTML += `<div class="vxh-activity">${tServer(shopAccess)}</div>`;
+          this.selInfo.innerHTML += `<div>${resourceIcon('blood')} ${t('Sangue disponível: {blood}', { blood: snap.blood })}</div>${this.inventoryMarkup(snap)}`;
         }
       }
     } else if (sel.length === 0) {
@@ -553,7 +586,7 @@ export class Hud {
       this.selInfo.innerHTML = sel
         .map(
           (u) =>
-            `<b>${unitDisplayName(u!)}</b><div>${u!.hp}/${u!.maxHp} HP${(u!.fortify ?? 0) > 0 ? ` · 🛡 Fortificado (${Math.ceil(u!.fortify!)}s)` : ''}</div>`,
+            `<b>${unitDisplayName(u!)}</b><div>${u!.hp}/${u!.maxHp} HP${(u!.fortify ?? 0) > 0 ? ` · ${t('🛡 Fortificado ({s}s)', { s: Math.ceil(u!.fortify!) })}` : ''}</div>`,
         )
         .join('');
       const unit = sel[0];
@@ -563,35 +596,35 @@ export class Hud {
         const speed = vampireEffectiveSpeed(snap.phase, snap.vampireItems);
         const attackSpeed = vampireAttackSpeed(snap.vampireItems);
         const cooldown = vampireEffectiveCooldown(snap.vampireItems);
-        const buff = (snap.vampireSkills?.powerStrike?.buff ?? 0) > 0 ? ` · 💥 Golpe ativo (${Math.ceil(snap.vampireSkills!.powerStrike!.buff)}s)` : '';
-        this.selInfo.innerHTML += `<div>Sangue: ${snap.blood} · Dano: ${Math.round(damage * 10) / 10}${buff}</div>
-          <div>Bônus: +${bonus.damage} dano · +${bonus.health} vida · +${bonus.attackSpeed} vel. ataque (AS ${Math.round(attackSpeed)})</div>
-          <div>Velocidade: ${Math.round(speed * 10) / 10} · ataque a cada ${Math.round(cooldown * 100) / 100}s</div>${this.inventoryMarkup(snap)}`;
+        const buff = (snap.vampireSkills?.powerStrike?.buff ?? 0) > 0 ? ` · ${t('💥 Golpe ativo ({s}s)', { s: Math.ceil(snap.vampireSkills!.powerStrike!.buff) })}` : '';
+        this.selInfo.innerHTML += `<div>${resourceIcon('blood')} ${t('Sangue: {blood} · Dano: {dmg}', { blood: snap.blood, dmg: Math.round(damage * 10) / 10 })}${buff}</div>
+          <div>${t('Bônus: +{dmg} dano · +{hp} vida · +{as} vel. ataque (AS {total})', { dmg: bonus.damage, hp: bonus.health, as: bonus.attackSpeed, total: Math.round(attackSpeed) })}</div>
+          <div>${t('Velocidade: {spd} · ataque a cada {cd}s', { spd: Math.round(speed * 10) / 10, cd: Math.round(cooldown * 100) / 100 })}</div>${this.inventoryMarkup(snap)}`;
         const st = snap.vampireStatuses;
         const parts = [
-          (st?.entangled ?? 0) > 0 ? `Enredado (${Math.ceil(st!.entangled!)}s)` : '',
-          (st?.silenced ?? 0) > 0 ? `Silenciado (${Math.ceil(st!.silenced!)}s)` : '',
-          (st?.batForm ?? 0) > 0 ? `Forma de Morcego (${Math.ceil(st!.batForm!)}s)` : '',
-          (st?.exitingBatForm ?? 0) > 0 ? 'Retornando da Forma de Morcego' : '',
-          (st?.channelingTeleport ?? 0) > 0 ? `Canalizando Teleport (${Math.ceil(st!.channelingTeleport!)}s)` : '',
+          (st?.entangled ?? 0) > 0 ? t('Enredado ({s}s)', { s: Math.ceil(st!.entangled!) }) : '',
+          (st?.silenced ?? 0) > 0 ? t('Silenciado ({s}s)', { s: Math.ceil(st!.silenced!) }) : '',
+          (st?.batForm ?? 0) > 0 ? t('Forma de Morcego ({s}s)', { s: Math.ceil(st!.batForm!) }) : '',
+          (st?.exitingBatForm ?? 0) > 0 ? t('Retornando da Forma de Morcego') : '',
+          (st?.channelingTeleport ?? 0) > 0 ? t('Canalizando Teleport ({s}s)', { s: Math.ceil(st!.channelingTeleport!) }) : '',
         ].filter(Boolean);
         if (parts.length) this.selInfo.innerHTML += `<div class="vxh-activity">${parts.join(' · ')}</div>`;
       }
       const site = snap.buildings.find(b => b.id === unit?.targetId && !b.done);
       if (site && unit?.orderType === 'build') {
         const seconds = Math.ceil((1 - site.progress) * BUILD_COSTS[site.kind as BuildKind].time / workerStats(unit).buildRate);
-        this.selInfo.innerHTML += `<div>${BUILDING_NAMES[site.kind]} · ${Math.floor(site.progress * 100)}% · ${seconds}s de trabalho</div>
+        this.selInfo.innerHTML += `<div>${t('{name} · {pct}% · {s}s de trabalho', { name: buildingName(site.kind), pct: Math.floor(site.progress * 100), s: seconds })}</div>
           <div class="vxh-progress"><div style="width:${site.progress * 100}%"></div></div>`;
       }
       const repairTarget = snap.buildings.find(b => b.id === unit?.targetId && b.done);
       if (repairTarget && unit?.orderType === 'repair') {
-        this.selInfo.innerHTML += `<div>${BUILDING_NAMES[repairTarget.kind]} · ${repairTarget.hp}/${repairTarget.maxHp} HP · Reparando…</div>
+        this.selInfo.innerHTML += `<div>${t('{name} · {hp}/{max} HP · Reparando…', { name: buildingName(repairTarget.kind), hp: repairTarget.hp, max: repairTarget.maxHp })}</div>
           <div class="vxh-progress"><div style="width:${repairTarget.hp / repairTarget.maxHp * 100}%"></div></div>`;
       }
       // Potencial de reparo do Humano/Reparador selecionado.
       if (unit?.kind === 'worker' && unit.workerRole !== 'lumberjack' && unit.workerRole !== 'miner') {
         const level = unit.workerRole === 'repairer' ? (me?.workerLevels?.repairer ?? 1) : 1;
-        this.selInfo.innerHTML += `<div>Reparo: ${repairerRepairRate(level)} HP/s${unit.workerRole === 'repairer' ? ` (nível ${level})` : ''}</div>`;
+        this.selInfo.innerHTML += `<div>${unit.workerRole === 'repairer' ? t('Reparo: {rate} HP/s (nível {n})', { rate: repairerRepairRate(level), n: level }) : t('Reparo: {rate} HP/s', { rate: repairerRepairRate(level) })}</div>`;
       }
     }
     const focus = building ?? sel[0];
@@ -606,10 +639,10 @@ export class Hud {
         ? buildingPortrait(building.kind, factionKind)
         : unitPortrait(portraitKey.slice(2) as UnitPortraitKind);
     }
-    this.el.querySelector<HTMLElement>('.vxh-portrait .name')!.textContent = building ? BUILDING_NAMES[building.kind] :
-      sel[0] ? unitDisplayName(sel[0]) : 'Selecione uma unidade';
+    this.el.querySelector<HTMLElement>('.vxh-portrait .name')!.textContent = building ? buildingName(building.kind) :
+      sel[0] ? unitDisplayName(sel[0]) : t('Selecione uma unidade');
     this.el.querySelector<HTMLElement>('.healthbar > i')!.style.width = `${focus ? Math.max(0, focus.hp / focus.maxHp * 100) : 0}%`;
-    this.el.querySelector<HTMLElement>('.healthbar > span')!.textContent = focus ? `${focus.hp} / ${focus.maxHp}` : 'Sem seleção';
+    this.el.querySelector<HTMLElement>('.healthbar > span')!.textContent = focus ? `${focus.hp} / ${focus.maxHp}` : t('Sem seleção');
     // Ação da unidade logo abaixo da vida, no painel do retrato.
     this.el.querySelector<HTMLElement>('.vxh-portrait-activity')!.textContent = sel[0] ? activityLabel(sel[0], snap) : '—';
     const hero = snap.units.find(u => u.owner === myId);
@@ -632,32 +665,32 @@ export class Hud {
     const resourceCost = (kind: 'wood' | 'gold', amount: number) => {
       const missing = Math.max(0, amount - (me?.[kind] ?? 0));
       const { icon, name } = resourceLabel(kind);
-      return `<span class="vxh-resource-cost ${missing > 0 ? 'vxh-resource-missing' : ''}" data-resource="${kind}" title="${missing > 0 ? `Faltam ${missing} de ${name}` : `${name}: suficiente`}">${amount}${icon}</span>`;
+      return `<span class="vxh-resource-cost ${missing > 0 ? 'vxh-resource-missing' : ''}" data-resource="${kind}" title="${missing > 0 ? t('Faltam {n} de {name}', { n: missing, name }) : t('{name}: suficiente', { name })}">${amount}${icon}</span>`;
     };
     const normalizeCost = (cost: { wood?: number; gold?: number } | null | undefined) => ({ wood: cost?.wood ?? 0, gold: cost?.gold ?? 0 });
     const prereqText = (prereq: SpecPrerequisite) => !prereq ? ''
-      : prereq.wallLevel !== undefined ? `Requer Muro nível ${prereq.wallLevel}`
-        : prereq.marketLevel !== undefined ? `Requer Mercado nível ${prereq.marketLevel} (A CONFIRMAR)` : '';
+      : prereq.wallLevel !== undefined ? t('Requer Muro nível {n}', { n: prereq.wallLevel })
+        : prereq.marketLevel !== undefined ? t('Requer Mercado nível {n} (A CONFIRMAR)', { n: prereq.marketLevel }) : '';
     const costMarkup = (cost: { wood: number; gold: number }) =>
       [cost.wood > 0 ? resourceCost('wood', cost.wood) : '', cost.gold > 0 ? resourceCost('gold', cost.gold) : ''].filter(Boolean).join(' ');
     const shortageText = (cost: { wood: number; gold: number }) => (['wood', 'gold'] as const)
       .filter(kind => cost[kind] > (me?.[kind] ?? 0))
-      .map(kind => `Faltam ${cost[kind] - (me?.[kind] ?? 0)} de ${resourceLabel(kind).name}`).join('; ');
+      .map(kind => t('Faltam {n} de {name}', { n: cost[kind] - (me?.[kind] ?? 0), name: resourceLabel(kind).name })).join('; ');
     const marketButtons = () => (['woodToGold', 'goldToWood'] as const).map(trade => {
       const selling = trade === 'woodToGold';
       const spend = selling ? MARKET.wood : MARKET.gold;
       const receive = selling ? MARKET.gold : MARKET.wood;
       const afford = me && (selling ? me.wood : me.gold) >= spend;
-      return `<button class="vxh-btn ${afford ? '' : 'vxh-unavailable'}" data-market="${trade}" data-market-target="${building?.id}" title="${afford ? 'Trocar recursos' : shortageText({ wood: selling ? spend : 0, gold: selling ? 0 : spend })}" ${afford ? '' : 'disabled'}>
-        ${selling ? 'Vender 🪵' : 'Comprar 🪵'}<small>${resourceCost(selling ? 'wood' : 'gold', spend)} → <span class="vxh-resource-cost">${receive}${selling ? '🪙' : '🪵'}</span></small></button>`;
+      return `<button class="vxh-btn ${afford ? '' : 'vxh-unavailable'}" data-market="${trade}" data-market-target="${building?.id}" title="${afford ? t('Trocar recursos') : shortageText({ wood: selling ? spend : 0, gold: selling ? 0 : spend })}" ${afford ? '' : 'disabled'}>
+        ${selling ? t('Vender') : t('Comprar')} ${resourceIcon('wood')}<small>${resourceCost(selling ? 'wood' : 'gold', spend)} → <span class="vxh-resource-cost">${receive}${selling ? resourceIcon('gold') : resourceIcon('wood')}</span></small></button>`;
     }).join('');
     let html = '';
     if (this.controls.inspectedUnit != null) {
-      html = '<span>Inspecionando outra unidade.<br>Selecione seu personagem para dar ordens.</span>';
+      html = `<span>${t('Inspecionando outra unidade.<br>Selecione seu personagem para dar ordens.')}</span>`;
     } else if (building) {
       if (building.owner === myId && !building.done) {
         const hasWorker = snap.units.some(u => u.owner === myId && u.kind === 'worker');
-        html = `<button class="vxh-btn" data-resume="${building.id}" ${hasWorker ? '' : 'disabled'}>🔨 Retomar obra<small>Enviar seu Humano</small></button>`;
+        html = `<button class="vxh-btn" data-resume="${building.id}" ${hasWorker ? '' : 'disabled'}>${t('🔨 Retomar obra')}<small>${t('Enviar seu Humano')}</small></button>`;
       } else if (building.owner === myId && building.kind === 'bank') {
         const max = building.level >= BUILD_MAX_LEVEL;
         const nextLevel = building.level + 1;
@@ -665,10 +698,10 @@ export class Hud {
         const prereq = bankPrerequisite(building.level);
         const prereqOk = meetsPrerequisite(snap, myId, prereq);
         const afford = !!me && me.wood >= cost.wood && me.gold >= cost.gold;
-        const reason = max ? 'Nível máximo' : !prereqOk ? prereqText(prereq) : !afford ? shortageText(cost)
-          : `Produção ${bankProduction(building.level)} → ${bankProduction(nextLevel)} ouro/ciclo`;
+        const reason = max ? t('Nível máximo') : !prereqOk ? prereqText(prereq) : !afford ? shortageText(cost)
+          : t('Produção {a} → {b} ouro/ciclo', { a: bankProduction(building.level), b: bankProduction(nextLevel) });
         html = `<button class="vxh-btn ${!max && (!prereqOk || !afford) ? 'vxh-unavailable' : ''}" title="${reason}" data-upgrade="${building.id}" ${!max && prereqOk && afford ? '' : 'disabled'}>
-          ${max ? 'Nível máximo' : `Melhorar para nível ${nextLevel}`}<small>${!max ? costMarkup(cost) : ''}</small>${!max ? `<small>${bankProduction(building.level)} → ${bankProduction(nextLevel)} ouro/ciclo</small>` : ''}</button>`;
+          ${max ? t('Nível máximo') : t('Melhorar para nível {n}', { n: nextLevel })}<small>${!max ? costMarkup(cost) : ''}</small>${!max ? `<small>${t('Produção {a} → {b} ouro/ciclo', { a: bankProduction(building.level), b: bankProduction(nextLevel) })}</small>` : ''}</button>`;
         if (!max && !prereqOk) html += `<span>${prereqText(prereq)}</span>`;
       } else if (building.owner === myId && building.kind === 'taverna') {
         const busy = !!building.recruitment;
@@ -681,10 +714,10 @@ export class Hud {
           const afford = !!me && me.wood >= cost.wood && me.gold >= cost.gold;
           const level = levels[role] ?? 1;
           const trainTime = role === 'repairer' ? repairerTrainingTime(level) : RECRUIT.time;
-          const reason = full ? `Limite de ${WORKER_ROLE_NAMES[role]} atingido (${limit})`
-            : !afford ? shortageText(cost) : `${WORKER_ROLE_NAMES[role]} — ${count}/${limit}`;
+          const reason = full ? t('Limite de {name} atingido ({n})', { name: workerRoleName(role), n: limit })
+            : !afford ? shortageText(cost) : t('{name} — {count}/{limit}', { name: workerRoleName(role), count, limit });
           html += `<button class="vxh-btn ${!busy && !full && afford ? '' : 'vxh-unavailable'}" data-recruit-role="${role}" data-recruit-target="${building.id}" title="${reason}" ${busy || full || !afford ? 'disabled' : ''}>
-            ${WORKER_ROLE_NAMES[role]}<small>${costMarkup(cost)}</small><small>${trainTime > 0 ? `${trainTime}s` : 'instantâneo'} · ${count}/${limit}</small></button>`;
+            ${workerRoleName(role)}<small>${costMarkup(cost)}</small><small>${trainTime > 0 ? `${trainTime}s` : t('instantâneo')} · ${count}/${limit}</small></button>`;
         }
         for (const role of WORKER_ROLES) {
           if (role === 'miner') continue; // Minerador sem progressão definida (A CONFIRMAR)
@@ -692,8 +725,8 @@ export class Hud {
           const max = level >= workerMaxLevel(role);
           const cost = normalizeCost(workerUpgradeCost(role, level));
           const afford = !!me && me.wood >= cost.wood && me.gold >= cost.gold;
-          html += `<button class="vxh-btn ${!max && !afford ? 'vxh-unavailable' : ''}" data-upgrade-worker="${role}" data-recruit-target="${building.id}" title="${max ? 'Nível máximo' : !afford ? shortageText(cost) : `Melhorar ${WORKER_ROLE_NAMES[role]} para nível ${level + 1}`}" ${!max && afford ? '' : 'disabled'}>
-            ${WORKER_ROLE_NAMES[role]} Nv ${level} → ${level + 1}${max ? ' (máx)' : ''}<small>${!max ? costMarkup(cost) : ''}</small></button>`;
+          html += `<button class="vxh-btn ${!max && !afford ? 'vxh-unavailable' : ''}" data-upgrade-worker="${role}" data-recruit-target="${building.id}" title="${max ? t('Nível máximo') : !afford ? shortageText(cost) : t('Melhorar {name} para nível {n}', { name: workerRoleName(role), n: level + 1 })}" ${!max && afford ? '' : 'disabled'}>
+            ${t('{name} Nv {lvl} → {next}', { name: workerRoleName(role), lvl: level, next: level + 1 })}${max ? t(' (máx)') : ''}<small>${!max ? costMarkup(cost) : ''}</small></button>`;
         }
       } else if (building.kind === 'crypt' && isVamp) {
         // A cripta é a base e vende itens e skills.
@@ -706,11 +739,11 @@ export class Hud {
           const cost = vampireItemCost(id, level);
           const max = next == null;
           const afford = cost != null && snap.blood >= cost;
-          const reason = access ?? (max ? 'Nível indefinido (A CONFIRMAR) ou máximo' : !afford ? `Faltam ${(cost ?? 0) - snap.blood} de sangue` : 'Comprar com sangue');
+          const reason = access ? tServer(access) : (max ? t('Nível indefinido (A CONFIRMAR) ou máximo') : !afford ? t('Faltam {n} de sangue', { n: (cost ?? 0) - snap.blood }) : t('Comprar com sangue'));
           const previewBonus = vampireItemBonus(id, next ?? Math.max(1, level));
           html += `<button class="vxh-btn vxh-item-button" data-vampire-item="${id}" data-crypt="${building.id}" title="${reason}" ${access || max || !afford ? 'disabled' : ''}>
-            ${commandArt(id)}${info.name}<small>${info.description}: +${previewBonus}</small>
-            ${max ? '<small class="vxh-item-equipped">✓ Máximo</small>' : `<small>Nv ${level} → ${next}</small><small class="vxh-item-price"><span class="vxh-resource-cost ${afford ? '' : 'vxh-resource-missing'}">${cost}🩸</span></small>`}</button>`;
+            ${commandArt(id)}${t(info.name)}<small>${t(info.description)}: +${previewBonus}</small>
+            ${max ? `<small class="vxh-item-equipped">${t('✓ Máximo')}</small>` : `<small>${t('Nv {a} → {b}', { a: level, b: next })}</small><small class="vxh-item-price"><span class="vxh-resource-cost ${afford ? '' : 'vxh-resource-missing'}">${cost}${resourceIcon('blood')}</span></small>`}</button>`;
         }
         // Habilidade "Golpe Sombrio" removida por enquanto.
         // Evolução da Cripta (paga com sangue).
@@ -718,52 +751,52 @@ export class Hud {
         const cryptCost = SPEC_CRYPT.upgradeCosts[cryptNext];
         const cryptMax = cryptCost == null;
         const cryptAfford = cryptCost != null && snap.blood >= cryptCost;
-        html += `<button class="vxh-btn ${!cryptMax && !cryptAfford ? 'vxh-unavailable' : ''}" title="${cryptMax ? 'Nível máximo' : !cryptAfford ? `Faltam ${cryptCost - snap.blood} de sangue` : `Produção ${cryptProduction(building.level)} → ${cryptProduction(cryptNext)} sangue / ${CRYPT_CYCLE_SECONDS}s`}" data-upgrade="${building.id}" ${!cryptMax && cryptAfford ? '' : 'disabled'}>
-          ${cryptMax ? 'Cripta no nível máximo' : `Melhorar Cripta para nível ${cryptNext}`}<small>${!cryptMax ? `${cryptCost}🩸` : ''}</small></button>`;
-        if (access) html += `<span>${access}</span>`;
+        html += `<button class="vxh-btn ${!cryptMax && !cryptAfford ? 'vxh-unavailable' : ''}" title="${cryptMax ? t('Nível máximo') : !cryptAfford ? t('Faltam {n} de sangue', { n: cryptCost - snap.blood }) : t('Produção {a} → {b} sangue / {s}s', { a: cryptProduction(building.level), b: cryptProduction(cryptNext), s: CRYPT_CYCLE_SECONDS })}" data-upgrade="${building.id}" ${!cryptMax && cryptAfford ? '' : 'disabled'}>
+          ${cryptMax ? t('Cripta no nível máximo') : t('Melhorar Cripta para nível {n}', { n: cryptNext })}<small>${!cryptMax ? `${cryptCost}${resourceIcon('blood')}` : ''}</small></button>`;
+        if (access) html += `<span>${tServer(access)}</span>`;
       } else if (building.owner === myId && building.kind === 'wall' && building.done) {
         const cost = normalizeCost(wallUpgradeCost(building.level));
         const max = building.level >= WALL_MAX_LEVEL;
         const afford = !!me && me.wood >= cost.wood && me.gold >= cost.gold;
-        const upgradeBtn = `<button class="vxh-btn ${!max && !afford ? 'vxh-unavailable' : ''}" title="${!max && !afford ? shortageText(cost) : `Aumenta a vida máxima para ${max ? building.maxHp : wallMaxHp(building.level + 1)} HP`}" data-upgrade="${building.id}" ${!max && afford ? '' : 'disabled'}>
-          ${max ? 'Nível máximo' : `Melhorar para nível ${building.level + 1}`}<small>${!max ? costMarkup(cost) : ''}</small>${!max ? `<small>${building.maxHp} → ${wallMaxHp(building.level + 1)} HP</small>` : ''}</button>`;
+        const upgradeBtn = `<button class="vxh-btn ${!max && !afford ? 'vxh-unavailable' : ''}" title="${!max && !afford ? shortageText(cost) : t('Aumenta a vida máxima para {hp} HP', { hp: max ? building.maxHp : wallMaxHp(building.level + 1) })}" data-upgrade="${building.id}" ${!max && afford ? '' : 'disabled'}>
+          ${max ? t('Nível máximo') : t('Melhorar para nível {n}', { n: building.level + 1 })}<small>${!max ? costMarkup(cost) : ''}</small>${!max ? `<small>${t('{a} → {b} HP', { a: building.maxHp, b: wallMaxHp(building.level + 1) })}</small>` : ''}</button>`;
         const damaged = building.hp < building.maxHp;
         const hasWorker = snap.units.some(u => u.owner === myId && u.kind === 'worker' && u.workerRole !== 'lumberjack' && u.workerRole !== 'miner');
         // A ordem de reparo pode ser dada com o muro cheio: a unidade fica de
         // prontidão e repara sozinha quando ele levar dano.
-        const repairLabel = damaged ? `🔨 Reparar muro<small>${building.hp}/${building.maxHp} HP</small>`
-          : `🔨 Vigiar muro<small>de prontidão · repara ao levar dano</small>`;
-        const repairBtn = `<button class="vxh-btn" data-repair="${building.id}" ${hasWorker ? '' : 'disabled'} title="${damaged ? 'Envia um Humano/Peão para reparar' : 'Deixa um Humano/Peão de prontidão para reparar automaticamente'}">${repairLabel}</button>`;
+        const repairLabel = damaged ? `${t('🔨 Reparar muro')}<small>${building.hp}/${building.maxHp} HP</small>`
+          : `${t('🔨 Vigiar muro')}<small>${t('de prontidão · repara ao levar dano')}</small>`;
+        const repairBtn = `<button class="vxh-btn" data-repair="${building.id}" ${hasWorker ? '' : 'disabled'} title="${damaged ? t('Envia um Humano/Peão para reparar') : t('Deixa um Humano/Peão de prontidão para reparar automaticamente')}">${repairLabel}</button>`;
         html = upgradeBtn + repairBtn;
       } else if (building.owner === myId && building.kind === 'market' && building.done) {
         const upgradeCost = normalizeCost(marketUpgradeCost(building.level));
         const max = building.level >= MARKET_MAX_LEVEL;
         const afford = !!me && me.wood >= upgradeCost.wood && me.gold >= upgradeCost.gold;
-        const upgradeBtn = max ? '' : `<button class="vxh-btn ${!afford ? 'vxh-unavailable' : ''}" title="${afford ? 'Aumenta o nível do Mercado' : shortageText(upgradeCost)}" data-upgrade="${building.id}" ${afford ? '' : 'disabled'}>
-          Melhorar para nível ${building.level + 1}<small>${costMarkup(upgradeCost)}</small></button>`;
+        const upgradeBtn = max ? '' : `<button class="vxh-btn ${!afford ? 'vxh-unavailable' : ''}" title="${afford ? t('Aumenta o nível do Mercado') : shortageText(upgradeCost)}" data-upgrade="${building.id}" ${afford ? '' : 'disabled'}>
+          ${t('Melhorar para nível {n}', { n: building.level + 1 })}<small>${costMarkup(upgradeCost)}</small></button>`;
         html = upgradeBtn + marketButtons();
       } else if (building.owner === myId && building.kind === 'tower' && building.done) {
         const cost = normalizeCost(towerUpgradeCost(building.level));
         const max = building.level >= TOWER_MAX_LEVEL;
         const afford = !!me && me.wood >= cost.wood && me.gold >= cost.gold;
-        html = `<button class="vxh-btn ${!max && !afford ? 'vxh-unavailable' : ''}" title="${!max && !afford ? shortageText(cost) : `Aumenta o dano para ${max ? building.level : towerDamage(building.level + 1)}`}" data-upgrade="${building.id}" ${!max && afford ? '' : 'disabled'}>
-          ${max ? 'Nível máximo' : `Melhorar para nível ${building.level + 1}`}<small>${!max ? costMarkup(cost) : ''}</small>${!max ? `<small>${towerDamage(building.level)} → ${towerDamage(building.level + 1)} dano</small>` : ''}</button>`;
+        html = `<button class="vxh-btn ${!max && !afford ? 'vxh-unavailable' : ''}" title="${!max && !afford ? shortageText(cost) : t('Aumenta o dano para {dmg}', { dmg: max ? building.level : towerDamage(building.level + 1) })}" data-upgrade="${building.id}" ${!max && afford ? '' : 'disabled'}>
+          ${max ? t('Nível máximo') : t('Melhorar para nível {n}', { n: building.level + 1 })}<small>${!max ? costMarkup(cost) : ''}</small>${!max ? `<small>${t('{a} → {b} dano', { a: towerDamage(building.level), b: towerDamage(building.level + 1) })}</small>` : ''}</button>`;
       }
       else html = '';
       // O Humano pode demolir as construções que ele mesmo criou (a Cripta é
       // neutra e não pertence a ninguém). O servidor revalida a posse.
       if (!isVamp && building.owner === myId) {
-        html += `<button class="vxh-btn vxh-danger" data-demolish="${building.id}" title="Destrói esta construção (sem reembolso)">🧨 Demolir</button>`;
+        html += `<button class="vxh-btn vxh-danger" data-demolish="${building.id}" title="${t('Destrói esta construção (sem reembolso)')}">${t('🧨 Demolir')}</button>`;
       }
     } else if (isVamp) {
       // Itens e skills só se compram/melhoram na Cripta (painel da construção).
-      html = '<span>Compre e melhore itens e skills na Cripta, de dia ou de noite.</span>';
+      html = `<span>${t('Compre e melhore itens e skills na Cripta, de dia ou de noite.')}</span>`;
     } else if (hasSel) {
       const selectedUnits = snap.units.filter(u => this.controls.selected.includes(u.id));
       // Só o Humano e o Minerador constroem; a Mina de Ouro é exclusiva do Minerador.
       const kinds = BUILDABLE.filter(k => selectedUnits.some(u => canBuildKind(u, k)));
       if (!kinds.length) {
-        html = '<span>Esta unidade não constrói.<br>Use o Humano ou um Minerador.</span>';
+        html = `<span>${t('Esta unidade não constrói.<br>Use o Humano ou um Minerador.')}</span>`;
       }
       for (const [i, kind] of kinds.entries()) {
         const c = BUILD_COSTS[kind];
@@ -772,10 +805,10 @@ export class Hud {
         const atLimit = limit !== undefined && owned >= limit;
         const afford = !!me && me.wood >= c.wood && me.gold >= c.gold && !atLimit;
         const active = this.controls.buildMode === kind;
-        const reason = atLimit ? `Limite de ${BUILDING_NAMES[kind]} atingido (${owned}/${limit})`
-          : afford ? `${BUILDING_HELP[kind]} — tecla ${i + 1}` : shortageText(c);
+        const reason = atLimit ? t('Limite de {name} atingido ({owned}/{limit})', { name: buildingName(kind), owned, limit: limit ?? 0 })
+          : afford ? `${buildingHelp(kind)} — ${t('tecla {n}', { n: i + 1 })}` : shortageText(c);
         html += `<button class="vxh-btn ${afford ? '' : 'vxh-unavailable'} ${active ? 'active' : ''}" data-build="${kind}" title="${reason}" ${afford ? '' : 'disabled'}>
-          ${buildingIcon(kind) ?? commandArt(kind)}${BUILDING_NAMES[kind]}${limit !== undefined ? `<small>${owned}/${limit}</small>` : ''}<span class="vxh-hotkey">${i + 1}</span>
+          ${buildingIcon(kind) ?? commandArt(kind)}${buildingName(kind)}${limit !== undefined ? `<small>${owned}/${limit}</small>` : ''}<span class="vxh-hotkey">${i + 1}</span>
           <small class="vxh-cost">${costMarkup(c)}</small><small>${Number((c.time / workerStats(selectedUnits.find(u => canBuildKind(u, kind)) ?? {}).buildRate).toFixed(1))}s</small></button>`;
       }
     }
@@ -838,19 +871,19 @@ export class Hud {
       const revealActive = !!reveal && reveal.remaining > 0;
       const revealUses = snap.vampireRevealUses ?? 0;
       const revealDisabled = revealActive || snap.phase !== 'night' || revealUses <= 0;
-      const revealState = revealActive ? `Ativa · ${Math.ceil(reveal!.remaining)}s`
-        : snap.phase !== 'night' ? 'Disponível apenas à noite'
-          : revealUses <= 0 ? 'Sem usos nesta noite (1 por noite)' : 'Revela uma área do mapa por 10s';
-      html += `<button class="vxh-btn ${this.controls.vampireAbilityMode === 'revealArea' ? 'active' : ''}" data-vampire-ability="revealArea" data-tip-title="Revelar Área" data-tip-body="${revealState}" ${revealDisabled ? 'disabled' : ''}>
+      const revealState = revealActive ? t('Ativa · {s}s', { s: Math.ceil(reveal!.remaining) })
+        : snap.phase !== 'night' ? t('Disponível apenas à noite')
+          : revealUses <= 0 ? t('Sem usos nesta noite (1 por noite)') : t('Revela uma área do mapa por 10s');
+      html += `<button class="vxh-btn ${this.controls.vampireAbilityMode === 'revealArea' ? 'active' : ''}" data-vampire-ability="revealArea" data-tip-title="${t('Revelar Área')}" data-tip-body="${revealState}" ${revealDisabled ? 'disabled' : ''}>
         ${commandArt('revealArea')}<span class="vxh-hotkey">${VAMPIRE_ABILITY_KEYS.revealArea}</span></button>`;
       const bat = st.batForm ?? 0;
       const exiting = st.exitingBatForm ?? 0;
-      const batState = bat > 0 ? `Ativa · ${Math.ceil(bat)}s` : exiting > 0 ? 'Saindo da forma' : 'Invulnerável e mais rápido por até 15s';
-      html += `<button class="vxh-btn ${bat > 0 ? 'active' : ''}" data-vampire-ability="batForm" data-tip-title="Forma de Morcego" data-tip-body="${batState}" ${bat > 0 || exiting > 0 ? 'disabled' : ''}>
+      const batState = bat > 0 ? t('Ativa · {s}s', { s: Math.ceil(bat) }) : exiting > 0 ? t('Saindo da forma') : t('Invulnerável e mais rápido por até 15s');
+      html += `<button class="vxh-btn ${bat > 0 ? 'active' : ''}" data-vampire-ability="batForm" data-tip-title="${t('Forma de Morcego')}" data-tip-body="${batState}" ${bat > 0 || exiting > 0 ? 'disabled' : ''}>
         ${commandArt('batForm')}<span class="vxh-hotkey">${VAMPIRE_ABILITY_KEYS.batForm}</span></button>`;
       const chan = st.channelingTeleport ?? 0;
-      const tpState = chan > 0 ? `Canalizando · ${Math.ceil(chan * 10) / 10}s` : 'Canaliza 2,8s e retorna à base';
-      html += `<button class="vxh-btn ${chan > 0 ? 'active' : ''}" data-vampire-ability="teleportHome" data-tip-title="Teleportar para a Base" data-tip-body="${tpState}" ${chan > 0 ? 'disabled' : ''}>
+      const tpState = chan > 0 ? t('Canalizando · {s}s', { s: Math.ceil(chan * 10) / 10 }) : t('Canaliza 2,8s e retorna à base');
+      html += `<button class="vxh-btn ${chan > 0 ? 'active' : ''}" data-vampire-ability="teleportHome" data-tip-title="${t('Teleportar para a Base')}" data-tip-body="${tpState}" ${chan > 0 ? 'disabled' : ''}>
         ${commandArt('teleportHome')}<span class="vxh-hotkey">${VAMPIRE_ABILITY_KEYS.teleportHome}</span></button>`;
       // Habilidade "Golpe Sombrio" removida por enquanto.
     } else {
@@ -861,10 +894,10 @@ export class Hud {
         const active = this.controls.abilityMode === id;
         const needsVampire = id === 'entangle' || id === 'silencer';
         const disabled = cd > 0 || (needsVampire && !vampireAlive);
-        const state = cd > 0 ? `Recarga · ${Math.ceil(cd)}s`
-          : needsVampire && !vampireAlive ? 'Vampiro indisponível' : ability.description;
+        const state = cd > 0 ? t('Recarga · {s}s', { s: Math.ceil(cd) })
+          : needsVampire && !vampireAlive ? t('Vampiro indisponível') : t(ability.description);
         const pct = cd > 0 ? Math.min(100, (cd / ability.cooldown) * 100) : 0;
-        html += `<button class="vxh-btn ${active ? 'active' : ''}" data-human-ability="${id}" data-tip-title="${ability.name}" data-tip-body="${state}" ${disabled ? 'disabled' : ''}>
+        html += `<button class="vxh-btn ${active ? 'active' : ''}" data-human-ability="${id}" data-tip-title="${t(ability.name)}" data-tip-body="${state}" ${disabled ? 'disabled' : ''}>
           ${commandArt(id)}<span class="vxh-hotkey">${HUMAN_ABILITY_KEYS[i]}</span>${pct > 0 ? `<span class="vxh-cd" style="height:${pct.toFixed(0)}%"></span>` : ''}</button>`;
       });
     }
@@ -878,17 +911,56 @@ export class Hud {
 
   private inventoryMarkup(snap: Snapshot): string {
     const ids = VAMPIRE_ITEM_IDS.filter(id => (snap.vampireItems?.[id] ?? 0) > 0);
-    if (!ids.length) return '<div class="vxh-inventory"><span>Sem itens equipados</span></div>';
+    if (!ids.length) return `<div class="vxh-inventory"><span>${t('Sem itens equipados')}</span></div>`;
     return `<div class="vxh-inventory">${ids.map(id => {
       const info = VAMPIRE_ITEM_INFO[id], level = snap.vampireItems![id]!;
       const bonus = vampireItemBonus(id, level);
-      return `<span title="Bônus total: +${bonus}">${info.icon} ${info.name} Nv ${level}${bonus ? ` (+${bonus})` : ''}</span>`;
+      return `<span title="${t('Bônus total: +{n}', { n: bonus })}">${info.icon} ${t(info.name)} ${t('Nv {n}', { n: level })}${bonus ? ` (+${bonus})` : ''}</span>`;
     }).join('')}</div>`;
   }
 
   private minimapTerrain: ImageData | null = null;
+  private mapCaptionId: MapPresetId | null = null;
   private minimapCameraKey = '';
   private minimapCorners: Array<{ x: number; z: number } | null> = [];
+  private minimapViewCache: { minX: number; minZ: number; scale: number; offX: number; offZ: number } | null = null;
+
+  /**
+   * Recorte do minimapa: mostra só a região jogável (refúgios, cripta, recursos,
+   * spawns e pontes), escondendo as florestas/margens inacessíveis dos cantos.
+   */
+  private get minimapView() {
+    if (this.minimapViewCache) return this.minimapViewCache;
+    const model = this.scene.model;
+    const S = 210;
+    let minX = Infinity, minZ = Infinity, maxX = -Infinity, maxZ = -Infinity;
+    const include = (x: number, z: number, pad: number) => {
+      if (!Number.isFinite(x) || !Number.isFinite(z)) return;
+      minX = Math.min(minX, x - pad); maxX = Math.max(maxX, x + pad);
+      minZ = Math.min(minZ, z - pad); maxZ = Math.max(maxZ, z + pad);
+    };
+    include(model.cryptPosition.x, model.cryptPosition.z, 40);
+    for (const p of model.humanSpawns) include(p.x, p.z, 20);
+    for (const c of model.compounds) include(c.x, c.z, Math.max(c.width, c.depth) / 2 + 8);
+    for (const b of model.bridges) include(b.x, b.z, Math.max(b.width, b.depth) / 2 + 8);
+    // Paredes e maciços delimitam a área jogável (ex.: o miolo do labirinto).
+    // Recursos ficam de fora: no labirinto as árvores cobrem o mundo todo.
+    for (const o of model.obstacles) {
+      include(o.x - o.width / 2, o.z - o.depth / 2, 0);
+      include(o.x + o.width / 2, o.z + o.depth / 2, 0);
+    }
+    if (!Number.isFinite(minX)) {
+      const half = WORLD.half;
+      this.minimapViewCache = { minX: -half, minZ: -half, scale: S / (half * 2), offX: 0, offZ: 0 };
+      return this.minimapViewCache;
+    }
+    const margin = 8;
+    minX -= margin; maxX += margin; minZ -= margin; maxZ += margin;
+    const w = maxX - minX, h = maxZ - minZ;
+    const scale = S / Math.max(w, h);
+    this.minimapViewCache = { minX, minZ, scale, offX: (S - w * scale) / 2, offZ: (S - h * scale) / 2 };
+    return this.minimapViewCache;
+  }
 
   /**
    * Detecta quedas comparando as unidades vivas do snapshot com o tick anterior.
@@ -906,8 +978,8 @@ export class Hud {
   }
 
   private reportDeath(prev: { owner: number; kind: string; hero?: boolean; x: number; z: number }) {
-    const who = prev.hero === false ? `Peão do Humano ${prev.owner + 1}` : `Humano ${prev.owner + 1}`;
-    this.pushFeed(`☠ ${who} tombou`);
+    const who = prev.hero === false ? t('Peão do Humano {n}', { n: prev.owner + 1 }) : t('Humano {n}', { n: prev.owner + 1 });
+    this.pushFeed(t('☠ {who} tombou', { who }));
     this.deathMarks.push({ x: prev.x, z: prev.z, until: performance.now() + 6000 });
     // O pulso no mundo só aparece se a morte foi vista (o aviso na lista é global).
     if (this.scene.isVisibleToPlayer(prev.owner, prev.x, prev.z)) this.scene.deathPulse(prev.x, prev.z, who);
@@ -921,6 +993,14 @@ export class Hud {
     setTimeout(() => toast.remove(), 5000);
   }
 
+  /** Mostra no HUD o nome do mapa realmente escolhido na sala. */
+  private updateMapCaption(mapId: MapPresetId) {
+    if (this.mapCaptionId === mapId) return;
+    this.mapCaptionId = mapId;
+    const caption = this.el.querySelector('.vxh-map-caption');
+    if (caption) caption.textContent = t(GAME_CONFIG.mapPresets[mapId]?.name ?? '');
+  }
+
   private renderMinimap(snap: Snapshot, myId: number) {
     const ctx = this.minimap.getContext('2d');
     if (!ctx) return;
@@ -928,17 +1008,23 @@ export class Hud {
     const map = this.scene.map;
     const n = map.tiles;
     const img = this.minimapTerrain ?? ctx.createImageData(S, S);
+    const view = this.minimapView;
     if (!this.minimapTerrain) {
       for (let py = 0; py < S; py++) {
         for (let px = 0; px < S; px++) {
-          const tx = Math.floor((px / S) * n);
-          const tz = Math.floor((py / S) * n);
+          const o = (py * S + px) * 4;
+          const wx = view.minX + ((px + 0.5) - view.offX) / view.scale;
+          const wz = view.minZ + ((py + 0.5) - view.offZ) / view.scale;
+          const tx = Math.floor((wx + WORLD.half) / WORLD.tileSize);
+          const tz = Math.floor((wz + WORLD.half) / WORLD.tileSize);
+          // Fora do recorte jogável: deixa transparente (aparece o fundo do canvas).
+          if (tx < 0 || tz < 0 || tx >= n || tz >= n) { img.data[o + 3] = 0; continue; }
           const i = tz * n + tx;
           const h = map.height[i] ?? 0;
           let r: number, g: number, b: number;
           if (map.water[i]) {
             r = 30; g = 60; b = 110;
-          } else if (distanceToTrails(tx * WORLD.tileSize - WORLD.half, tz * WORLD.tileSize - WORLD.half) < 3.5) {
+          } else if (this.scene.model.distanceToTrails(wx, wz) < 3.5) {
             r = 165; g = 141; b = 99;
           } else if ((map.forest[i] ?? 0) > 0.5) {
             r = 24; g = 48; b = 43;
@@ -947,7 +1033,6 @@ export class Hud {
           } else {
             r = 45 + h * 40; g = 80 + h * 30; b = 40;
           }
-          const o = (py * S + px) * 4;
           img.data[o] = r;
           img.data[o + 1] = g;
           img.data[o + 2] = b;
@@ -957,22 +1042,21 @@ export class Hud {
       this.minimapTerrain = img;
     }
     ctx.putImageData(img, 0, 0);
-    const W = WORLD.half * 2;
     const toMap = (x: number, z: number): [number, number] => [
-      ((x + W / 2) / W) * S,
-      ((z + W / 2) / W) * S,
+      view.offX + (x - view.minX) * view.scale,
+      view.offZ + (z - view.minZ) * view.scale,
     ];
     // Pontes: vaus fixos sobre a água.
     ctx.fillStyle = '#7a5f3e';
-    for (const b of BRIDGES) {
+    for (const b of this.scene.model.bridges) {
       const [x, z] = toMap(b.x - b.width / 2, b.z - b.depth / 2);
-      ctx.fillRect(x, z, Math.max(1, b.width / W * S), Math.max(1, b.depth / W * S));
+      ctx.fillRect(x, z, Math.max(1, b.width * view.scale), Math.max(1, b.depth * view.scale));
     }
     // Paredes permanentes e passagens dos recintos fazem parte do mapa tático.
     ctx.fillStyle = '#687166';
     for (const wall of map.obstacles) {
       const [x, z] = toMap(wall.x - wall.width / 2, wall.z - wall.depth / 2);
-      ctx.fillRect(x, z, Math.max(1, wall.width / W * S), Math.max(1, wall.depth / W * S));
+      ctx.fillRect(x, z, Math.max(1, wall.width * view.scale), Math.max(1, wall.depth * view.scale));
     }
     // nós
     for (const nd of snap.nodes) {
@@ -988,6 +1072,21 @@ export class Hud {
       ctx.fillStyle = b.owner < 0 ? '#555' : b.owner === myId ? '#6ad6ff' : '#d6b06a';
       ctx.fillRect(mx - 2, mz - 2, 5, 5);
     }
+    // Bases: refúgios humanos e cripta do vampiro (sempre visíveis, discretas).
+    ctx.save();
+    ctx.globalAlpha = 0.55;
+    ctx.strokeStyle = '#8fc7ff';
+    ctx.lineWidth = 1;
+    for (const c of this.scene.model.compounds) {
+      const [mx, mz] = toMap(c.x, c.z);
+      ctx.strokeRect(mx - 3, mz - 3, 6, 6);
+    }
+    const [cxm, czm] = toMap(this.scene.model.cryptPosition.x, this.scene.model.cryptPosition.z);
+    ctx.fillStyle = '#ff5a6a';
+    ctx.beginPath();
+    ctx.arc(cxm, czm, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
     // unidades
     for (const u of snap.units) {
       if (!this.scene.isVisibleToPlayer(u.owner, u.x, u.z)) continue;
@@ -1026,6 +1125,23 @@ export class Hud {
     }
   }
 
+  /** Conteúdo do modal de menu (idioma + sair). Reconstruído ao trocar idioma. */
+  private renderMenuModal() {
+    this.quitModal.innerHTML = `
+      <div class="vxh-modal-panel" role="dialog" aria-modal="true" aria-labelledby="vxh-quit-title">
+        <h2 class="vxh-modal-title" id="vxh-quit-title">${t('Menu')}</h2>
+        <div class="vxh-menu-lang"><span>${t('Idioma')}</span><div class="vxh-menu-lang-select"></div></div>
+        <div class="vxh-menu-lang"><span>${t('Volume da música')}</span><div class="vxh-menu-volume"></div></div>
+        <p class="vxh-modal-text">${t('Suas unidades ficarão abandonadas na sala. Deseja realmente voltar ao início?')}</p>
+        <div class="vxh-modal-actions">
+          <button class="vxh-modal-btn" data-quit="cancel">${t('Cancelar')}</button>
+          <button class="vxh-modal-btn danger" data-quit="confirm">${t('Sair da partida')}</button>
+        </div>
+      </div>`;
+    this.quitModal.querySelector('.vxh-menu-lang-select')?.appendChild(createLocaleSwitcher());
+    this.quitModal.querySelector('.vxh-menu-volume')?.appendChild(createVolumeControl());
+  }
+
   private showResult(winner: 'human' | 'vampire', reason: string, myId: number) {
     const won = (winner === 'vampire') === (myId === VAMPIRE_PLAYER_ID);
     // Guarda o código para reentrar automaticamente na sala ao voltar ao lobby.
@@ -1034,12 +1150,12 @@ export class Hud {
     div.className = 'vxh-result';
     div.innerHTML = `
       <div style="color: ${winner === 'vampire' ? '#ff5a5a' : '#6ad66a'}">
-        ${won ? 'VITÓRIA' : 'DERROTA'}
+        ${won ? t('VITÓRIA') : t('DERROTA')}
       </div>
-      <small>${reason}</small>
+      <small>${localizeResultReason(reason)}</small>
       <div class="vxh-result-actions">
-        <button class="vxh-modal-btn" data-result="lobby">Voltar para a sala</button>
-        <button class="vxh-modal-btn danger" data-result="home">Sair para o início</button>
+        <button class="vxh-modal-btn" data-result="lobby">${t('Voltar para a sala')}</button>
+        <button class="vxh-modal-btn danger" data-result="home">${t('Sair para o início')}</button>
       </div>
     `;
     div.addEventListener('click', (e) => {

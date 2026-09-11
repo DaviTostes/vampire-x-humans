@@ -9,6 +9,7 @@ O arquivo possui comentários em português para ajudar nas alterações.
 | Quero mudar… | Seção de `GAME_CONFIG` |
 |---|---|
 | Duração do dia, noite e número de noites para vencer | `match` |
+| Presets de mapa (refúgios, costa, floresta, anéis de labirinto) | `MAP_PRESETS` / `GAME_CONFIG.mapPresets` |
 | Ouro e madeira iniciais | `match.startingResources` |
 | Vida, velocidade, coleta, dano e construção do Humano | `units.human` |
 | Vida, velocidade, dano, Attack Speed (base/máx.) e intervalo do Vampiro | `units.vampire` e `spec.vampireBase` |

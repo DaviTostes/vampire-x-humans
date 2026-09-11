@@ -41,7 +41,9 @@ test('vampiro alcança e ataca humano ou peão coletando junto à árvore', () =
     state.phase = 'night';
     const human = state.units[0]!;
     const vampire = state.units.find(u => u.kind === 'vampire')!;
-    const tree = state.nodes.find(n => n.kind === 'wood' && Math.hypot(n.x, n.z) < 26)!;
+    const tree = state.nodes
+      .filter(n => n.kind === 'wood')
+      .sort((a, b) => Math.hypot(a.x, a.z) - Math.hypot(b.x, b.z))[0]!;
     Object.assign(human, { hero, x: tree.x, z: tree.z - 1.8 });
     Object.assign(vampire, { x: tree.x, z: tree.z + 6 });
     for (let i = 0; i < 6 * TICK_RATE && !human.dead; i++) {

@@ -1,8 +1,9 @@
 import type { PreloadProgress } from './assets/asset-registry.js';
+import { t } from './i18n.js';
 import './loading.css';
 
-// Dicas curtas exibidas durante o carregamento. Devem ser afirmações corretas
-// sobre as regras (ver GUIA_DO_JOGO.md); o texto é só para dar contexto à espera.
+// Dicas curtas (português-fonte; traduzidas na construção) exibidas durante o
+// carregamento. Devem ser afirmações corretas sobre as regras (ver GUIA_DO_JOGO.md).
 const DEFAULT_TIPS = [
   'O <b>Vampiro</b> fica preso ao raio da Cripta durante o dia.',
   '<b>Muros</b> bloqueiam o Vampiro, mas Humanos e Peões atravessam.',
@@ -21,18 +22,20 @@ export class LoadingScreen {
   private percent: HTMLElement;
   private count: HTMLElement;
   private tip: HTMLElement;
+  private readonly tips: readonly string[];
   private tipTimer: number | null = null;
   private tipIndex = 0;
 
-  constructor(container: HTMLElement, private tips: readonly string[] = DEFAULT_TIPS) {
+  constructor(container: HTMLElement, tips: readonly string[] = DEFAULT_TIPS) {
+    this.tips = tips.map((tip) => t(tip));
     this.el.className = 'vxh-loading';
     this.el.innerHTML = `
       <div class="vxh-loading-card">
         <div class="vxh-loading-brand">V<span>×</span>H</div>
-        <div class="vxh-loading-subtitle">Preparando o Vale da Vigília…</div>
-        <div class="vxh-loading-flavor">Carregando modelos</div>
+        <div class="vxh-loading-subtitle">${t('Preparando o Vale da Vigília…')}</div>
+        <div class="vxh-loading-flavor">${t('Carregando modelos')}</div>
         <div class="vxh-loading-track"><div class="vxh-loading-fill"></div></div>
-        <div class="vxh-loading-meta"><span class="vxh-loading-count">preparando…</span><span class="vxh-loading-percent">0%</span></div>
+        <div class="vxh-loading-meta"><span class="vxh-loading-count">${t('preparando…')}</span><span class="vxh-loading-percent">0%</span></div>
         <div class="vxh-loading-tip"></div>
       </div>`;
     container.appendChild(this.el);
@@ -49,7 +52,7 @@ export class LoadingScreen {
     const percent = Math.round(ratio * 100);
     this.fill.style.width = `${percent}%`;
     this.percent.textContent = `${percent}%`;
-    this.count.textContent = total > 0 ? `${loaded} / ${total} modelos` : 'preparando…';
+    this.count.textContent = total > 0 ? t('{loaded} / {total} modelos', { loaded, total }) : t('preparando…');
   }
 
   /** Esmaece e remove a tela. Resolve só depois da animação, para não piscar. */

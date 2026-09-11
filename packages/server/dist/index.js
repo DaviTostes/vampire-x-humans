@@ -8,6 +8,161 @@ import { WebSocketServer } from "ws";
 
 // ../../game.config.ts
 var MOVE_SPEED_SCALE = 7 / 367;
+var CLASSIC_MAP = {
+  version: 5,
+  name: "Vale da Vig\xEDlia",
+  description: "Mapa original, mais aberto e com 8 ref\xFAgios iguais.",
+  // Escala global do mundo: todas as coordenadas abaixo estão em "espaço de
+  // projeto" (mundo 480). `scale` reduz o mundo e as posições proporcionalmente.
+  // 1 = 480×480; 0.8 ≈ 384×384. Menor = mapa mais apertado e denso.
+  // Ambos os presets compartilham a escala (o mundo é global).
+  scale: 0.8,
+  // Mundo de projeto: 560 × 560 unidades (×0.8 = 448 no mundo).
+  tiles: 280,
+  tileSize: 2,
+  // Um ponto para cada vaga humana. Adicionar/remover pontos altera as vagas da sala.
+  // Com a cripta no centro, os humanos nascem em um anel em volta da praça.
+  humanSpawns: [{ x: -30, z: -30 }, { x: 30, z: -30 }, { x: -30, z: 30 }, { x: 30, z: 30 }],
+  crypt: { x: 0, z: 0 },
+  vampireSpawnOffset: { x: 12, z: 10 },
+  // As bases humanas são formadas pelo próprio ambiente: um anel orgânico de
+  // rochedos com uma única abertura. O jogador fecha a passagem com um Muro.
+  // As posições ficam num anel sobre a ilha inclinada; `facing` aponta a
+  // entrada para o centro do mapa.
+  refugeWalls: { thickness: 5, entranceWidth: 8, height: 5.5 },
+  refuges: [
+    { name: "Clareira dos Pinheiros", x: 110, z: 86, width: 64, depth: 58, facing: "west" },
+    { name: "Ref\xFAgio da Pedreira", x: 29, z: 123, width: 64, depth: 58, facing: "north" },
+    { name: "Bosque da Lua", x: -69, z: 88, width: 64, depth: 58, facing: "north" },
+    { name: "Abrigo do Poente", x: -126, z: 2, width: 58, depth: 66, facing: "east" },
+    { name: "Clareira da Aurora", x: -110, z: -86, width: 58, depth: 66, facing: "east" },
+    { name: "Ref\xFAgio dos Corvos", x: -29, z: -123, width: 64, depth: 58, facing: "south" },
+    { name: "Vale das Cinzas", x: 69, z: -88, width: 64, depth: 58, facing: "south" },
+    { name: "Bosque da N\xE9voa", x: 126, z: -2, width: 58, depth: 66, facing: "west" }
+  ],
+  // Ilha inclinada: elipse girada com costa irregular, cercada de água.
+  // `rotation` em radianos gira o eixo maior; `bays` recortam enseadas.
+  coast: {
+    ru: 225,
+    rv: 180,
+    rotation: 0.66,
+    noiseA: 0.07,
+    noiseB: 0.05,
+    bays: [{ x: -80, z: -182, r: 28 }, { x: 175, z: 130, r: 26 }]
+  },
+  // Sem lagos nem rio: a única água é o mar em volta da ilha (a costa).
+  // Todo o interior é chão transitável (sem pontes).
+  lakes: [],
+  rivers: [],
+  // Vaus extras fixos (somados aos automáticos das trilhas).
+  bridges: [],
+  // Clareiras abertas no meio da floresta, boas para construir ou emboscar.
+  meadows: [
+    { x: -40, z: -150, rx: 22, rz: 16 },
+    { x: 80, z: 152, rx: 24, rz: 16 },
+    { x: -158, z: 78, rx: 20, rz: 26 },
+    { x: 150, z: -92, rx: 22, rz: 18 }
+  ],
+  // Relevo feito de pedra: cada formação vira um conjunto de pilhas do
+  // aglomerado rochoso (visual + colisão). O terreno fica plano.
+  // `rx`/`rz` dão o tamanho da base, `height` a altura e `count` quantas pilhas.
+  rockFormations: [
+    { x: -70, z: -70, rx: 42, rz: 32, height: 7, count: 22 },
+    { x: 62, z: 58, rx: 46, rz: 36, height: 8, count: 26 },
+    { x: -18, z: 150, rx: 38, rz: 30, height: 6, count: 16 },
+    { x: 22, z: -150, rx: 38, rz: 30, height: 6, count: 16 },
+    { x: 152, z: -52, rx: 34, rz: 26, height: 5, count: 14 },
+    { x: -152, z: 60, rx: 36, rz: 28, height: 5, count: 14 },
+    { x: -108, z: -156, rx: 32, rz: 26, height: 6, count: 14 },
+    { x: 116, z: 152, rx: 34, rz: 26, height: 6, count: 14 }
+  ],
+  resources: {
+    centralWoodX: [-22, 22],
+    centralWoodZ: [-12, -6, 0, 6, 12],
+    centralGold: [{ x: -12, z: -19 }, { x: 12, z: -19 }, { x: -12, z: 19 }, { x: 12, z: 19 }],
+    forestNodeSpacing: 5.5
+    // Grade de árvores coletáveis; menor = floresta mais densa
+  }
+};
+var LABYRINTH_MAP = {
+  version: 6,
+  name: "Labirinto de D\xE9dalo",
+  description: "Labirinto procedural de corredores finos, becos e salas, com ref\xFAgios \xFAnicos.",
+  scale: 0.8,
+  tiles: 280,
+  tileSize: 2,
+  humanSpawns: [{ x: -34, z: -22 }, { x: 32, z: -32 }, { x: -30, z: 34 }, { x: 34, z: 26 }],
+  crypt: { x: 0, z: 0 },
+  vampireSpawnOffset: { x: 14, z: 12 },
+  refugeWalls: { thickness: 5, entranceWidth: 6, height: 6 },
+  // Refúgios com tamanho padrão moderado (40..48 de projeto) e formatos
+  // variados. Cada um tem UMA entrada, onde o Muro fecha a passagem.
+  refuges: [
+    { name: "Port\xE3o de Ferro", x: 139, z: 57, width: 44, depth: 40, facing: "west", style: "gate", variant: 1, entranceWidth: 6, wallThickness: 5, wallHeight: 6, approach: 18 },
+    { name: "Muralha Quebrada", x: 57, z: 139, width: 40, depth: 44, facing: "north", style: "jagged", variant: 3, entranceWidth: 6, wallThickness: 5, wallHeight: 6 },
+    { name: "Bosque Serpentino", x: -57, z: 139, width: 44, depth: 44, facing: "north", style: "bastion", variant: 0, entranceWidth: 6, wallThickness: 5, wallHeight: 6, approach: 14 },
+    { name: "Boca do Po\xE7o", x: -139, z: 57, width: 40, depth: 46, facing: "east", style: "canyon", variant: 2, entranceWidth: 6, wallThickness: 5, wallHeight: 6 },
+    { name: "Anel da Aurora", x: -139, z: -57, width: 44, depth: 44, facing: "east", style: "ring", variant: 1, entranceWidth: 6, wallThickness: 5, wallHeight: 6 },
+    { name: "Corvos Engaiolados", x: -57, z: -139, width: 40, depth: 44, facing: "south", style: "gate", variant: 2, entranceWidth: 6, wallThickness: 5, wallHeight: 6, approach: 16 },
+    { name: "Cinzas G\xEAmeas", x: 57, z: -139, width: 44, depth: 40, facing: "south", style: "jagged", variant: 0, entranceWidth: 6, wallThickness: 5, wallHeight: 6 },
+    { name: "N\xE9voa Profunda", x: 139, z: -57, width: 42, depth: 46, facing: "west", style: "ring", variant: 3, entranceWidth: 6, wallThickness: 5, wallHeight: 6 }
+  ],
+  // Terra firme cobrindo todo o mundo quadrado (sem água dentro do labirinto).
+  coast: {
+    ru: 430,
+    rv: 420,
+    rotation: 0.5,
+    noiseA: 0.04,
+    noiseB: 0.03,
+    bays: []
+  },
+  lakes: [],
+  rivers: [],
+  bridges: [],
+  // Poucas clareiras (os corredores do labirinto já abrem o terreno).
+  meadows: [
+    { x: 0, z: 180, rx: 18, rz: 14 },
+    { x: 180, z: 0, rx: 14, rz: 18 },
+    { x: 0, z: -180, rx: 18, rz: 14 },
+    { x: -180, z: 0, rx: 14, rz: 18 }
+  ],
+  rockFormations: [],
+  // Labirinto procedural: grade de corredores finos com becos e loops.
+  // O labirinto ocupa o miolo do mundo, deixando uma margem de terreno em
+  // volta: assim a câmera consegue trazer os cantos andáveis para a área
+  // visível (fora do HUD) sem mostrar o vazio.
+  maze: {
+    cell: 20,
+    thickness: 6,
+    height: 6,
+    radius: 150,
+    braid: 0.35,
+    seed: 1337,
+    centerRadius: 40,
+    entranceCorridor: 0
+  },
+  // Sem colchão de pedras: câmaras grandes espalhariam pedras até a praça.
+  baseRocksScale: 0,
+  // Muito mais madeira: a floresta cobre as paredes por onde passa.
+  resources: {
+    centralWoodX: [-30, -18, 18, 30],
+    centralWoodZ: [-16, -8, 0, 8, 16],
+    centralGold: [
+      { x: -16, z: -24 },
+      { x: 16, z: -24 },
+      { x: -16, z: 24 },
+      { x: 16, z: 24 },
+      { x: -46, z: 0 },
+      { x: 46, z: 0 }
+    ],
+    forestNodeSpacing: 4
+  }
+};
+var MAP_PRESETS = {
+  classic: CLASSIC_MAP,
+  labyrinth: LABYRINTH_MAP
+};
+var DEFAULT_MAP_ID = "classic";
 var GAME_CONFIG = {
   match: {
     // Um único dia curto (construção) e uma única noite longa (sobrevivência).
@@ -176,79 +331,10 @@ var GAME_CONFIG = {
     recruitSpawnClearance: 1.5,
     recruitSpawnExtraRadius: 5
   },
-  map: {
-    version: 5,
-    // Escala global do mundo: todas as coordenadas abaixo estão em "espaço de
-    // projeto" (mundo 480). `scale` reduz o mundo e as posições proporcionalmente.
-    // 1 = 480×480; 0.55 ≈ 264×264. Menor = mapa mais apertado e denso.
-    scale: 0.55,
-    tiles: 240,
-    tileSize: 2,
-    // Mundo de projeto: 480 × 480 unidades
-    // Um ponto para cada vaga humana. Adicionar/remover pontos altera as vagas da sala.
-    // Com a cripta no centro, os humanos nascem em um anel em volta da praça.
-    humanSpawns: [{ x: -30, z: -30 }, { x: 30, z: -30 }, { x: -30, z: 30 }, { x: 30, z: 30 }],
-    crypt: { x: 0, z: 0 },
-    vampireSpawnOffset: { x: 12, z: 10 },
-    // As bases humanas são formadas pelo próprio ambiente: um anel orgânico de
-    // rochedos com uma única abertura. O jogador fecha a passagem com um Muro.
-    // As posições ficam num anel sobre a ilha inclinada; `facing` aponta a
-    // entrada para o centro do mapa.
-    refugeWalls: { thickness: 5, entranceWidth: 8, height: 5.5 },
-    refuges: [
-      { name: "Clareira dos Pinheiros", x: 110, z: 86, width: 64, depth: 58, facing: "west" },
-      { name: "Ref\xFAgio da Pedreira", x: 29, z: 123, width: 64, depth: 58, facing: "north" },
-      { name: "Bosque da Lua", x: -69, z: 88, width: 64, depth: 58, facing: "north" },
-      { name: "Abrigo do Poente", x: -126, z: 2, width: 58, depth: 66, facing: "east" },
-      { name: "Clareira da Aurora", x: -110, z: -86, width: 58, depth: 66, facing: "east" },
-      { name: "Ref\xFAgio dos Corvos", x: -29, z: -123, width: 64, depth: 58, facing: "south" },
-      { name: "Vale das Cinzas", x: 69, z: -88, width: 64, depth: 58, facing: "south" },
-      { name: "Bosque da N\xE9voa", x: 126, z: -2, width: 58, depth: 66, facing: "west" }
-    ],
-    // Ilha inclinada: elipse girada com costa irregular, cercada de água.
-    // `rotation` em radianos gira o eixo maior; `bays` recortam enseadas.
-    coast: {
-      ru: 225,
-      rv: 180,
-      rotation: 0.66,
-      noiseA: 0.07,
-      noiseB: 0.05,
-      bays: [{ x: -80, z: -182, r: 28 }, { x: 175, z: 130, r: 26 }]
-    },
-    // Sem lagos nem rio: a única água é o mar em volta da ilha (a costa).
-    // Todo o interior é chão transitável (sem pontes).
-    lakes: [],
-    rivers: [],
-    // Vaus extras fixos (somados aos automáticos das trilhas).
-    bridges: [],
-    // Clareiras abertas no meio da floresta, boas para construir ou emboscar.
-    meadows: [
-      { x: -40, z: -150, rx: 22, rz: 16 },
-      { x: 80, z: 152, rx: 24, rz: 16 },
-      { x: -158, z: 78, rx: 20, rz: 26 },
-      { x: 150, z: -92, rx: 22, rz: 18 }
-    ],
-    // Relevo feito de pedra: cada formação vira um conjunto de pilhas do
-    // aglomerado rochoso (visual + colisão). O terreno fica plano.
-    // `rx`/`rz` dão o tamanho da base, `height` a altura e `count` quantas pilhas.
-    rockFormations: [
-      { x: -70, z: -70, rx: 42, rz: 32, height: 7, count: 22 },
-      { x: 62, z: 58, rx: 46, rz: 36, height: 8, count: 26 },
-      { x: -18, z: 150, rx: 38, rz: 30, height: 6, count: 16 },
-      { x: 22, z: -150, rx: 38, rz: 30, height: 6, count: 16 },
-      { x: 152, z: -52, rx: 34, rz: 26, height: 5, count: 14 },
-      { x: -152, z: 60, rx: 36, rz: 28, height: 5, count: 14 },
-      { x: -108, z: -156, rx: 32, rz: 26, height: 6, count: 14 },
-      { x: 116, z: 152, rx: 34, rz: 26, height: 6, count: 14 }
-    ],
-    resources: {
-      centralWoodX: [-22, 22],
-      centralWoodZ: [-12, -6, 0, 6, 12],
-      centralGold: [{ x: -12, z: -19 }, { x: 12, z: -19 }, { x: -12, z: 19 }, { x: 12, z: 19 }],
-      forestNodeSpacing: 5.5
-      // Grade de árvores coletáveis; menor = floresta mais densa
-    }
-  },
+  // Presets de mapa selecionáveis no lobby (ver MAP_PRESETS acima).
+  map: CLASSIC_MAP,
+  mapPresets: MAP_PRESETS,
+  defaultMapId: DEFAULT_MAP_ID,
   // ==========================================================================
   // ESPECIFICAÇÃO "HUMANO E VAMPIRO"
   // Tabelas da especificação de implementação. Fonte de verdade a partir das
@@ -645,49 +731,11 @@ function minerGoldRate(mineLevel) {
 }
 
 // ../shared/src/mapgen.ts
-var S = (value) => value * MAP_SCALE;
 var MAP_SEED = GAME_CONFIG.map.version;
-var HUMAN_SPAWNS = GAME_CONFIG.map.humanSpawns.map((p) => ({ x: S(p.x), z: S(p.z) }));
-var CRYPT_POSITION = { x: S(GAME_CONFIG.map.crypt.x), z: S(GAME_CONFIG.map.crypt.z) };
-var CRYPT_FOREST_CLEARANCE = S(44);
-function withinCryptClearance(x, z) {
-  return Math.hypot(x - CRYPT_POSITION.x, z - CRYPT_POSITION.z) < CRYPT_FOREST_CLEARANCE;
-}
-var COMPOUNDS = GAME_CONFIG.map.refuges.map((c) => ({
-  ...c,
-  x: Math.round(S(c.x)),
-  z: Math.round(S(c.z)),
-  width: S(c.width),
-  depth: S(c.depth)
-}));
 function hash01(x, z) {
   let h = Math.imul(x, 374761393) + Math.imul(z, 668265263) | 0;
   h = Math.imul(h ^ h >>> 13, 1274126177);
   return ((h ^ h >>> 16) >>> 0) / 4294967295;
-}
-var COAST = (() => {
-  const c = GAME_CONFIG.map.coast;
-  return { ...c, ru: S(c.ru), rv: S(c.rv), bays: c.bays.map((b) => ({ x: S(b.x), z: S(b.z), r: S(b.r) })) };
-})();
-var LAKES = GAME_CONFIG.map.lakes.map((l) => ({ x: S(l.x), z: S(l.z), rx: S(l.rx), rz: S(l.rz) }));
-var RIVERS = GAME_CONFIG.map.rivers.map((r) => ({
-  ...r,
-  width: S(r.width),
-  points: r.points.map((p) => ({ x: S(p.x), z: S(p.z) }))
-}));
-function coastDistance(x, z) {
-  const c = Math.cos(COAST.rotation), s = Math.sin(COAST.rotation);
-  const u = (x * c + z * s) / COAST.ru;
-  const v = (-x * s + z * c) / COAST.rv;
-  const d = Math.hypot(u, v);
-  const ang = Math.atan2(v, u);
-  const noise = COAST.noiseA * Math.sin(ang * 3 + 0.7) + COAST.noiseB * Math.sin(ang * 5 - 1.1) + 0.03 * Math.sin(ang * 7 + 2.3);
-  return d - noise;
-}
-function isLandAt(x, z) {
-  if (coastDistance(x, z) >= 1) return false;
-  for (const bay of COAST.bays) if (Math.hypot(x - bay.x, z - bay.z) < bay.r) return false;
-  return true;
 }
 function distanceToSegment(px, pz, ax, az, bx, bz) {
   const dx = bx - ax, dz = bz - az;
@@ -695,50 +743,9 @@ function distanceToSegment(px, pz, ax, az, bx, bz) {
   const t = len2 > 0 ? Math.max(0, Math.min(1, ((px - ax) * dx + (pz - az) * dz) / len2)) : 0;
   return Math.hypot(px - (ax + dx * t), pz - (az + dz * t));
 }
-function withinRivers(x, z) {
-  for (const river of RIVERS) {
-    const r = river.width / 2;
-    for (let i = 0; i < river.points.length - 1; i++) {
-      const a = river.points[i], b = river.points[i + 1];
-      if (distanceToSegment(x, z, a.x, a.z, b.x, b.z) < r) return true;
-    }
-  }
-  return false;
-}
-function isWaterAtWorld(x, z) {
-  if (!isLandAt(x, z)) return true;
-  if (LAKES.some((p) => ((x - p.x) / p.rx) ** 2 + ((z - p.z) / p.rz) ** 2 < 1)) return true;
-  return withinRivers(x, z);
-}
-var BASE_H = 0.24;
-var LOW_RADIUS = 34;
-var CLIFF_WIDTH = 2.6;
-var RAMP_WIDTH = 11;
-var RAMP_HALF = 7;
-var RAMP_FEATHER = 2.5;
-var HILL_LIFT = 0.2;
-var BASE_RAISE = 0.13;
-var ROCK_FORMATIONS = GAME_CONFIG.map.rockFormations.map((f) => ({ ...f, x: S(f.x), z: S(f.z), rx: S(f.rx), rz: S(f.rz) }));
 function smoothstep(t) {
   const c = Math.max(0, Math.min(1, t));
   return c * c * (3 - 2 * c);
-}
-function hillLift(x, z) {
-  const r = Math.hypot(x, z);
-  const steep = smoothstep((r - LOW_RADIUS) / CLIFF_WIDTH);
-  const gentle = smoothstep((r - LOW_RADIUS) / RAMP_WIDTH);
-  const dTrail = trailDistance(x, z);
-  const rampness = 1 - smoothstep((dTrail - RAMP_HALF) / RAMP_FEATHER);
-  return HILL_LIFT * (steep * (1 - rampness) + gentle * rampness);
-}
-function terrainHeight(x, z, coast) {
-  let h = BASE_H;
-  h += 0.018 * Math.sin(x * 0.021 + 0.5) * Math.cos(z * 0.024 - 0.7);
-  h += 0.014 * Math.sin((x * 0.9 + z * 0.6) * 0.017 + 1.3);
-  h += hillLift(x, z);
-  const shore = smoothstep((1 - coast) / 0.09);
-  h = BASE_H * 0.78 + (h - BASE_H * 0.78) * shore;
-  return Math.min(0.72, Math.max(BASE_H * 0.72, h));
 }
 var FACING_ANGLE = {
   north: -Math.PI / 2,
@@ -746,16 +753,8 @@ var FACING_ANGLE = {
   east: 0,
   west: Math.PI
 };
-function compoundWalls(c) {
-  const gap = Math.max(S(GAME_CONFIG.map.refugeWalls.entranceWidth), 3.4);
-  const facing = FACING_ANGLE[c.facing];
-  const fx = Math.cos(facing), fz = Math.sin(facing);
-  const tx = -fz, tz = fx;
-  const horizontal = c.facing === "north" || c.facing === "south";
-  const rx = (horizontal ? c.width : c.depth) / 2;
-  const rz = (horizontal ? c.depth : c.width) / 2;
-  const seed = hash01(c.x, c.z);
-  const outline = [
+var OUTLINES = [
+  [
     [0.18, 1],
     [0.48, 1.02],
     [0.84, 0.72],
@@ -769,262 +768,778 @@ function compoundWalls(c) {
     [-0.85, 0.62],
     [-0.45, 0.99],
     [-0.18, 1]
-  ];
-  const points = outline.map(([u, v], i) => {
-    if (i === 0 || i === outline.length - 1) return { x: Math.sign(u) * (gap / 2 + S(2.5)), z: rz };
-    const variation = 1 + Math.sin(i * 2.3 + seed * 10) * 0.12;
-    return { x: u * rx * variation, z: v * rz * variation };
-  });
-  const walls = [];
-  for (let i = 0; i < points.length - 1; i++) {
-    const a = points[i], b = points[i + 1];
-    const count = Math.max(2, Math.ceil(Math.hypot(b.x - a.x, b.z - a.z) / S(3)));
-    for (let j = 0; j <= count; j++) {
-      const u = j / count;
-      const x = a.x + (b.x - a.x) * u, z = a.z + (b.z - a.z) * u;
-      const back = Math.max(0, 1 - (z / rz + 1) / 2);
-      const thickness = S(GAME_CONFIG.map.refugeWalls.thickness) + back * S(9 + seed * 5);
-      const height = S(GAME_CONFIG.map.refugeWalls.height) + back * S(12) + Math.sin(i * 1.8 + u + seed * 6) * back * S(3);
-      const tangent = z > rz * 0.6 ? Math.sign(x) * Math.max(Math.abs(x), gap / 2 + thickness / 2) : x;
-      walls.push({
-        x: c.x + tx * tangent + fx * z,
-        z: c.z + tz * tangent + fz * z,
-        width: thickness,
-        depth: thickness,
-        height
+  ],
+  [
+    [0.3, 0.95],
+    [0.62, 0.82],
+    [0.88, 0.52],
+    [1, 0.05],
+    [0.92, -0.42],
+    [0.62, -0.78],
+    [0.18, -0.98],
+    [-0.3, -0.95],
+    [-0.7, -0.7],
+    [-0.95, -0.3],
+    [-1, 0.15],
+    [-0.82, 0.55],
+    [-0.45, 0.88],
+    [-0.3, 0.95]
+  ],
+  [
+    [0.22, 1],
+    [0.58, 1],
+    [0.98, 0.62],
+    [0.74, 0.3],
+    [1.1, 0.02],
+    [0.8, -0.34],
+    [1.02, -0.68],
+    [0.5, -1],
+    [0, -1.12],
+    [-0.5, -1],
+    [-0.98, -0.64],
+    [-0.74, -0.28],
+    [-1.08, 0.05],
+    [-0.78, 0.35],
+    [-1, 0.7],
+    [-0.56, 1],
+    [-0.22, 1]
+  ],
+  [
+    [0.1, 0.98],
+    [0.55, 1.08],
+    [0.95, 0.55],
+    [1.05, -0.05],
+    [0.8, -0.55],
+    [0.98, -0.92],
+    [0.35, -1.05],
+    [-0.1, -0.92],
+    [-0.62, -1.08],
+    [-1, -0.62],
+    [-0.88, -0.1],
+    [-1.12, 0.32],
+    [-0.7, 0.68],
+    [-0.5, 1],
+    [-0.12, 0.94]
+  ]
+];
+function buildMapModel(id, cfg) {
+  const S = (value) => value * cfg.scale;
+  const cryptPosition = { x: S(cfg.crypt.x), z: S(cfg.crypt.z) };
+  const humanSpawns = cfg.humanSpawns.map((p) => ({ x: S(p.x), z: S(p.z) }));
+  const vampireSpawnOffset = { x: S(cfg.vampireSpawnOffset.x), z: S(cfg.vampireSpawnOffset.z) };
+  const compounds = cfg.refuges.map((c) => ({
+    name: c.name,
+    x: Math.round(S(c.x)),
+    z: Math.round(S(c.z)),
+    width: S(c.width),
+    depth: S(c.depth),
+    facing: c.facing,
+    style: c.style ?? "horseshoe",
+    variant: c.variant ?? 0,
+    entranceWidth: S(c.entranceWidth ?? cfg.refugeWalls.entranceWidth),
+    wallThickness: S(c.wallThickness ?? cfg.refugeWalls.thickness),
+    wallHeight: S(c.wallHeight ?? cfg.refugeWalls.height),
+    approach: S(c.approach ?? 0)
+  }));
+  const COAST = {
+    ...cfg.coast,
+    ru: S(cfg.coast.ru),
+    rv: S(cfg.coast.rv),
+    bays: cfg.coast.bays.map((b) => ({ x: S(b.x), z: S(b.z), r: S(b.r) }))
+  };
+  const LAKES = cfg.lakes.map((l) => ({ x: S(l.x), z: S(l.z), rx: S(l.rx), rz: S(l.rz) }));
+  const RIVERS = cfg.rivers.map((r) => ({
+    ...r,
+    width: S(r.width),
+    points: r.points.map((p) => ({ x: S(p.x), z: S(p.z) }))
+  }));
+  function coastDistance(x, z) {
+    const c = Math.cos(COAST.rotation), s = Math.sin(COAST.rotation);
+    const u = (x * c + z * s) / COAST.ru;
+    const v = (-x * s + z * c) / COAST.rv;
+    const d = Math.hypot(u, v);
+    const ang = Math.atan2(v, u);
+    const noise = COAST.noiseA * Math.sin(ang * 3 + 0.7) + COAST.noiseB * Math.sin(ang * 5 - 1.1) + 0.03 * Math.sin(ang * 7 + 2.3);
+    return d - noise;
+  }
+  function isLandAt(x, z) {
+    if (coastDistance(x, z) >= 1) return false;
+    for (const bay of COAST.bays) if (Math.hypot(x - bay.x, z - bay.z) < bay.r) return false;
+    return true;
+  }
+  function withinRivers(x, z) {
+    for (const river of RIVERS) {
+      const r = river.width / 2;
+      for (let i = 0; i < river.points.length - 1; i++) {
+        const a = river.points[i], b = river.points[i + 1];
+        if (distanceToSegment(x, z, a.x, a.z, b.x, b.z) < r) return true;
+      }
+    }
+    return false;
+  }
+  function isWaterAtWorld(x, z) {
+    if (!isLandAt(x, z)) return true;
+    if (LAKES.some((p) => ((x - p.x) / p.rx) ** 2 + ((z - p.z) / p.rz) ** 2 < 1)) return true;
+    return withinRivers(x, z);
+  }
+  function compoundEntrance(c) {
+    if (c.door) return c.door;
+    return {
+      x: c.x + (c.facing === "east" ? c.width / 2 : c.facing === "west" ? -c.width / 2 : 0),
+      z: c.z + (c.facing === "south" ? c.depth / 2 : c.facing === "north" ? -c.depth / 2 : 0)
+    };
+  }
+  function compoundWalls(c) {
+    const facing = FACING_ANGLE[c.facing];
+    const fx = Math.cos(facing), fz = Math.sin(facing);
+    const tx = -fz, tz = fx;
+    const horizontal = c.facing === "north" || c.facing === "south";
+    const seed = hash01(c.x, c.z);
+    const outline = OUTLINES[(c.variant % OUTLINES.length + OUTLINES.length) % OUTLINES.length];
+    const walls = [];
+    const unit = INTERACTION.unitRadius;
+    const openX = c.wallThickness / 2 + BUILDING_SIZE.wall / 4 + unit * 2;
+    const addRing = (ringScale, rot) => {
+      const rx = (horizontal ? c.width : c.depth) / 2 * ringScale;
+      const rz = (horizontal ? c.depth : c.width) / 2 * ringScale;
+      const cr = Math.cos(rot), sr = Math.sin(rot);
+      const rotate = (px, pz) => [px * cr - pz * sr, px * sr + pz * cr];
+      const points = outline.map(([u, v], i) => {
+        if (i === 0 || i === outline.length - 1) return rotate(Math.sign(u) * openX, rz);
+        const variation = 1 + Math.sin(i * 2.3 + seed * 10) * 0.12;
+        return rotate(u * rx * variation, v * rz * variation);
+      });
+      for (let i = 0; i < points.length - 1; i++) {
+        const a = points[i], b = points[i + 1];
+        const count = Math.max(2, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / S(3)));
+        for (let j = 0; j <= count; j++) {
+          const t = j / count;
+          const lx = a[0] + (b[0] - a[0]) * t, lz = a[1] + (b[1] - a[1]) * t;
+          const back = Math.max(0, 1 - (lz / rz + 1) / 2);
+          const thickness = c.wallThickness + back * S(9 + seed * 5);
+          const height = c.wallHeight + back * S(12) + Math.sin(i * 1.8 + t + seed * 6) * back * S(3);
+          const tangent = lz > rz * 0.6 ? Math.sign(lx) * Math.max(Math.abs(lx), openX) : lx;
+          walls.push({
+            x: c.x + tx * tangent + fx * lz,
+            z: c.z + tz * tangent + fz * lz,
+            width: thickness,
+            depth: thickness,
+            height
+          });
+        }
+      }
+    };
+    addRing(1, 0);
+    const halfZ = (horizontal ? c.depth : c.width) / 2;
+    if (c.approach > 0) {
+      const steps = Math.max(2, Math.ceil(c.approach / S(3)));
+      for (const side of [-1, 1]) {
+        for (let j = 0; j <= steps; j++) {
+          const lz = halfZ + c.approach * (j / steps);
+          const lx = side * openX;
+          walls.push({
+            x: c.x + tx * lx + fx * lz,
+            z: c.z + tz * lx + fz * lz,
+            width: c.wallThickness,
+            depth: c.wallThickness,
+            height: c.wallHeight
+          });
+        }
+      }
+    }
+    return walls;
+  }
+  const NATURAL_BLOCKERS = cfg.maze ? [] : compounds.flatMap(compoundWalls);
+  const MAZE_RINGS = (cfg.mazeRings ?? []).map((r) => ({
+    radius: S(r.radius),
+    gapAngle: r.gapAngle,
+    gapWidth: S(r.gapWidth),
+    thickness: S(r.thickness ?? 6),
+    height: S(r.height ?? 6),
+    jitter: S(r.jitter ?? 0)
+  }));
+  function mazeRingWalls() {
+    const out = [];
+    for (const [ri, ring] of MAZE_RINGS.entries()) {
+      const gapAngle = ring.gapWidth / ring.radius;
+      const steps = Math.max(16, Math.ceil(Math.PI * 2 * ring.radius / S(4)));
+      for (let i = 0; i < steps; i++) {
+        const a = i / steps * Math.PI * 2;
+        const da = Math.abs((a - ring.gapAngle + Math.PI * 3) % (Math.PI * 2) - Math.PI);
+        if (da < gapAngle / 2) continue;
+        const rr = ring.radius + (ring.jitter ? (hash01(i, ri * 31 + 7) - 0.5) * 2 * ring.jitter : 0);
+        out.push({ x: Math.cos(a) * rr, z: Math.sin(a) * rr, width: ring.thickness, depth: ring.thickness, height: ring.height });
+      }
+    }
+    return out;
+  }
+  if (MAZE_RINGS.length) NATURAL_BLOCKERS.push(...mazeRingWalls());
+  const TAU = Math.PI * 2;
+  function nearMazeRing(x, z, margin) {
+    if (!MAZE_RINGS.length) return false;
+    const d = Math.hypot(x, z);
+    return MAZE_RINGS.some((r) => Math.abs(d - r.radius) < r.thickness / 2 + margin);
+  }
+  function blocksMazeGap(x, z, size) {
+    const d = Math.hypot(x, z);
+    for (const r of MAZE_RINGS) {
+      const band = r.thickness / 2 + size + 2;
+      if (Math.abs(d - r.radius) > band) continue;
+      const ang = Math.atan2(z, x);
+      const da = Math.abs((ang - r.gapAngle + Math.PI * 3) % TAU - Math.PI);
+      if (da < r.gapWidth / r.radius / 2 + (size + r.thickness) / Math.max(1, d)) return true;
+    }
+    return false;
+  }
+  function nearMountain(x, z, margin) {
+    if (!compounds.some((c) => Math.abs(x - c.x) < c.width + margin && Math.abs(z - c.z) < c.depth + margin)) return false;
+    return NATURAL_BLOCKERS.some((o) => Math.abs(x - o.x) < o.width / 2 + margin && Math.abs(z - o.z) < o.depth / 2 + margin);
+  }
+  function sampleTrail(door, bend, out) {
+    const len = Math.hypot(door.x, door.z) || 1;
+    const nx = -door.z / len, nz = door.x / len;
+    const cx = door.x * 0.5 + nx * bend;
+    const cz = door.z * 0.5 + nz * bend;
+    const points = [];
+    const N = Math.ceil(len / 1.5);
+    for (let i = 0; i <= N; i++) {
+      const t = i / N, mt = 1 - t;
+      points.push({
+        x: 3 * mt * mt * t * cx + 3 * mt * t * t * (door.x + out.x * S(18)) + t * t * t * door.x,
+        z: 3 * mt * mt * t * cz + 3 * mt * t * t * (door.z + out.z * S(18)) + t * t * t * door.z
       });
     }
+    return points;
   }
-  return walls;
-}
-var NATURAL_BLOCKERS = COMPOUNDS.flatMap(compoundWalls);
-function nearMountain(x, z, margin) {
-  if (!COMPOUNDS.some((c) => Math.abs(x - c.x) < c.width + margin && Math.abs(z - c.z) < c.depth + margin)) return false;
-  return NATURAL_BLOCKERS.some((o) => Math.abs(x - o.x) < o.width / 2 + margin && Math.abs(z - o.z) < o.depth / 2 + margin);
-}
-function compoundEntrance(c) {
-  return {
-    x: c.x + (c.facing === "east" ? c.width / 2 : c.facing === "west" ? -c.width / 2 : 0),
-    z: c.z + (c.facing === "south" ? c.depth / 2 : c.facing === "north" ? -c.depth / 2 : 0)
-  };
-}
-function sampleTrail(door, bend, out) {
-  const len = Math.hypot(door.x, door.z) || 1;
-  const nx = -door.z / len, nz = door.x / len;
-  const cx = door.x * 0.5 + nx * bend;
-  const cz = door.z * 0.5 + nz * bend;
-  const points = [];
-  const N = Math.ceil(len / 1.5);
-  for (let i = 0; i <= N; i++) {
-    const t = i / N, mt = 1 - t;
-    points.push({
-      x: 3 * mt * mt * t * cx + 3 * mt * t * t * (door.x + out.x * S(18)) + t * t * t * door.x,
-      z: 3 * mt * mt * t * cz + 3 * mt * t * t * (door.z + out.z * S(18)) + t * t * t * door.z
-    });
-  }
-  return points;
-}
-var TRAILS = COMPOUNDS.map((c, i) => {
-  const door = compoundEntrance(c);
-  const bend = (i % 3 - 1) * 0.14 * Math.hypot(door.x, door.z);
-  const angle = FACING_ANGLE[c.facing];
-  return sampleTrail(door, bend, { x: Math.cos(angle), z: Math.sin(angle) });
-});
-var TRAIL_CELL = 4;
-var TRAIL_N = Math.ceil(WORLD.half * 2 / TRAIL_CELL);
-var TRAIL_MASK = new Uint8Array(TRAIL_N * TRAIL_N);
-for (const trail of TRAILS) {
-  for (let i = 0; i < trail.length - 1; i++) {
-    const a = trail[i], b = trail[i + 1];
-    const steps = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.z - a.z) / 2));
-    for (let s = 0; s <= steps; s++) {
-      const x = a.x + (b.x - a.x) * s / steps, z = a.z + (b.z - a.z) * s / steps;
-      const cx = Math.floor((x + WORLD.half) / TRAIL_CELL), cz = Math.floor((z + WORLD.half) / TRAIL_CELL);
-      for (let dz = -2; dz <= 2; dz++) for (let dx = -2; dx <= 2; dx++) {
-        const nx = cx + dx, nz = cz + dz;
-        if (nx >= 0 && nz >= 0 && nx < TRAIL_N && nz < TRAIL_N) TRAIL_MASK[nz * TRAIL_N + nx] = 1;
+  const trails = [];
+  const chamberBoxes = [];
+  function buildMaze() {
+    const m = cfg.maze;
+    const cell = S(m.cell);
+    const wallT = S(m.thickness);
+    const wallH = S(m.height);
+    const halfN = Math.max(3, Math.floor(S(m.radius) / cell + 0.5));
+    const inRegion = (i, j) => Math.abs(i) <= halfN && Math.abs(j) <= halfN;
+    const K = (i, j) => (i + 500) * 1e3 + (j + 500);
+    const Ki = (c) => Math.floor(c / 1e3) - 500;
+    const Kj = (c) => c % 1e3 - 500;
+    let rng = m.seed >>> 0 || 1;
+    const rnd = () => {
+      rng = Math.imul(rng, 1664525) + 1013904223 >>> 0;
+      return rng / 4294967296;
+    };
+    const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    const openKey = (a, b) => a < b ? a * 1e7 + b : b * 1e7 + a;
+    const rooms2 = [];
+    const roomCells = /* @__PURE__ */ new Set();
+    const centerClear = Math.max(2, Math.ceil(S(m.centerRadius) / cell));
+    const roomHalf = 1;
+    for (const c of compounds) {
+      const ai0 = Math.round(c.x / cell);
+      const aj0 = Math.round(c.z / cell);
+      let placed = null;
+      for (let r = 0; r <= 4 && !placed; r++) {
+        for (let da = -r; da <= r && !placed; da++) for (let db = -r; db <= r; db++) {
+          if (Math.max(Math.abs(da), Math.abs(db)) !== r) continue;
+          const i = ai0 + da, j = aj0 + db;
+          const cheb = Math.max(Math.abs(i), Math.abs(i + roomHalf), Math.abs(j), Math.abs(j + roomHalf));
+          if (cheb > halfN - 1 || cheb <= centerClear) continue;
+          const all2 = [K(i, j), K(i + 1, j), K(i, j + 1), K(i + 1, j + 1)];
+          if (all2.some((x) => roomCells.has(x))) continue;
+          for (const x of all2) roomCells.add(x);
+          placed = { ai: i, aj: j };
+          break;
+        }
       }
+      if (!placed) continue;
+      const all = [K(placed.ai, placed.aj), K(placed.ai + 1, placed.aj), K(placed.ai, placed.aj + 1), K(placed.ai + 1, placed.aj + 1)];
+      const cells = all;
+      rooms2.push({
+        cells,
+        minI: placed.ai,
+        maxI: placed.ai + 1,
+        minJ: placed.aj,
+        maxJ: placed.aj + 1,
+        entrance: null,
+        facing: c.facing
+      });
     }
-  }
-}
-function distanceToTrails(x, z) {
-  const cx = Math.floor((x + WORLD.half) / TRAIL_CELL), cz = Math.floor((z + WORLD.half) / TRAIL_CELL);
-  if (cx < 0 || cz < 0 || cx >= TRAIL_N || cz >= TRAIL_N || !TRAIL_MASK[cz * TRAIL_N + cx]) return Infinity;
-  let best = Infinity;
-  for (const trail of TRAILS) {
-    for (let i = 0; i < trail.length - 1; i++) {
-      const a = trail[i], b = trail[i + 1];
-      const d = distanceToSegment(x, z, a.x, a.z, b.x, b.z);
-      if (d < best) best = d;
+    const visited = /* @__PURE__ */ new Set();
+    const open = /* @__PURE__ */ new Set();
+    const start = K(0, 0);
+    visited.add(start);
+    const stack = [[0, 0]];
+    while (stack.length) {
+      const [i, j] = stack[stack.length - 1];
+      const nb = [];
+      for (const [di, dj] of dirs) {
+        const ni2 = i + di, nj2 = j + dj;
+        if (!inRegion(ni2, nj2) || roomCells.has(K(ni2, nj2)) || visited.has(K(ni2, nj2))) continue;
+        nb.push([ni2, nj2]);
+      }
+      if (!nb.length) {
+        stack.pop();
+        continue;
+      }
+      const [ni, nj] = nb[Math.floor(rnd() * nb.length)];
+      visited.add(K(ni, nj));
+      open.add(openKey(K(i, j), K(ni, nj)));
+      stack.push([ni, nj]);
     }
-  }
-  return best;
-}
-function trailDistance(x, z) {
-  let best = Infinity;
-  for (const trail of TRAILS) {
-    for (let i = 0; i < trail.length - 1; i++) {
-      const a = trail[i], b = trail[i + 1];
-      const d = distanceToSegment(x, z, a.x, a.z, b.x, b.z);
-      if (d < best) best = d;
+    const degree = /* @__PURE__ */ new Map();
+    for (const e of open) {
+      const a = Math.floor(e / 1e7), b = e % 1e7;
+      degree.set(a, (degree.get(a) ?? 0) + 1);
+      degree.set(b, (degree.get(b) ?? 0) + 1);
     }
-  }
-  return best;
-}
-var ROCK_OBSTACLES = ROCK_FORMATIONS.flatMap((f, fi) => {
-  const out = [];
-  for (let i = 0; i < f.count; i++) {
-    const a = i * 2.399963 + fi * 1.13;
-    const dist2 = i === 0 ? 0 : 0.22 + 0.6 * hash01(i * 7 + fi, fi * 3 + i);
-    const px = f.x + Math.cos(a) * f.rx * dist2;
-    const pz = f.z + Math.sin(a) * f.rz * dist2;
-    const center = 1 - Math.min(1, dist2);
-    const size = f.rx / 3.4 * (0.55 + center * 0.9) * (0.8 + hash01(i + 5, fi) * 0.5);
-    const depth = size * (0.82 + hash01(i + 9, fi) * 0.36);
-    const height = f.height * (0.5 + center * 0.7) * (0.8 + hash01(i + 11, fi) * 0.45);
-    if (COMPOUNDS.some((c) => Math.abs(px - c.x) < c.width / 2 + size / 2 + 2 && Math.abs(pz - c.z) < c.depth / 2 + size / 2 + 2)) continue;
-    if (Math.hypot(px - CRYPT_POSITION.x, pz - CRYPT_POSITION.z) < S(26)) continue;
-    if (Math.hypot(px, pz) < S(18)) continue;
-    if (trailDistance(px, pz) < Math.max(size, depth) / 2 + 2) continue;
-    out.push({ x: px, z: pz, width: size, depth, height });
-  }
-  return out;
-});
-var BASE_ROCKS = COMPOUNDS.flatMap((c, ci) => {
-  const out = [];
-  const entrance = FACING_ANGLE[c.facing];
-  const r = Math.max(c.width, c.depth) / 2;
-  const N = 12;
-  for (let i = 0; i < N; i++) {
-    const ang = i * (Math.PI * 2 / N) + hash01(ci * 5 + i, ci * 11) * 0.5;
-    const diff = Math.abs((ang - entrance + Math.PI * 3) % (Math.PI * 2) - Math.PI);
-    if (diff < 0.9) continue;
-    const rad = r * (1.5 + hash01(i + 3, ci) * 0.4);
-    const x = c.x + Math.cos(ang) * rad;
-    const z = c.z + Math.sin(ang) * rad;
-    const size = 2.5 + hash01(i + 7, ci) * 3;
-    const depth = size * (0.8 + hash01(i + 13, ci) * 0.45);
-    const height = 4 + hash01(i + 11, ci) * 5;
-    if (trailDistance(x, z) < Math.max(size, depth) / 2 + 2) continue;
-    out.push({ x, z, width: size, depth, height });
-  }
-  return out;
-});
-function insideRiver(river, x, z) {
-  const r = river.width / 2;
-  for (let i = 0; i < river.points.length - 1; i++) {
-    const a = river.points[i], b = river.points[i + 1];
-    if (distanceToSegment(x, z, a.x, a.z, b.x, b.z) < r) return true;
-  }
-  return false;
-}
-function computeBridges() {
-  const configured = GAME_CONFIG.map.bridges;
-  const out = configured.map((b) => ({
-    x: S(b.x),
-    z: S(b.z),
-    width: S(b.width),
-    depth: S(b.depth)
-  }));
-  for (const trail of TRAILS) {
-    for (const river of RIVERS) {
-      let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
-      const flush = () => {
-        if (minX === Infinity) return;
-        const margin = S(4);
-        out.push({
-          x: (minX + maxX) / 2,
-          z: (minZ + maxZ) / 2,
-          width: Math.max(S(9), maxX - minX + margin * 2),
-          depth: Math.max(S(9), maxZ - minZ + margin * 2)
+    for (const c of visited) {
+      if ((degree.get(c) ?? 0) !== 1 || rnd() > m.braid) continue;
+      const i = Ki(c), j = Kj(c);
+      const cand = [];
+      for (const [di, dj] of dirs) {
+        const ni2 = i + di, nj2 = j + dj, nk = K(ni2, nj2);
+        if (inRegion(ni2, nj2) && !roomCells.has(nk) && !open.has(openKey(c, nk))) cand.push([ni2, nj2]);
+      }
+      if (!cand.length) continue;
+      const [ni, nj] = cand[Math.floor(rnd() * cand.length)];
+      open.add(openKey(c, K(ni, nj)));
+      degree.set(c, 2);
+      degree.set(K(ni, nj), (degree.get(K(ni, nj)) ?? 0) + 1);
+    }
+    const entranceEdges = /* @__PURE__ */ new Set();
+    for (const room of rooms2) {
+      const options = [];
+      for (const cc of room.cells) {
+        const i = Ki(cc), j = Kj(cc);
+        for (const [di, dj] of dirs) {
+          if (visited.has(K(i + di, j + dj))) options.push([i, j, di, dj]);
+        }
+      }
+      if (!options.length) continue;
+      const prefer = room.facing === "west" ? [-1, 0] : room.facing === "east" ? [1, 0] : room.facing === "north" ? [0, -1] : [0, 1];
+      options.sort((a, b) => {
+        const da = a[2] === prefer[0] && a[3] === prefer[1] ? 0 : 1;
+        const db = b[2] === prefer[0] && b[3] === prefer[1] ? 0 : 1;
+        return da - db;
+      });
+      const e = options[Math.floor(rnd() * Math.min(2, options.length))];
+      const edge = openKey(K(e[0], e[1]), K(e[0] + e[2], e[1] + e[3]));
+      open.add(edge);
+      entranceEdges.add(edge);
+      room.entrance = e;
+      room.facing = e[2] === 1 ? "east" : e[2] === -1 ? "west" : e[3] === 1 ? "south" : "north";
+    }
+    for (let ri = 0; ri < compounds.length && ri < rooms2.length; ri++) {
+      const c = compounds[ri];
+      const room = rooms2[ri];
+      c.x = (room.minI + room.maxI + 1) / 2 * cell;
+      c.z = (room.minJ + room.maxJ + 1) / 2 * cell;
+      c.width = (room.maxI - room.minI + 1) * cell;
+      c.depth = (room.maxJ - room.minJ + 1) * cell;
+      c.facing = room.facing;
+      if (room.entrance) {
+        const [i, j, di, dj] = room.entrance;
+        c.door = { x: (i + i + di) / 2 * cell, z: (j + j + dj) / 2 * cell };
+      }
+      chamberBoxes.push({
+        minX: (room.minI - 0.5) * cell,
+        maxX: (room.maxI + 0.5) * cell,
+        minZ: (room.minJ - 0.5) * cell,
+        maxZ: (room.maxJ + 0.5) * cell
+      });
+    }
+    const walls = [];
+    const addWall = (i, j, di, dj) => {
+      const vertical = di !== 0;
+      const w = vertical ? wallT : cell;
+      const d = vertical ? cell : wallT;
+      const x = vertical ? i * cell + di * cell / 2 : i * cell;
+      const z = vertical ? j * cell : j * cell + dj * cell / 2;
+      const chunks = Math.max(1, Math.round(cell / S(4.5)));
+      for (let k = 0; k < chunks; k++) {
+        const t = (k + 0.5) / chunks;
+        const px = vertical ? x : x - w / 2 + w * t;
+        const pz = vertical ? z - d / 2 + d * t : z;
+        if (Math.hypot(px - cryptPosition.x, pz - cryptPosition.z) < S(m.centerRadius)) continue;
+        const jitter = (hash01(Math.round(px * 2), Math.round(pz * 2)) - 0.5) * S(0.7);
+        walls.push({
+          x: px + (vertical ? jitter : 0),
+          z: pz + (vertical ? 0 : jitter),
+          width: vertical ? w : cell / chunks + S(1.4),
+          depth: vertical ? cell / chunks + S(1.4) : d,
+          height: wallH * (0.85 + hash01(Math.round(px), Math.round(pz)) * 0.35)
         });
-        minX = Infinity;
-        maxX = -Infinity;
-        minZ = Infinity;
-        maxZ = -Infinity;
-      };
-      for (const p of trail) {
-        if (!insideRiver(river, p.x, p.z)) {
-          flush();
+      }
+    };
+    for (const c of visited) {
+      const i = Ki(c), j = Kj(c);
+      for (const [di, dj] of dirs) {
+        const nk = K(i + di, j + dj);
+        if (roomCells.has(nk)) continue;
+        if (!visited.has(nk)) {
+          addWall(i, j, di, dj);
           continue;
         }
-        minX = Math.min(minX, p.x);
-        maxX = Math.max(maxX, p.x);
-        minZ = Math.min(minZ, p.z);
-        maxZ = Math.max(maxZ, p.z);
+        if (di < 0 || dj < 0) continue;
+        if (open.has(openKey(c, nk))) trails.push([{ x: i * cell, z: j * cell }, { x: (i + di) * cell, z: (j + dj) * cell }]);
+        else addWall(i, j, di, dj);
       }
-      flush();
+    }
+    for (const room of rooms2) {
+      const cellSet = new Set(room.cells);
+      for (const cc of room.cells) {
+        const i = Ki(cc), j = Kj(cc);
+        for (const [di, dj] of dirs) {
+          const nk = K(i + di, j + dj);
+          if (cellSet.has(nk)) {
+            open.add(openKey(cc, nk));
+            if (di > 0 || dj > 0) trails.push([{ x: i * cell, z: j * cell }, { x: (i + di) * cell, z: (j + dj) * cell }]);
+            continue;
+          }
+          const edge = openKey(cc, nk);
+          if (entranceEdges.has(edge)) continue;
+          addWall(i, j, di, dj);
+        }
+      }
+    }
+    for (const room of rooms2) {
+      if (!room.entrance) continue;
+      const [i, j, di, dj] = room.entrance;
+      trails.push([{ x: i * cell, z: j * cell }, { x: (i + di) * cell, z: (j + dj) * cell }]);
+    }
+    const unit = INTERACTION.unitRadius;
+    const openX = BUILDING_SIZE.wall / 2 + unit + S(0.2);
+    for (const room of rooms2) {
+      if (!room.entrance) continue;
+      const [i, j, di, dj] = room.entrance;
+      const vertical = di !== 0;
+      const door = { x: (i + i + di) / 2 * cell, z: (j + j + dj) / 2 * cell };
+      const span = cell / 2 - openX;
+      const chunks = Math.max(1, Math.round(span / S(4)));
+      const chunkLen = span / chunks;
+      for (let s = 0; s < chunks; s++) {
+        const center = openX + chunkLen * (s + 0.5);
+        for (const sgn of [1, -1]) {
+          const off = center * sgn;
+          walls.push({
+            x: door.x + (vertical ? 0 : off),
+            z: door.z + (vertical ? off : 0),
+            width: vertical ? wallT : chunkLen,
+            depth: vertical ? chunkLen : wallT,
+            height: wallH
+          });
+        }
+      }
+    }
+    return walls;
+  }
+  if (cfg.maze) {
+    NATURAL_BLOCKERS.push(...buildMaze());
+  } else {
+    compounds.forEach((c, i) => {
+      const door = compoundEntrance(c);
+      const bend = (i % 3 - 1) * 0.14 * Math.hypot(door.x, door.z);
+      const angle = FACING_ANGLE[c.facing];
+      trails.push(sampleTrail(door, bend, { x: Math.cos(angle), z: Math.sin(angle) }));
+    });
+  }
+  const TRAIL_SEG_CELL = 16;
+  const SEG_N = Math.max(1, Math.ceil(WORLD.half * 2 / TRAIL_SEG_CELL) + 1);
+  const SEG_RADIUS = 20;
+  const segData = [];
+  const segIndex = /* @__PURE__ */ new Map();
+  for (const trail of trails) for (let i = 0; i < trail.length - 1; i++) {
+    const a = trail[i], b = trail[i + 1];
+    const idx = segData.length / 4;
+    segData.push(a.x, a.z, b.x, b.z);
+    const minX = Math.min(a.x, b.x) - SEG_RADIUS, maxX = Math.max(a.x, b.x) + SEG_RADIUS;
+    const minZ = Math.min(a.z, b.z) - SEG_RADIUS, maxZ = Math.max(a.z, b.z) + SEG_RADIUS;
+    const cx0 = Math.max(0, Math.floor((minX + WORLD.half) / TRAIL_SEG_CELL));
+    const cx1 = Math.min(SEG_N - 1, Math.floor((maxX + WORLD.half) / TRAIL_SEG_CELL));
+    const cz0 = Math.max(0, Math.floor((minZ + WORLD.half) / TRAIL_SEG_CELL));
+    const cz1 = Math.min(SEG_N - 1, Math.floor((maxZ + WORLD.half) / TRAIL_SEG_CELL));
+    for (let cz = cz0; cz <= cz1; cz++) for (let cx = cx0; cx <= cx1; cx++) {
+      const key = cz * SEG_N + cx;
+      const list = segIndex.get(key);
+      if (list) list.push(idx);
+      else segIndex.set(key, [idx]);
     }
   }
-  const merged = [];
-  for (const b of out) if (!merged.some((m) => Math.hypot(m.x - b.x, m.z - b.z) < S(9))) merged.push(b);
-  return merged;
-}
-var BRIDGES = computeBridges();
-function isBridgeAtWorld(x, z) {
-  return BRIDGES.some((b) => Math.abs(x - b.x) <= b.width / 2 && Math.abs(z - b.z) <= b.depth / 2);
-}
-var MEADOWS = GAME_CONFIG.map.meadows.map((m) => ({ ...m, x: S(m.x), z: S(m.z), rx: S(m.rx), rz: S(m.rz) }));
-var BASE_TREES = COMPOUNDS.flatMap((c, ci) => {
-  const horizontal = c.facing === "north" || c.facing === "south";
-  const a = FACING_ANGLE[c.facing];
-  const fx = Math.cos(a), fz = Math.sin(a);
-  const tx = -fz, tz = fx;
-  const halfFacing = (horizontal ? c.depth : c.width) / 2;
-  const halfTangent = (horizontal ? c.width : c.depth) / 2;
-  const out = [];
-  for (const side of [-1, 1]) {
-    const back = halfFacing * (0.34 + (hash01(ci * 13, side + 5) - 0.5) * 0.12);
-    const lateral = halfTangent * 0.44 * side + (hash01(ci * 17 + side, ci * 31) - 0.5) * 2.2;
-    out.push({ kind: "wood", x: c.x - fx * back + tx * lateral, z: c.z - fz * back + tz * lateral });
-  }
-  return out;
-});
-function inMeadow(x, z) {
-  return MEADOWS.some((m) => ((x - m.x) / m.rx) ** 2 + ((z - m.z) / m.rz) ** 2 < 1);
-}
-function nearCompound(x, z, margin) {
-  return COMPOUNDS.some((c) => ((x - c.x) / (c.width / 2 + margin)) ** 2 + ((z - c.z) / (c.depth / 2 + margin)) ** 2 < 1);
-}
-function isWaterTile(x, z) {
-  return isWaterAtWorld(tileToWorld(worldToTile(x)), tileToWorld(worldToTile(z)));
-}
-function isForestAt(x, z) {
-  if (!isLandAt(x, z) || isWaterTile(x, z)) return false;
-  const trailClear = Math.max(S(5.5), 4.2);
-  if (trailDistance(x, z) < trailClear || isBridgeAtWorld(x, z)) return false;
-  if (inMeadow(x, z)) return false;
-  if (nearCompound(x, z, S(5))) return false;
-  if (nearMountain(x, z, S(2))) return false;
-  if (ROCK_FORMATIONS.some((f) => ((x - f.x) / (f.rx * 1.08)) ** 2 + ((z - f.z) / (f.rz * 1.08)) ** 2 < 1)) return false;
-  if (withinCryptClearance(x, z)) return false;
-  if (Math.hypot(x, z) < S(16)) return false;
-  return true;
-}
-var FOREST_WOOD_NODES = (() => {
-  const pts = [];
-  const step2 = GAME_CONFIG.map.resources.forestNodeSpacing;
-  const half = WORLD.half - S(4);
-  for (let gx = -half; gx <= half; gx += step2) {
-    for (let gz = -half; gz <= half; gz += step2) {
-      const jx = (hash01(Math.round(gx * 10), Math.round(gz * 10)) - 0.5) * step2 * 0.6;
-      const jz = (hash01(Math.round(gz * 10), Math.round(gx * 10)) - 0.5) * step2 * 0.6;
-      const x = Math.round((gx + jx) * 2) / 2, z = Math.round((gz + jz) * 2) / 2;
-      if (!isForestAt(x, z)) continue;
-      if ([-S(3), S(3)].some((dx) => [-S(3), S(3)].some((dz) => isWaterTile(x + dx, z + dz)))) continue;
-      pts.push({ kind: "wood", x, z });
+  function distanceToTrails(x, z) {
+    const cx = Math.floor((x + WORLD.half) / TRAIL_SEG_CELL), cz = Math.floor((z + WORLD.half) / TRAIL_SEG_CELL);
+    if (cx < 0 || cz < 0 || cx >= SEG_N || cz >= SEG_N) return Infinity;
+    const list = segIndex.get(cz * SEG_N + cx);
+    if (!list) return Infinity;
+    let best = Infinity;
+    for (const idx of list) {
+      const o = idx * 4;
+      const d = distanceToSegment(x, z, segData[o], segData[o + 1], segData[o + 2], segData[o + 3]);
+      if (d < best) best = d;
     }
+    return best;
   }
-  return pts;
-})();
-var RESOURCE_PLACEMENTS = [
-  ...GAME_CONFIG.map.resources.centralWoodX.flatMap((x) => GAME_CONFIG.map.resources.centralWoodZ.map((z) => ({ kind: "wood", x: S(x), z: S(z) }))).filter((p) => distanceToTrails(p.x, p.z) >= S(5.5)),
-  ...BASE_TREES,
-  ...FOREST_WOOD_NODES
-].filter((n) => !isWaterTile(n.x, n.z) && !withinCryptClearance(n.x, n.z));
-var MAP_CACHE = /* @__PURE__ */ new Map();
+  const exactTrailDistance = distanceToTrails;
+  function inOpenClearing(x, z) {
+    if (!cfg.maze) return false;
+    return Math.hypot(x - cryptPosition.x, z - cryptPosition.z) < S(cfg.maze.centerRadius);
+  }
+  const ROCK_FORMATIONS = cfg.rockFormations.map((f) => ({ ...f, x: S(f.x), z: S(f.z), rx: S(f.rx), rz: S(f.rz) }));
+  const ROCK_OBSTACLES = ROCK_FORMATIONS.flatMap((f, fi) => {
+    const out = [];
+    for (let i = 0; i < f.count; i++) {
+      const a = i * 2.399963 + fi * 1.13;
+      const dist2 = i === 0 ? 0 : 0.22 + 0.6 * hash01(i * 7 + fi, fi * 3 + i);
+      const px = f.x + Math.cos(a) * f.rx * dist2;
+      const pz = f.z + Math.sin(a) * f.rz * dist2;
+      const center = 1 - Math.min(1, dist2);
+      const size = f.rx / 3.4 * (0.55 + center * 0.9) * (0.8 + hash01(i + 5, fi) * 0.5);
+      const depth = size * (0.82 + hash01(i + 9, fi) * 0.36);
+      const height = f.height * (0.5 + center * 0.7) * (0.8 + hash01(i + 11, fi) * 0.45);
+      if (compounds.some((c) => Math.abs(px - c.x) < c.width / 2 + size / 2 + 2 && Math.abs(pz - c.z) < c.depth / 2 + size / 2 + 2)) continue;
+      if (Math.hypot(px - cryptPosition.x, pz - cryptPosition.z) < S(26)) continue;
+      if (Math.hypot(px, pz) < S(18)) continue;
+      if (exactTrailDistance(px, pz) < Math.max(size, depth) / 2 + 2) continue;
+      if (blocksMazeGap(px, pz, Math.max(size, depth) / 2)) continue;
+      out.push({ x: px, z: pz, width: size, depth, height });
+    }
+    return out;
+  });
+  const baseRocksScale = cfg.baseRocksScale ?? 1.5;
+  const BASE_ROCKS = baseRocksScale <= 0 ? [] : compounds.flatMap((c, ci) => {
+    const out = [];
+    const entrance = FACING_ANGLE[c.facing];
+    const r = Math.max(c.width, c.depth) / 2;
+    const N = 12;
+    for (let i = 0; i < N; i++) {
+      const ang = i * (Math.PI * 2 / N) + hash01(ci * 5 + i, ci * 11) * 0.5;
+      const diff = Math.abs((ang - entrance + Math.PI * 3) % (Math.PI * 2) - Math.PI);
+      if (diff < 0.9) continue;
+      const rad = r * (baseRocksScale + hash01(i + 3, ci) * 0.4);
+      const x = c.x + Math.cos(ang) * rad;
+      const z = c.z + Math.sin(ang) * rad;
+      const size = 2.5 + hash01(i + 7, ci) * 3;
+      const depth = size * (0.8 + hash01(i + 13, ci) * 0.45);
+      const height = 4 + hash01(i + 11, ci) * 5;
+      if (exactTrailDistance(x, z) < Math.max(size, depth) / 2 + 2) continue;
+      if (blocksMazeGap(x, z, Math.max(size, depth) / 2)) continue;
+      out.push({ x, z, width: size, depth, height });
+    }
+    return out;
+  });
+  function insideRiver(river, x, z) {
+    const r = river.width / 2;
+    for (let i = 0; i < river.points.length - 1; i++) {
+      const a = river.points[i], b = river.points[i + 1];
+      if (distanceToSegment(x, z, a.x, a.z, b.x, b.z) < r) return true;
+    }
+    return false;
+  }
+  const bridges = (() => {
+    const out = cfg.bridges.map((b) => ({ x: S(b.x), z: S(b.z), width: S(b.width), depth: S(b.depth) }));
+    for (const trail of trails) {
+      for (const river of RIVERS) {
+        let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+        const flush = () => {
+          if (minX === Infinity) return;
+          const margin = S(4);
+          out.push({
+            x: (minX + maxX) / 2,
+            z: (minZ + maxZ) / 2,
+            width: Math.max(S(9), maxX - minX + margin * 2),
+            depth: Math.max(S(9), maxZ - minZ + margin * 2)
+          });
+          minX = Infinity;
+          maxX = -Infinity;
+          minZ = Infinity;
+          maxZ = -Infinity;
+        };
+        for (const p of trail) {
+          if (!insideRiver(river, p.x, p.z)) {
+            flush();
+            continue;
+          }
+          minX = Math.min(minX, p.x);
+          maxX = Math.max(maxX, p.x);
+          minZ = Math.min(minZ, p.z);
+          maxZ = Math.max(maxZ, p.z);
+        }
+        flush();
+      }
+    }
+    const merged = [];
+    for (const b of out) if (!merged.some((m) => Math.hypot(m.x - b.x, m.z - b.z) < S(9))) merged.push(b);
+    return merged;
+  })();
+  function isBridgeAtWorld(x, z) {
+    return bridges.some((b) => Math.abs(x - b.x) <= b.width / 2 && Math.abs(z - b.z) <= b.depth / 2);
+  }
+  const MEADOWS = cfg.meadows.map((m) => ({ ...m, x: S(m.x), z: S(m.z), rx: S(m.rx), rz: S(m.rz) }));
+  const BASE_TREES = cfg.maze ? [] : compounds.flatMap((c, ci) => {
+    const horizontal = c.facing === "north" || c.facing === "south";
+    const a = FACING_ANGLE[c.facing];
+    const fx = Math.cos(a), fz = Math.sin(a);
+    const tx = -fz, tz = fx;
+    const halfFacing = (horizontal ? c.depth : c.width) / 2;
+    const halfTangent = (horizontal ? c.width : c.depth) / 2;
+    const out = [];
+    for (const side of [-1, 1]) {
+      const back = halfFacing * (0.34 + (hash01(ci * 13, side + 5) - 0.5) * 0.12);
+      const lateral = halfTangent * 0.44 * side + (hash01(ci * 17 + side, ci * 31) - 0.5) * 2.2;
+      out.push({ kind: "wood", x: c.x - fx * back + tx * lateral, z: c.z - fz * back + tz * lateral });
+    }
+    return out;
+  });
+  function inMeadow(x, z) {
+    return MEADOWS.some((m) => ((x - m.x) / m.rx) ** 2 + ((z - m.z) / m.rz) ** 2 < 1);
+  }
+  function nearCompound(x, z, margin) {
+    return compounds.some((c) => ((x - c.x) / (c.width / 2 + margin)) ** 2 + ((z - c.z) / (c.depth / 2 + margin)) ** 2 < 1);
+  }
+  function isWaterTile(x, z) {
+    return isWaterAtWorld(tileToWorld(worldToTile(x)), tileToWorld(worldToTile(z)));
+  }
+  function isForestAt(x, z) {
+    if (!isLandAt(x, z) || isWaterTile(x, z)) return false;
+    if (isBridgeAtWorld(x, z)) return false;
+    if (cfg.maze) {
+      for (const b of chamberBoxes) {
+        if (x > b.minX && x < b.maxX && z > b.minZ && z < b.maxZ) return false;
+      }
+      if (exactTrailDistance(x, z) < S(cfg.maze.cell) * 0.28) return false;
+      return !withinCryptClearance(x, z);
+    }
+    const trailClear = Math.max(S(5.5), 4.2);
+    if (exactTrailDistance(x, z) < trailClear) return false;
+    if (inOpenClearing(x, z)) return false;
+    if (inMeadow(x, z)) return false;
+    if (nearCompound(x, z, S(5))) return false;
+    if (nearMountain(x, z, S(2))) return false;
+    if (nearMazeRing(x, z, S(4))) return false;
+    if (ROCK_FORMATIONS.some((f) => ((x - f.x) / (f.rx * 1.08)) ** 2 + ((z - f.z) / (f.rz * 1.08)) ** 2 < 1)) return false;
+    if (withinCryptClearance(x, z)) return false;
+    if (Math.hypot(x, z) < S(16)) return false;
+    return true;
+  }
+  function withinCryptClearance(x, z) {
+    return Math.hypot(x - cryptPosition.x, z - cryptPosition.z) < S(44);
+  }
+  const forestWoodNodes = (() => {
+    const pts = [];
+    const step2 = cfg.resources.forestNodeSpacing;
+    const half = WORLD.half - S(4);
+    for (let gx = -half; gx <= half; gx += step2) {
+      for (let gz = -half; gz <= half; gz += step2) {
+        const jx = (hash01(Math.round(gx * 10), Math.round(gz * 10)) - 0.5) * step2 * 0.6;
+        const jz = (hash01(Math.round(gz * 10), Math.round(gx * 10)) - 0.5) * step2 * 0.6;
+        const x = Math.round((gx + jx) * 2) / 2, z = Math.round((gz + jz) * 2) / 2;
+        if (!isForestAt(x, z)) continue;
+        if ([-S(3), S(3)].some((dx) => [-S(3), S(3)].some((dz) => isWaterTile(x + dx, z + dz)))) continue;
+        pts.push({ kind: "wood", x, z });
+      }
+    }
+    return pts;
+  })();
+  const resourcePlacements = [
+    ...cfg.resources.centralWoodX.flatMap((x) => cfg.resources.centralWoodZ.map((z) => ({ kind: "wood", x: S(x), z: S(z) }))).filter((p) => exactTrailDistance(p.x, p.z) >= 1.5),
+    ...BASE_TREES,
+    ...forestWoodNodes
+  ].filter((n) => !isWaterTile(n.x, n.z) && !withinCryptClearance(n.x, n.z));
+  const BASE_H = 0.24;
+  const LOW_RADIUS = 34;
+  const CLIFF_WIDTH = 2.6;
+  const RAMP_WIDTH = 11;
+  const RAMP_HALF = 7;
+  const RAMP_FEATHER = 2.5;
+  const HILL_LIFT = 0.2;
+  const BASE_RAISE = 0.13;
+  function terrainHeight(x, z, coast) {
+    let h = BASE_H;
+    h += 0.018 * Math.sin(x * 0.021 + 0.5) * Math.cos(z * 0.024 - 0.7);
+    h += 0.014 * Math.sin((x * 0.9 + z * 0.6) * 0.017 + 1.3);
+    const r = Math.hypot(x, z);
+    const steep = smoothstep((r - LOW_RADIUS) / CLIFF_WIDTH);
+    const gentle = smoothstep((r - LOW_RADIUS) / RAMP_WIDTH);
+    const dTrail = exactTrailDistance(x, z);
+    const rampness = 1 - smoothstep((dTrail - RAMP_HALF) / RAMP_FEATHER);
+    h += HILL_LIFT * (steep * (1 - rampness) + gentle * rampness);
+    const shore = smoothstep((1 - coast) / 0.09);
+    h = BASE_H * 0.78 + (h - BASE_H * 0.78) * shore;
+    return Math.min(0.72, Math.max(BASE_H * 0.72, h));
+  }
+  const obstacles = [...NATURAL_BLOCKERS, ...ROCK_OBSTACLES, ...BASE_ROCKS].map((o) => ({ ...o }));
+  let cachedMap = null;
+  function generateMap2() {
+    if (cachedMap) return cloneMap(cachedMap);
+    const n = WORLD.tiles;
+    const height = new Float32Array(n * n);
+    const water = new Uint8Array(n * n);
+    const bridge = new Uint8Array(n * n);
+    const forest = new Float32Array(n * n);
+    const FLAT_BLEND = S(6);
+    for (let z = 0; z < n; z++) for (let x = 0; x < n; x++) {
+      const wx = tileToWorld(x), wz = tileToWorld(z), i = z * n + x;
+      const coast = coastDistance(wx, wz);
+      const flooded = isWaterAtWorld(wx, wz);
+      if (flooded) {
+        height[i] = BASE_H * 0.3;
+        water[i] = 1;
+      } else {
+        let h = terrainHeight(wx, wz, coast);
+        const flatten = (cx, cz, radius, lift = 0) => {
+          const d = Math.hypot(wx - cx, wz - cz);
+          if (d >= radius + FLAT_BLEND) return;
+          const t = smoothstep((d - radius) / FLAT_BLEND);
+          h = h * t + (BASE_H + lift) * (1 - t);
+        };
+        for (const c of compounds) {
+          const r = Math.max(c.width, c.depth) / 2;
+          flatten(c.x, c.z, r, HILL_LIFT);
+          const a = FACING_ANGLE[c.facing], fx = Math.cos(a), fz = Math.sin(a);
+          const tx = -fz, tz = fx;
+          const dx = wx - c.x, dz = wz - c.z;
+          const d = Math.hypot(dx, dz);
+          const fwd = dx * fx + dz * fz, side = dx * tx + dz * tz;
+          let width = 1.2;
+          if (fwd > 0 && Math.abs(side) < RAMP_HALF && d < r * 1.4 + 14) {
+            const trailNear = 1 - smoothstep((exactTrailDistance(wx, wz) - RAMP_HALF) / RAMP_FEATHER);
+            width += trailNear * 9;
+          }
+          h += BASE_RAISE * smoothstep((r * 1.4 + width - d) / width);
+        }
+        for (const b of bridges) flatten(b.x, b.z, Math.max(b.width, b.depth) / 2 + S(6));
+        height[i] = h;
+        if (isForestAt(wx, wz)) forest[i] = 0.8;
+      }
+      if (isBridgeAtWorld(wx, wz)) bridge[i] = 1;
+    }
+    const map = { id, seed: cfg.version, tiles: n, height, water, bridge, forest, obstacles: obstacles.map((o) => ({ ...o })) };
+    cachedMap = map;
+    return cloneMap(map);
+  }
+  return {
+    id,
+    config: cfg,
+    compounds,
+    trails,
+    humanSpawns,
+    cryptPosition,
+    vampireSpawnOffset,
+    bridges,
+    resourcePlacements,
+    forestWoodNodes,
+    obstacles,
+    compoundEntrance,
+    isLandAt,
+    isWaterAtWorld,
+    isBridgeAtWorld,
+    distanceToTrails,
+    isForestAt,
+    generateMap: generateMap2
+  };
+}
 function cloneMap(map) {
   return {
+    id: map.id,
     seed: map.seed,
     tiles: map.tiles,
     height: map.height.slice(),
@@ -1034,55 +1549,27 @@ function cloneMap(map) {
     obstacles: map.obstacles.map((o) => ({ ...o }))
   };
 }
-function generateMap(_seed = MAP_SEED) {
-  const cached = MAP_CACHE.get(_seed);
-  if (cached) return cloneMap(cached);
-  const n = WORLD.tiles;
-  const height = new Float32Array(n * n);
-  const water = new Uint8Array(n * n);
-  const bridge = new Uint8Array(n * n);
-  const forest = new Float32Array(n * n);
-  const FLAT_BLEND = S(6);
-  for (let z = 0; z < n; z++) for (let x = 0; x < n; x++) {
-    const wx = tileToWorld(x), wz = tileToWorld(z), i = z * n + x;
-    const coast = coastDistance(wx, wz);
-    const flooded = isWaterAtWorld(wx, wz);
-    if (flooded) {
-      height[i] = BASE_H * 0.3;
-      water[i] = 1;
-    } else {
-      let h = terrainHeight(wx, wz, coast);
-      const flatten = (cx, cz, radius, lift = 0) => {
-        const d = Math.hypot(wx - cx, wz - cz);
-        if (d >= radius + FLAT_BLEND) return;
-        const t = smoothstep((d - radius) / FLAT_BLEND);
-        h = h * t + (BASE_H + lift) * (1 - t);
-      };
-      for (const c of COMPOUNDS) {
-        const r = Math.max(c.width, c.depth) / 2;
-        flatten(c.x, c.z, r, HILL_LIFT);
-        const a = FACING_ANGLE[c.facing], fx = Math.cos(a), fz = Math.sin(a);
-        const tx = -fz, tz = fx;
-        const dx = wx - c.x, dz = wz - c.z;
-        const d = Math.hypot(dx, dz);
-        const fwd = dx * fx + dz * fz, side = dx * tx + dz * tz;
-        let width = 1.2;
-        if (fwd > 0 && Math.abs(side) < RAMP_HALF && d < r * 1.4 + 14) {
-          const trailNear = 1 - smoothstep((trailDistance(wx, wz) - RAMP_HALF) / RAMP_FEATHER);
-          width += trailNear * 9;
-        }
-        h += BASE_RAISE * smoothstep((r * 1.4 + width - d) / width);
-      }
-      for (const b of BRIDGES) flatten(b.x, b.z, Math.max(b.width, b.depth) / 2 + S(6));
-      height[i] = h;
-      if (isForestAt(wx, wz)) forest[i] = 0.8;
-    }
-    if (isBridgeAtWorld(wx, wz)) bridge[i] = 1;
-  }
-  const map = { seed: MAP_SEED, tiles: n, height, water, bridge, forest, obstacles: [...NATURAL_BLOCKERS, ...ROCK_OBSTACLES, ...BASE_ROCKS].map((o) => ({ ...o })) };
-  MAP_CACHE.set(_seed, map);
-  return cloneMap(map);
+var MODEL_CACHE = /* @__PURE__ */ new Map();
+function getMapModel(id = DEFAULT_MAP_ID) {
+  const cached = MODEL_CACHE.get(id);
+  if (cached) return cached;
+  const cfg = MAP_PRESETS[id];
+  if (!cfg) throw new Error(`Preset de mapa desconhecido: ${id}`);
+  const model = buildMapModel(id, cfg);
+  MODEL_CACHE.set(id, model);
+  return model;
 }
+function generateMap(id = DEFAULT_MAP_ID) {
+  return getMapModel(id).generateMap();
+}
+var CLASSIC = getMapModel("classic");
+var HUMAN_SPAWNS = CLASSIC.humanSpawns;
+var CRYPT_POSITION = CLASSIC.cryptPosition;
+var COMPOUNDS = CLASSIC.compounds;
+var TRAILS = CLASSIC.trails;
+var BRIDGES = CLASSIC.bridges;
+var RESOURCE_PLACEMENTS = CLASSIC.resourcePlacements;
+var FOREST_WOOD_NODES = CLASSIC.forestWoodNodes;
 function tileToWorld(tx) {
   return (tx - WORLD.tiles / 2) * WORLD.tileSize + WORLD.tileSize / 2;
 }
@@ -1101,11 +1588,12 @@ function createPlayers(names, ids = Array.from({ length: MAX_PLAYERS }, (_, i) =
     alive: true
   }));
 }
-function createGameState(names, _seed = MAP_SEED, playerIds = Array.from({ length: MAX_PLAYERS }, (_, i) => i), daySeconds = DAY_LENGTH, nightSeconds = NIGHT_LENGTH) {
+function createGameState(names, _seed = 0, playerIds = Array.from({ length: MAX_PLAYERS }, (_, i) => i), daySeconds = DAY_LENGTH, nightSeconds = NIGHT_LENGTH, mapId = DEFAULT_MAP_ID) {
+  const model = getMapModel(mapId);
   const ids = [.../* @__PURE__ */ new Set([...playerIds, VAMPIRE_PLAYER_ID])].filter((id) => id >= 0 && id < MAX_PLAYERS).sort((a, b) => a - b);
   const units = ids.map((owner) => {
     const vampire = owner === VAMPIRE_PLAYER_ID;
-    const position = vampire ? { x: CRYPT_POSITION.x + GAME_CONFIG.map.vampireSpawnOffset.x * MAP_SCALE, z: CRYPT_POSITION.z + GAME_CONFIG.map.vampireSpawnOffset.z * MAP_SCALE } : HUMAN_SPAWNS[owner];
+    const position = vampire ? { x: model.cryptPosition.x + model.vampireSpawnOffset.x, z: model.cryptPosition.z + model.vampireSpawnOffset.z } : model.humanSpawns[owner] ?? { x: 0, z: 0 };
     const hp = vampire ? VAMPIRE.hp : WORKER.hp;
     return {
       id: owner + 1,
@@ -1124,7 +1612,7 @@ function createGameState(names, _seed = MAP_SEED, playerIds = Array.from({ lengt
       dead: false
     };
   });
-  const nodes = RESOURCE_PLACEMENTS.map((node, i) => ({
+  const nodes = model.resourcePlacements.map((node, i) => ({
     id: 200 + i,
     ...node,
     amount: node.kind === "wood" ? 600 : 2e3,
@@ -1146,13 +1634,14 @@ function createGameState(names, _seed = MAP_SEED, playerIds = Array.from({ lengt
     players: createPlayers(names, ids),
     units,
     vampire: { blood: 0, items: {}, skills: {}, revealUses: 1 },
-    seed: MAP_SEED,
+    seed: model.config.version,
+    mapId,
     buildings: [
       {
         id: 100,
         kind: "crypt",
         owner: -1,
-        ...CRYPT_POSITION,
+        ...model.cryptPosition,
         hp: CRYPT.hp,
         maxHp: CRYPT.hp,
         level: 1,
@@ -1709,9 +2198,9 @@ function buildTickIndex(s) {
   for (const n of s.nodes) nodes.set(n.id, n);
   return { units, buildings, nodes };
 }
-function createSession(names, seed, playerIds, daySeconds, nightSeconds) {
-  const state = createGameState(names, seed, playerIds, daySeconds, nightSeconds);
-  const map = generateMap(seed);
+function createSession(names, seed, playerIds, daySeconds, nightSeconds, mapId = DEFAULT_MAP_ID) {
+  const state = createGameState(names, seed, playerIds, daySeconds, nightSeconds, mapId);
+  const map = generateMap(mapId);
   return { state, map, commandSeq: {}, navigation: new Navigation(state, map) };
 }
 function dist(ax, az, bx, bz) {
@@ -2154,7 +2643,12 @@ function applyCommand(session, playerId, cmd) {
       const inRange = (target) => ability.range == null || dist(hero.x, hero.z, target.x, target.z) <= ability.range;
       if (cmd.ability === "entangle" || cmd.ability === "silencer") {
         if (!vampire || cmd.targetId !== vampire.id || !inRange(vampire)) return;
-        setVampireStatus(s, cmd.ability === "entangle" ? "entangled" : "silenced", ability.duration ?? 0);
+        if (cmd.ability === "silencer") {
+          setVampireStatus(s, "silenced", ability.duration ?? 0);
+          if (vampireStatus(s, "channelingTeleport") > 0) clearVampireStatus(s, "channelingTeleport");
+        } else {
+          setVampireStatus(s, "entangled", ability.duration ?? 0);
+        }
       } else if (cmd.ability === "fortify") {
         const target = unitById(s, cmd.targetId ?? -1) ?? buildingById(s, cmd.targetId ?? -1);
         if (!target || target.owner !== playerId) return;
@@ -2570,6 +3064,7 @@ function makeSnapshot(s, includeNodes = true) {
     practice: s.practice ?? false,
     tick: s.tick,
     time: s.time,
+    mapId: s.mapId,
     phase: s.phase,
     phaseTime: s.phaseTime,
     daySeconds: s.daySeconds,
@@ -2650,6 +3145,7 @@ function createRoom() {
     seed: MAP_SEED,
     daySeconds: GAME_CONFIG.match.daySeconds,
     nightSeconds: GAME_CONFIG.match.nightSeconds,
+    mapId: DEFAULT_MAP_ID,
     queue: [],
     cmdCount: /* @__PURE__ */ new Map(),
     nodeAmounts: /* @__PURE__ */ new Map()
@@ -2704,6 +3200,13 @@ function setRoomDurations(room, client, daySeconds, nightSeconds) {
   room.nightSeconds = night;
   return null;
 }
+function setRoomMap(room, client, mapId) {
+  if (room.status !== "lobby") return "A partida j\xE1 come\xE7ou";
+  if (client.id !== room.hostId) return "Somente o anfitri\xE3o pode escolher o mapa";
+  if (!Object.hasOwn(MAP_PRESETS, mapId)) return "Mapa inv\xE1lido";
+  room.mapId = mapId;
+  return null;
+}
 function startReason(room) {
   if (room.status !== "lobby") return "A partida j\xE1 come\xE7ou";
   if (room.clients.length === 0) return "A sala est\xE1 vazia";
@@ -2728,7 +3231,7 @@ function startRoom(room, requesterId) {
     playerIds.push(0);
     names[0] = "Humano (treino)";
   }
-  room.session = createSession(names, room.seed, playerIds, room.daySeconds, room.nightSeconds);
+  room.session = createSession(names, room.seed, playerIds, room.daySeconds, room.nightSeconds, room.mapId);
   room.session.state.practice = solo;
   room.nodeAmounts.clear();
   for (const node of room.session.state.nodes) room.nodeAmounts.set(node.id, node.amount);
@@ -2825,6 +3328,7 @@ function lobbyInfo(room) {
     seed: room.seed,
     daySeconds: room.daySeconds,
     nightSeconds: room.nightSeconds,
+    mapId: room.mapId,
     canStart: startReason(room) === null,
     startReason: startReason(room)
   };
@@ -3066,6 +3570,18 @@ wss.on("connection", (ws) => {
       clientRoom.delete(ws);
       ws.send(JSON.stringify({ type: "left" }));
       broadcastLobby(room);
+      return;
+    }
+    if (msg.type === "map") {
+      const room = clientRoom.get(ws);
+      const client = room?.clients.find((c) => c.ws === ws);
+      if (!room || !client) {
+        error("Entre em uma sala primeiro");
+        return;
+      }
+      const message = setRoomMap(room, client, msg.mapId);
+      if (message) error(message);
+      else broadcastLobby(room);
       return;
     }
     if (msg.type === "settings") {

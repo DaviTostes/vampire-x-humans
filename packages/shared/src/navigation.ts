@@ -21,11 +21,17 @@ interface PathBuffers {
 const SIZE = WORLD.tiles * WORLD.tileSize;
 const BUCKET_SIZE = 8;
 const BUCKET_COUNT = Math.ceil(SIZE / BUCKET_SIZE);
-// Orçamento compartilhado por todas as unidades da sala, por tick.
-const PATH_STEPS_PER_TICK = 512;
+// Orçamento compartilhado por todas as unidades da sala, por tick. As expansões
+// ficaram baratas o bastante (uma amostra por vizinho) para caminhos de labirinto
+// ficarem prontos em poucos ticks, em vez de segundos parados.
+const PATH_STEPS_PER_TICK = 2048;
 // Rede de segurança: mesmo com expansões caras, não gastar mais que isto por
 // tick em busca de caminhos (deixa o restante para os próximos ticks).
 const PATH_MS_PER_TICK = 12;
+// Teto de expansões de uma busca. Um destino inalcançável (fora do labirinto,
+// por exemplo) não pode drenar o orçamento do tick para sempre; ao estourar, a
+// unidade segue até a célula alcançável mais próxima do destino.
+const PATH_MAX_EXPANSIONS = 80000;
 
 /** Distância até a borda de um prédio, ou até um ponto. */
 export function distanceToTarget(p: Point, target: Point, half = 0): number {
@@ -308,25 +314,35 @@ export class Navigation {
         const ddz = Math.max(0, Math.abs(pz - goal.z) - goal.half);
         return Math.max(0, Math.sqrt(ddx * ddx + ddz * ddz) - goal.range);
       };
+      const buildPath = (endId: number): Point[] => {
+        const path: Point[] = [];
+        for (let id = endId; id !== start; id = parent[id]!) {
+          path.push({ x: id % SIZE - WORLD.half + 0.5, z: ((id / SIZE) | 0) - WORLD.half + 0.5 });
+        }
+        path.reverse();
+        return path;
+      };
       stamp[start] = gen;
       costs[start] = 0;
       parent[start] = -1;
       closed[start] = 0;
+      // Melhor célula alcançável visitada, para quando o destino exato não existe
+      // (ponto em outra região, dentro de parede/lago). Assim a unidade anda até
+      // o mais perto possível em vez de ficar parada.
+      let bestId = start;
+      let bestH = heuristic(start);
+      let expansions = 0;
       push(start, heuristic(start));
       while (heap.length) {
+        if (expansions++ >= PATH_MAX_EXPANSIONS) break;
         yield;
         const current = pop();
         if (stamp[current] === gen && closed[current]) continue;
         stamp[current] = gen;
         closed[current] = 1;
-        if (heuristic(current) <= 0.001 && walkable(current)) {
-          const path: Point[] = [];
-          for (let id = current; id !== start; id = parent[id]!) {
-            path.push({ x: id % SIZE - WORLD.half + 0.5, z: ((id / SIZE) | 0) - WORLD.half + 0.5 });
-          }
-          path.reverse();
-          return path;
-        }
+        const h = heuristic(current);
+        if (h < bestH) { bestH = h; bestId = current; }
+        if (h <= 0.001 && walkable(current)) return buildPath(current);
         const cx = current % SIZE, cz = (current / SIZE) | 0;
         const cwx = current === start ? u.x : cx - WORLD.half + 0.5;
         const cwz = current === start ? u.z : cz - WORLD.half + 0.5;
@@ -337,7 +353,11 @@ export class Navigation {
           const next = z * SIZE + x;
           if ((stamp[next] === gen && closed[next]) || !walkable(next)) continue;
           if (dx && dz && (!walkable(cz * SIZE + x) || !walkable(z * SIZE + cx))) continue;
-          if (!this.clearSegmentXZ(u, cwx, cwz, x - WORLD.half + 0.5, z - WORLD.half + 0.5)) continue;
+          // As duas células já são caminháveis (com o raio da unidade), então a
+          // única amostra que falta é o meio do passo — bem mais barato que o
+          // clearSegment completo por vizinho. O movimento contínuo em `move()`
+          // continua validando o trajeto real antes de andar.
+          if (!this.canStand(u, cwx + dx * 0.5, cwz + dz * 0.5)) continue;
           const cost = costs[current]! + (dx && dz ? Math.SQRT2 : 1);
           if (stamp[next] === gen && cost >= costs[next]!) continue;
           stamp[next] = gen;
@@ -347,7 +367,8 @@ export class Navigation {
           push(next, cost + heuristic(next));
         }
       }
-      return [];
+      // Sem caminho exato: aproxima o máximo possível do destino.
+      return bestId === start ? [] : buildPath(bestId);
     } finally {
       this.releasePathBuffers(buffers);
     }

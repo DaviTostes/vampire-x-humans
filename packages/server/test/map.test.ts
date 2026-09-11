@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { BRIDGES, COMPOUNDS, GAME_CONFIG, WORLD, canPlace, compoundEntrance, createSession, isWaterAt, isWaterAtWorld, step } from '@vampire/shared';
+import { BRIDGES, COMPOUNDS, GAME_CONFIG, WORLD, canPlace, compoundEntrance, createSession, getMapModel, isWaterAt, isWaterAtWorld, step } from '@vampire/shared';
 
 test('encostas têm uma única passagem: muro sela cada refúgio e humanos atravessam', () => {
   for (const c of COMPOUNDS) {
@@ -55,5 +55,65 @@ test('ilha, recursos e pontes concordam com colisão e construção', () => {
     for (let d = -length / 2 + 2; d <= length / 2 - 2; d++) {
       assert.ok(session.navigation.canStand({ kind: 'worker' }, b.x + (horizontal ? d : 0), b.z + (horizontal ? 0 : d)), 'tabuleiro contínuo');
     }
+  }
+});
+
+test('mapa Labirinto: recursos em terra, refúgios seláveis e conectados ao centro', () => {
+  const session = createSession([], 1, [0, 4], undefined, undefined, 'labyrinth');
+  const { state, navigation } = session;
+  const model = getMapModel('labyrinth');
+  assert.equal(model.compounds.length, 8);
+  assert.ok(state.nodes.length > 0, 'labirinto deve ter recursos');
+  for (const node of state.nodes) assert.ok(!isWaterAt(session.map, node.x, node.z), `recurso na água: ${node.id}`);
+  for (const unit of state.units) assert.ok(navigation.canStand(unit, unit.x, unit.z), 'spawn livre');
+  const worker = { kind: 'worker' as const };
+  // BFS única a partir do spawn: prova que o centro de cada refúgio é
+  // alcançável pelo labirinto (sem depender do orçamento do A* por tick).
+  const H = Math.floor(WORLD.half);
+  const N = H * 2 + 1;
+  const idx = (x: number, z: number) => (z + H) * N + (x + H);
+  const reached = new Uint8Array(N * N);
+  const start = model.humanSpawns[0]!;
+  const qx: number[] = [Math.round(start.x)], qz: number[] = [Math.round(start.z)];
+  reached[idx(qx[0]!, qz[0]!)] = 1;
+  for (let head = 0; head < qx.length; head++) {
+    const x = qx[head]!, z = qz[head]!;
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const nx = x + dx!, nz = z + dz!;
+      if (Math.abs(nx) >= H || Math.abs(nz) >= H) continue;
+      const i = idx(nx, nz);
+      if (reached[i]) continue;
+      reached[i] = 1;
+      if (navigation.canStand(worker, nx, nz)) { qx.push(nx); qz.push(nz); }
+    }
+  }
+  // Cada refúgio continua com UMA passagem: selar a entrada contém o avanço
+  // dentro de um raio de 65; abrir, o centro fica acessível a partir do spawn.
+  for (const c of model.compounds) {
+    const door = model.compoundEntrance(c);
+    const wall = { ...state.buildings[0]!, id: 99999, kind: 'wall' as const, owner: 0, ...door };
+    state.buildings.push(wall);
+    navigation.refresh();
+    const radius = 65, size = radius * 2 + 1;
+    const seen = new Uint8Array(size * size);
+    const queue = [{ x: Math.round(c.x), z: Math.round(c.z) }];
+    const index = (x: number, z: number) => (z - Math.round(c.z) + radius) * size + x - Math.round(c.x) + radius;
+    seen[index(queue[0]!.x, queue[0]!.z)] = 1;
+    for (let head = 0; head < queue.length; head++) {
+      const p = queue[head]!;
+      assert.ok(Math.abs(p.x - c.x) < radius && Math.abs(p.z - c.z) < radius, `brecha em ${c.name}`);
+      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const x = p.x + dx!, z = p.z + dz!, i = index(x, z);
+        if (seen[i]) continue;
+        seen[i] = 1;
+        if (navigation.canStand({ kind: 'vampire' }, x, z)) queue.push({ x, z });
+      }
+    }
+    state.buildings = state.buildings.filter(b => b !== wall);
+    navigation.refresh();
+    assert.ok(navigation.canStand({ kind: 'vampire' }, door.x, door.z), c.name);
+  }
+  for (const c of model.compounds) {
+    assert.ok(reached[idx(Math.round(c.x), Math.round(c.z))], `refúgio inalcançável: ${c.name}`);
   }
 });

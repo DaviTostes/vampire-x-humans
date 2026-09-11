@@ -1,5 +1,5 @@
-import { DAY_LENGTH, NIGHT_LENGTH, START_RESOURCES, VAMPIRE, WORKER, CRYPT, GAME_CONFIG, MAX_PLAYERS, VAMPIRE_PLAYER_ID, MAP_SCALE } from './constants.js';
-import { CRYPT_POSITION, HUMAN_SPAWNS, MAP_SEED, RESOURCE_PLACEMENTS } from './mapgen.js';
+import { DAY_LENGTH, NIGHT_LENGTH, DEFAULT_MAP_ID, START_RESOURCES, VAMPIRE, WORKER, CRYPT, MAX_PLAYERS, VAMPIRE_PLAYER_ID, type MapPresetId } from './constants.js';
+import { getMapModel } from './mapgen.js';
 import type { GameState, PlayerState, Unit } from './types.js';
 
 export function createPlayers(names: string[], ids = Array.from({ length: MAX_PLAYERS }, (_, i) => i)): PlayerState[] {
@@ -9,21 +9,25 @@ export function createPlayers(names: string[], ids = Array.from({ length: MAX_PL
 
 export function createGameState(
   names: string[],
-  _seed = MAP_SEED,
+  _seed = 0,
   playerIds = Array.from({ length: MAX_PLAYERS }, (_, i) => i),
   daySeconds = DAY_LENGTH,
   nightSeconds = NIGHT_LENGTH,
+  mapId: MapPresetId = DEFAULT_MAP_ID,
 ): GameState {
+  const model = getMapModel(mapId);
   // A cripta mantém o vampiro para testes de sala incompleta. Humanos só existem se conectados ao iniciar.
   const ids = [...new Set([...playerIds, VAMPIRE_PLAYER_ID])].filter(id => id >= 0 && id < MAX_PLAYERS).sort((a, b) => a - b);
   const units: Unit[] = ids.map(owner => {
     const vampire = owner === VAMPIRE_PLAYER_ID;
-    const position = vampire ? { x: CRYPT_POSITION.x + GAME_CONFIG.map.vampireSpawnOffset.x * MAP_SCALE, z: CRYPT_POSITION.z + GAME_CONFIG.map.vampireSpawnOffset.z * MAP_SCALE } : HUMAN_SPAWNS[owner]!;
+    const position = vampire
+      ? { x: model.cryptPosition.x + model.vampireSpawnOffset.x, z: model.cryptPosition.z + model.vampireSpawnOffset.z }
+      : model.humanSpawns[owner] ?? { x: 0, z: 0 };
     const hp = vampire ? VAMPIRE.hp : WORKER.hp;
     return { id: owner + 1, owner, kind: vampire ? 'vampire' : 'worker', hero: true, ...position, hp, maxHp: hp,
       order: null, activity: 'idle', carrying: 0, carryRes: null, gatherNodeId: null, attackCd: 0, dead: false };
   });
-  const nodes = RESOURCE_PLACEMENTS.map((node, i) => ({ id: 200 + i, ...node,
+  const nodes = model.resourcePlacements.map((node, i) => ({ id: 200 + i, ...node,
     amount: node.kind === 'wood' ? 600 : 2000, maxAmount: node.kind === 'wood' ? 600 : 2000 }));
   // Contador de ids O(1) para novos prédios/unidades (evita varrer tudo a cada build).
   // Começa acima do maior id existente (nós vão até ~700).
@@ -33,9 +37,10 @@ export function createGameState(
   if (100 >= nextId) nextId = 101; // cripta
   return {
     tick: 0, time: 0, phase: 'day', phaseTime: daySeconds, daySeconds, nightSeconds, day: 1, result: null,
-    players: createPlayers(names, ids), units, vampire: { blood: 0, items: {}, skills: {}, revealUses: 1 }, seed: MAP_SEED,
+    players: createPlayers(names, ids), units, vampire: { blood: 0, items: {}, skills: {}, revealUses: 1 }, seed: model.config.version,
+    mapId,
     buildings: [
-      { id: 100, kind: 'crypt', owner: -1, ...CRYPT_POSITION, hp: CRYPT.hp, maxHp: CRYPT.hp,
+      { id: 100, kind: 'crypt', owner: -1, ...model.cryptPosition, hp: CRYPT.hp, maxHp: CRYPT.hp,
         level: 1, progress: 1, done: true, builderId: null, goldAcc: 0, attackCd: 0 },
     ],
     nodes,

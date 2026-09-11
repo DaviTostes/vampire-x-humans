@@ -9,10 +9,100 @@ export type BuildKind = 'bank' | 'taverna' | 'wall' | 'tower' | 'keep' | 'goldMi
 export type WorkerRole = 'lumberjack' | 'miner' | 'repairer';
 export type VampireItemId = 'damage' | 'health' | 'attackSpeed';
 export type VampireSkillId = 'powerStrike';
+/**
+ * Estilo do relevo que cerca cada refúgio. Todos mantêm UMA única passagem e
+ * NENHUM tem anel interno (nada de "refúgio dentro do refúgio").
+ */
+export type RefugeStyle = 'horseshoe' | 'bastion' | 'gate' | 'canyon' | 'ring' | 'jagged';
 export interface RefugeConfig {
   name: string; x: number; z: number; width: number; depth: number;
   facing: 'north' | 'south' | 'east' | 'west';
+  /** Layout próprio; varia o desenho da encosta. Padrão: 'horseshoe'. */
+  style?: RefugeStyle;
+  /** Variação inteira do contorno base (0..3). */
+  variant?: number;
+  /** Largura da única entrada (unidades de projeto). */
+  entranceWidth?: number;
+  /** Espessura da parede (unidades de projeto). */
+  wallThickness?: number;
+  /** Altura base da parede (unidades de projeto). */
+  wallHeight?: number;
+  /** Corredor de aproximação (comprimento em unidades de projeto) saindo da entrada. */
+  approach?: number;
+  /**
+   * Tamanho da câmara nos mapas-labirinto, em células da grade (largura ×
+   * profundidade). Só é usado quando o preset tem `maze`; permite refúgios de
+   * tamanhos diferentes. Padrão: 2×2.
+   */
+  roomWidth?: number;
+  roomDepth?: number;
 }
+
+/** Parâmetros do labirinto procedural (grade + backtracker + loops). */
+export interface MazeConfig {
+  /** Tamanho da célula em unidades de projeto. */
+  cell: number;
+  thickness: number;
+  height: number;
+  /** Raio da região do labirinto (unidades de projeto). */
+  radius: number;
+  /** 0 = labirinto perfeito (muitos becos); 1 = bem aberto (muitos loops). */
+  braid: number;
+  seed: number;
+  /** Raio da praça central mantida aberta (unidades de projeto). */
+  centerRadius: number;
+  /** Corredores que ligam cada refúgio à grade (comprimento, projeto). */
+  entranceCorridor: number;
+}
+
+/** Anel de encosta com uma abertura: esculpe labirintos em volta do centro. */
+export interface MazeRing {
+  /** Raio do anel (unidades de projeto). */
+  radius: number;
+  /** Ângulo (radianos) do centro da abertura. */
+  gapAngle: number;
+  /** Largura da abertura medida no arco (unidades de projeto). */
+  gapWidth: number;
+  thickness?: number;
+  height?: number;
+  /** Irregularidade do raio ao longo do anel (unidades de projeto). */
+  jitter?: number;
+}
+
+export interface MapPresetConfig {
+  version: number;
+  name: string;
+  description: string;
+  scale: number;
+  tiles: number;
+  tileSize: number;
+  humanSpawns: Array<{ x: number; z: number }>;
+  crypt: { x: number; z: number };
+  vampireSpawnOffset: { x: number; z: number };
+  refugeWalls: { thickness: number; entranceWidth: number; height: number };
+  refuges: RefugeConfig[];
+  coast: {
+    ru: number; rv: number; rotation: number; noiseA: number; noiseB: number;
+    bays: Array<{ x: number; z: number; r: number }>;
+  };
+  lakes: Array<{ x: number; z: number; rx: number; rz: number }>;
+  rivers: Array<{ width: number; points: Array<{ x: number; z: number }> }>;
+  bridges: Array<{ x: number; z: number; width: number; depth: number }>;
+  meadows: Array<{ x: number; z: number; rx: number; rz: number }>;
+  rockFormations: Array<{ x: number; z: number; rx: number; rz: number; height: number; count: number }>;
+  maze?: MazeConfig;
+  mazeRings?: MazeRing[];
+  /** Multiplicador do raio do colchão de pedras em volta de cada refúgio. */
+  baseRocksScale?: number;
+  resources: {
+    centralWoodX: number[];
+    centralWoodZ: number[];
+    centralGold: Array<{ x: number; z: number }>;
+    forestNodeSpacing: number;
+  };
+}
+
+export type MapPresetId = 'classic' | 'labyrinth';
 
 // ---- Tipos das mecânicas da especificação "Humano e Vampiro" ----
 // As tabelas abaixo vivem em `GAME_CONFIG.spec`. Elas são a fonte de verdade
@@ -27,6 +117,163 @@ export type SpecPrerequisite = { wallLevel?: number; marketLevel?: number } | nu
 // segundo do projeto. A spec não define a unidade; ancoramos o Humano em 7 u/s
 // (valor original do projeto). A CONFIRMAR: ajustar o fator se necessário.
 const MOVE_SPEED_SCALE = 7 / 367;
+
+// ==========================================================================
+// MAPAS
+// Cada preset é autossuficiente: servidor e cliente constroem o mesmo mundo a
+// partir do `mapId` escolhido no lobby. Ambos usam o mesmo tamanho de mundo
+// (map.tiles/scale); o que muda é o relevo, a costa, os refúgios e os recursos.
+// ==========================================================================
+
+// ---- Mapa clássico: a ilha original do Vale da Vigília ----
+const CLASSIC_MAP: MapPresetConfig = {
+  version: 5,
+  name: 'Vale da Vigília',
+  description: 'Mapa original, mais aberto e com 8 refúgios iguais.',
+  // Escala global do mundo: todas as coordenadas abaixo estão em "espaço de
+  // projeto" (mundo 480). `scale` reduz o mundo e as posições proporcionalmente.
+  // 1 = 480×480; 0.8 ≈ 384×384. Menor = mapa mais apertado e denso.
+  // Ambos os presets compartilham a escala (o mundo é global).
+  scale: 0.8,
+  // Mundo de projeto: 560 × 560 unidades (×0.8 = 448 no mundo).
+  tiles: 280, tileSize: 2,
+  // Um ponto para cada vaga humana. Adicionar/remover pontos altera as vagas da sala.
+  // Com a cripta no centro, os humanos nascem em um anel em volta da praça.
+  humanSpawns: [{ x: -30, z: -30 }, { x: 30, z: -30 }, { x: -30, z: 30 }, { x: 30, z: 30 }],
+  crypt: { x: 0, z: 0 },
+  vampireSpawnOffset: { x: 12, z: 10 },
+
+  // As bases humanas são formadas pelo próprio ambiente: um anel orgânico de
+  // rochedos com uma única abertura. O jogador fecha a passagem com um Muro.
+  // As posições ficam num anel sobre a ilha inclinada; `facing` aponta a
+  // entrada para o centro do mapa.
+  refugeWalls: { thickness: 5, entranceWidth: 8, height: 5.5 },
+  refuges: [
+    { name: 'Clareira dos Pinheiros', x: 110, z: 86, width: 64, depth: 58, facing: 'west' },
+    { name: 'Refúgio da Pedreira', x: 29, z: 123, width: 64, depth: 58, facing: 'north' },
+    { name: 'Bosque da Lua', x: -69, z: 88, width: 64, depth: 58, facing: 'north' },
+    { name: 'Abrigo do Poente', x: -126, z: 2, width: 58, depth: 66, facing: 'east' },
+    { name: 'Clareira da Aurora', x: -110, z: -86, width: 58, depth: 66, facing: 'east' },
+    { name: 'Refúgio dos Corvos', x: -29, z: -123, width: 64, depth: 58, facing: 'south' },
+    { name: 'Vale das Cinzas', x: 69, z: -88, width: 64, depth: 58, facing: 'south' },
+    { name: 'Bosque da Névoa', x: 126, z: -2, width: 58, depth: 66, facing: 'west' },
+  ] as RefugeConfig[],
+
+  // Ilha inclinada: elipse girada com costa irregular, cercada de água.
+  // `rotation` em radianos gira o eixo maior; `bays` recortam enseadas.
+  coast: {
+    ru: 225, rv: 180, rotation: 0.66, noiseA: 0.07, noiseB: 0.05,
+    bays: [{ x: -80, z: -182, r: 28 }, { x: 175, z: 130, r: 26 }],
+  },
+  // Sem lagos nem rio: a única água é o mar em volta da ilha (a costa).
+  // Todo o interior é chão transitável (sem pontes).
+  lakes: [],
+  rivers: [],
+  // Vaus extras fixos (somados aos automáticos das trilhas).
+  bridges: [],
+  // Clareiras abertas no meio da floresta, boas para construir ou emboscar.
+  meadows: [
+    { x: -40, z: -150, rx: 22, rz: 16 },
+    { x: 80, z: 152, rx: 24, rz: 16 },
+    { x: -158, z: 78, rx: 20, rz: 26 },
+    { x: 150, z: -92, rx: 22, rz: 18 },
+  ],
+  // Relevo feito de pedra: cada formação vira um conjunto de pilhas do
+  // aglomerado rochoso (visual + colisão). O terreno fica plano.
+  // `rx`/`rz` dão o tamanho da base, `height` a altura e `count` quantas pilhas.
+  rockFormations: [
+    { x: -70, z: -70, rx: 42, rz: 32, height: 7, count: 22 },
+    { x: 62, z: 58, rx: 46, rz: 36, height: 8, count: 26 },
+    { x: -18, z: 150, rx: 38, rz: 30, height: 6, count: 16 },
+    { x: 22, z: -150, rx: 38, rz: 30, height: 6, count: 16 },
+    { x: 152, z: -52, rx: 34, rz: 26, height: 5, count: 14 },
+    { x: -152, z: 60, rx: 36, rz: 28, height: 5, count: 14 },
+    { x: -108, z: -156, rx: 32, rz: 26, height: 6, count: 14 },
+    { x: 116, z: 152, rx: 34, rz: 26, height: 6, count: 14 },
+  ],
+  resources: {
+    centralWoodX: [-22, 22], centralWoodZ: [-12, -6, 0, 6, 12],
+    centralGold: [{ x: -12, z: -19 }, { x: 12, z: -19 }, { x: -12, z: 19 }, { x: 12, z: 19 }],
+    forestNodeSpacing: 5.5, // Grade de árvores coletáveis; menor = floresta mais densa
+  },
+};
+
+// ---- Labirinto de Dédalo: denso, labiríntico e com refúgios únicos ----
+const LABYRINTH_MAP: MapPresetConfig = {
+  version: 6,
+  name: 'Labirinto de Dédalo',
+  description: 'Labirinto procedural de corredores finos, becos e salas, com refúgios únicos.',
+  scale: 0.8,
+  tiles: 280, tileSize: 2,
+  // Humanos nascem todos na clareira logo acima da cripta (lado -z), livres
+  // das paredes do labirinto. Quatro pontos = quatro vagas humanas.
+  humanSpawns: [{ x: -16, z: -20 }, { x: 16, z: -20 }, { x: -16, z: -30 }, { x: 16, z: -30 }],
+  crypt: { x: 0, z: 0 },
+  vampireSpawnOffset: { x: 14, z: 12 },
+  refugeWalls: { thickness: 5, entranceWidth: 6, height: 6 },
+  // Refúgios com câmaras de tamanhos diferentes (em células da grade). Cada um
+  // tem UMA entrada, onde o Muro fecha a passagem. `roomWidth`/`roomDepth`
+  // valem só neste mapa-labirinto. Tamanho máximo 3×3 células (48), mínimo
+  // 2×2 (32), o mesmo menor de antes; nenhum fica pequeno demais.
+  refuges: [
+    { name: 'Portão de Ferro', x: 139, z: 57, width: 44, depth: 40, facing: 'west', style: 'gate', variant: 1, entranceWidth: 6, wallThickness: 5, wallHeight: 6, approach: 18, roomWidth: 3, roomDepth: 3 },
+    { name: 'Muralha Quebrada', x: 57, z: 139, width: 40, depth: 44, facing: 'north', style: 'jagged', variant: 3, entranceWidth: 6, wallThickness: 5, wallHeight: 6, roomWidth: 2, roomDepth: 3 },
+    { name: 'Bosque Serpentino', x: -57, z: 139, width: 44, depth: 44, facing: 'north', style: 'bastion', variant: 0, entranceWidth: 6, wallThickness: 5, wallHeight: 6, approach: 14, roomWidth: 3, roomDepth: 2 },
+    { name: 'Boca do Poço', x: -139, z: 57, width: 40, depth: 46, facing: 'east', style: 'canyon', variant: 2, entranceWidth: 6, wallThickness: 5, wallHeight: 6, roomWidth: 3, roomDepth: 3 },
+    { name: 'Anel da Aurora', x: -139, z: -57, width: 44, depth: 44, facing: 'east', style: 'ring', variant: 1, entranceWidth: 6, wallThickness: 5, wallHeight: 6, roomWidth: 2, roomDepth: 3 },
+    { name: 'Corvos Engaiolados', x: -57, z: -139, width: 40, depth: 44, facing: 'south', style: 'gate', variant: 2, entranceWidth: 6, wallThickness: 5, wallHeight: 6, approach: 16, roomWidth: 3, roomDepth: 2 },
+    { name: 'Cinzas Gêmeas', x: 57, z: -139, width: 44, depth: 40, facing: 'south', style: 'jagged', variant: 0, entranceWidth: 6, wallThickness: 5, wallHeight: 6, roomWidth: 2, roomDepth: 2 },
+    { name: 'Névoa Profunda', x: 139, z: -57, width: 42, depth: 46, facing: 'west', style: 'ring', variant: 3, entranceWidth: 6, wallThickness: 5, wallHeight: 6, roomWidth: 2, roomDepth: 2 },
+  ] as RefugeConfig[],
+  // Terra firme cobrindo todo o mundo quadrado (sem água dentro do labirinto).
+  coast: {
+    ru: 430, rv: 420, rotation: 0.5, noiseA: 0.04, noiseB: 0.03,
+    bays: [],
+  },
+  lakes: [],
+  rivers: [],
+  bridges: [],
+  // Poucas clareiras (os corredores do labirinto já abrem o terreno).
+  meadows: [
+    { x: 0, z: 180, rx: 18, rz: 14 },
+    { x: 180, z: 0, rx: 14, rz: 18 },
+    { x: 0, z: -180, rx: 18, rz: 14 },
+    { x: -180, z: 0, rx: 14, rz: 18 },
+  ],
+  rockFormations: [],
+  // Labirinto procedural: grade de corredores finos com becos e loops.
+  // O labirinto ocupa o miolo do mundo, deixando uma margem de terreno em
+  // volta: assim a câmera consegue trazer os cantos andáveis para a área
+  // visível (fora do HUD) sem mostrar o vazio.
+  maze: {
+    cell: 20,
+    thickness: 6,
+    height: 6,
+    radius: 150,
+    braid: 0.35,
+    seed: 1337,
+    centerRadius: 40,
+    entranceCorridor: 0,
+  },
+  // Sem colchão de pedras: câmaras grandes espalhariam pedras até a praça.
+  baseRocksScale: 0,
+  // Floresta densa cobrindo o mundo (menos as pedras dos refúgios/labirinto).
+  resources: {
+    centralWoodX: [-30, -18, 18, 30],
+    centralWoodZ: [-16, -8, 0, 8, 16],
+    centralGold: [
+      { x: -16, z: -24 }, { x: 16, z: -24 }, { x: -16, z: 24 }, { x: 16, z: 24 },
+      { x: -46, z: 0 }, { x: 46, z: 0 },
+    ],
+    forestNodeSpacing: 2.5,
+  },
+};
+
+export const MAP_PRESETS: Record<MapPresetId, MapPresetConfig> = {
+  classic: CLASSIC_MAP,
+  labyrinth: LABYRINTH_MAP,
+};
+export const DEFAULT_MAP_ID: MapPresetId = 'classic';
 
 export const GAME_CONFIG = {
   match: {
@@ -152,6 +399,7 @@ export const GAME_CONFIG = {
     elevation: 0.75, depth: 0.62,
     panSpeed: 60,
     smoothing: 6,
+    heightSmoothing: 8,     // Suaviza a altura do alvo ao passar por platôs degraus
     fov: 50,
   },
   admin: { defaultResourceAmount: 1000, maxResourceAmount: 100000 },
@@ -171,73 +419,10 @@ export const GAME_CONFIG = {
     recruitSpawnExtraRadius: 5,
   },
 
-  map: {
-    version: 5,
-    // Escala global do mundo: todas as coordenadas abaixo estão em "espaço de
-    // projeto" (mundo 480). `scale` reduz o mundo e as posições proporcionalmente.
-    // 1 = 480×480; 0.55 ≈ 264×264. Menor = mapa mais apertado e denso.
-    scale: 0.55,
-    tiles: 240, tileSize: 2, // Mundo de projeto: 480 × 480 unidades
-    // Um ponto para cada vaga humana. Adicionar/remover pontos altera as vagas da sala.
-    // Com a cripta no centro, os humanos nascem em um anel em volta da praça.
-    humanSpawns: [{ x: -30, z: -30 }, { x: 30, z: -30 }, { x: -30, z: 30 }, { x: 30, z: 30 }],
-    crypt: { x: 0, z: 0 },
-    vampireSpawnOffset: { x: 12, z: 10 },
-
-    // As bases humanas são formadas pelo próprio ambiente: um anel orgânico de
-    // rochedos com uma única abertura. O jogador fecha a passagem com um Muro.
-    // As posições ficam num anel sobre a ilha inclinada; `facing` aponta a
-    // entrada para o centro do mapa.
-    refugeWalls: { thickness: 5, entranceWidth: 8, height: 5.5 },
-    refuges: [
-      { name: 'Clareira dos Pinheiros', x: 110, z: 86, width: 64, depth: 58, facing: 'west' },
-      { name: 'Refúgio da Pedreira', x: 29, z: 123, width: 64, depth: 58, facing: 'north' },
-      { name: 'Bosque da Lua', x: -69, z: 88, width: 64, depth: 58, facing: 'north' },
-      { name: 'Abrigo do Poente', x: -126, z: 2, width: 58, depth: 66, facing: 'east' },
-      { name: 'Clareira da Aurora', x: -110, z: -86, width: 58, depth: 66, facing: 'east' },
-      { name: 'Refúgio dos Corvos', x: -29, z: -123, width: 64, depth: 58, facing: 'south' },
-      { name: 'Vale das Cinzas', x: 69, z: -88, width: 64, depth: 58, facing: 'south' },
-      { name: 'Bosque da Névoa', x: 126, z: -2, width: 58, depth: 66, facing: 'west' },
-    ] as RefugeConfig[],
-
-    // Ilha inclinada: elipse girada com costa irregular, cercada de água.
-    // `rotation` em radianos gira o eixo maior; `bays` recortam enseadas.
-    coast: {
-      ru: 225, rv: 180, rotation: 0.66, noiseA: 0.07, noiseB: 0.05,
-      bays: [{ x: -80, z: -182, r: 28 }, { x: 175, z: 130, r: 26 }],
-    },
-    // Sem lagos nem rio: a única água é o mar em volta da ilha (a costa).
-    // Todo o interior é chão transitável (sem pontes).
-    lakes: [] as Array<{ x: number; z: number; rx: number; rz: number }>,
-    rivers: [],
-    // Vaus extras fixos (somados aos automáticos das trilhas).
-    bridges: [],
-    // Clareiras abertas no meio da floresta, boas para construir ou emboscar.
-    meadows: [
-      { x: -40, z: -150, rx: 22, rz: 16 },
-      { x: 80, z: 152, rx: 24, rz: 16 },
-      { x: -158, z: 78, rx: 20, rz: 26 },
-      { x: 150, z: -92, rx: 22, rz: 18 },
-    ],
-    // Relevo feito de pedra: cada formação vira um conjunto de pilhas do
-    // aglomerado rochoso (visual + colisão). O terreno fica plano.
-    // `rx`/`rz` dão o tamanho da base, `height` a altura e `count` quantas pilhas.
-    rockFormations: [
-      { x: -70, z: -70, rx: 42, rz: 32, height: 7, count: 22 },
-      { x: 62, z: 58, rx: 46, rz: 36, height: 8, count: 26 },
-      { x: -18, z: 150, rx: 38, rz: 30, height: 6, count: 16 },
-      { x: 22, z: -150, rx: 38, rz: 30, height: 6, count: 16 },
-      { x: 152, z: -52, rx: 34, rz: 26, height: 5, count: 14 },
-      { x: -152, z: 60, rx: 36, rz: 28, height: 5, count: 14 },
-      { x: -108, z: -156, rx: 32, rz: 26, height: 6, count: 14 },
-      { x: 116, z: 152, rx: 34, rz: 26, height: 6, count: 14 },
-    ],
-    resources: {
-      centralWoodX: [-22, 22], centralWoodZ: [-12, -6, 0, 6, 12],
-      centralGold: [{ x: -12, z: -19 }, { x: 12, z: -19 }, { x: -12, z: 19 }, { x: 12, z: 19 }],
-      forestNodeSpacing: 5.5, // Grade de árvores coletáveis; menor = floresta mais densa
-    },
-  },
+  // Presets de mapa selecionáveis no lobby (ver MAP_PRESETS acima).
+  map: CLASSIC_MAP,
+  mapPresets: MAP_PRESETS,
+  defaultMapId: DEFAULT_MAP_ID,
 
   // ==========================================================================
   // ESPECIFICAÇÃO "HUMANO E VAMPIRO"

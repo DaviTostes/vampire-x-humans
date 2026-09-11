@@ -5,21 +5,11 @@ import {
   MAX_HUMANS,
   BUILDING_SIZE,
   TOWER,
-  COMPOUNDS,
-  compoundEntrance,
-  BRIDGES,
   BRIDGE_Y,
-  distanceToTrails,
-  isBridgeAtWorld,
-  isLandAt,
-  isWaterAtWorld,
-  isForestAt,
-  RESOURCE_PLACEMENTS,
   INTERACTION,
   TERRAIN_MAX_SLOPE,
   canPlaceBuilding,
   type BuildKind,
-  CRYPT_POSITION,
   VAMPIRE,
   vampireEffectiveCooldown,
   vampireItemBonuses,
@@ -27,14 +17,18 @@ import {
   SPEC_BLOOD_PER_DAMAGE,
   type BuildingKind,
   WORLD,
-  generateMap,
+  getMapModel,
+  getActiveMapId,
   type GameMap,
+  type MapModel,
   type Snapshot,
 } from '@vampire/shared';
 import { createBuildingModel, createUnitModel, createResourceModel, orientEntranceWall, createPineCanopyGeometry, createMountainGeometry, createRockGeometry, createLanternModel } from './models.js';
 import { RTS_CAMERA } from './camera.js';
 import { UnitReveal } from './unit-reveal.js';
 import { assetRegistry, updateExternalAnimation } from './assets/asset-registry.js';
+import { t } from './i18n.js';
+import { resourceImage, resourceIconUrl, type ResourceKind } from './resource-icons.js';
 
 const WORLD_SIZE = WORLD.tiles * WORLD.tileSize;
 
@@ -74,15 +68,20 @@ const VAMPIRE_VISION: VisionProfile = {
   core: 0.28,
 };
 // A visão depende da fase: humanos enxergam melhor de dia; o vampiro, à noite.
+// O vampiro é o caçador noturno: à noite seu alcance cresce bem mais que o dos
+// humanos e de dia ele fica bem limitado (reforça a janela de caça).
 const PHASE_VISION = {
   human: { day: 1.35, night: 0.8 },
-  vampire: { day: 0.6, night: 1.2 },
+  vampire: { day: 0.5, night: 2.2 },
 } as const;
 // Teto de fontes de visão no shader (loop em tela cheia). Fontes maiores têm
 // prioridade quando o time tem muitas unidades.
 const MAX_VISION_SOURCES = 32;
 const FOG_DAY_STRENGTH = 0.5;
 const FOG_NIGHT_STRENGTH = 0.68;
+// À noite o vampiro enxerga no escuro: fora do alcance de visão dele a sombra
+// de guerra fica bem mais leve do que para os humanos.
+const FOG_VAMPIRE_NIGHT_STRENGTH = 0.42;
 
 function teamOf(owner: number): 'human' | 'vampire' | 'neutral' {
   if (owner < 0) return 'neutral';
@@ -100,7 +99,7 @@ const GROUND_TILE_URLS = {
 } as const;
 
 const GROUND_TILE_WORLD = 7;    // Unidades de mundo por repetição da textura base.
-const GROUND_PATH_HALF = 2.7;   // Meia-largura de pedra do caminho.
+const GROUND_PATH_HALF = 2.2;   // Meia-largura de pedra do caminho (casa com o vão dos refúgios).
 const GROUND_EDGE_HALF = 3.4;   // Meia-largura visível da transição grama↔pedra.
 const GROUND_FIELD_MAX = 18;    // Maior distância codificada no campo de trilhas.
 
@@ -123,6 +122,7 @@ function loadGroundTexture(path: string, clampVertical: boolean): THREE.Texture 
  * texel. É a máscara que decide onde há pedra e a orientação da transição.
  */
 function createPathField(map: GameMap): THREE.DataTexture {
+  const model = getMapModel(map.id);
   const res = map.tiles * 2;
   const cell = WORLD_SIZE / res;
   const data = new Uint8Array(res * res * 4);
@@ -130,7 +130,7 @@ function createPathField(map: GameMap): THREE.DataTexture {
     for (let tx = 0; tx < res; tx++) {
       const wx = -WORLD.half + (tx + 0.5) * cell;
       const wz = -WORLD.half + (tz + 0.5) * cell;
-      const d = Math.min(distanceToTrails(wx, wz), GROUND_FIELD_MAX) / GROUND_FIELD_MAX;
+      const d = Math.min(model.distanceToTrails(wx, wz), GROUND_FIELD_MAX) / GROUND_FIELD_MAX;
       const v = Math.round(d * 255);
       const i = (tz * res + tx) * 4;
       data[i] = v; data[i + 1] = v; data[i + 2] = v; data[i + 3] = 255;
@@ -218,7 +218,7 @@ function createGroundMaterial(field: THREE.DataTexture): THREE.MeshStandardMater
 
 // ---------- Piso da cripta: praça de pedra texturizada ----------
 // O piso usa um tile de pedra do spawn com alpha radial suave, dissolvendo na grama.
-const CRYPT_DECAL_RADIUS = 16;
+const CRYPT_DECAL_RADIUS = 10;
 const CRYPT_FLOOR_URL = 'assets/environment/ground/ground_crypt.jpg';
 const CRYPT_FLOOR_TILE = 7; // unidades de mundo por repetição do tile de pedra.
 
@@ -256,6 +256,7 @@ export class GameScene {
   camera: THREE.PerspectiveCamera;
   renderer: THREE.WebGLRenderer;
   map: GameMap;
+  model: MapModel;
 
   private container: HTMLElement;
   private unitMeshes = new Map<number, THREE.Group>();
@@ -327,9 +328,10 @@ export class GameScene {
   // Vida do snapshot anterior (unidades e prédios) para detectar dano recebido.
   private prevHp = new Map<number, number>();
 
-  constructor(container: HTMLElement, seed: number) {
+  constructor(container: HTMLElement, seed: number, mapId = getActiveMapId()) {
     this.container = container;
-    this.map = generateMap(seed);
+    this.model = getMapModel(mapId);
+    this.map = this.model.generateMap();
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.setSize(container.clientWidth, container.clientHeight);
@@ -425,7 +427,7 @@ export class GameScene {
         else tmp.copy(tWhite).lerp(tDry, Math.max(0, (h - 0.2) * 1.6));
         // Clareiras suaves na própria terra, sem pisos quadrados destacados.
         const wx = tx * WORLD.tileSize - WORLD.half, wz = tz * WORLD.tileSize - WORLD.half;
-        for (const c of COMPOUNDS) {
+        for (const c of this.model.compounds) {
           const d = Math.hypot((wx - c.x) / (c.width * 0.55), (wz - c.z) / (c.depth * 0.55));
           if (d < 1.3) tmp.lerp(tMeadow, Math.max(0, 1 - d / 1.3) * 0.35);
         }
@@ -459,6 +461,14 @@ export class GameScene {
     water.position.y = 2.4;
     water.receiveShadow = true;
     this.scene.add(water);
+
+    // "Saia" de chão ao redor do mapa: chegando perto da borda, o horizonte
+    // mostra terreno (mesmo material de grama) em vez do vazio.
+    const skirtGeo = new THREE.PlaneGeometry(WORLD_SIZE * 4, WORLD_SIZE * 4);
+    skirtGeo.rotateX(-Math.PI / 2);
+    const skirt = new THREE.Mesh(skirtGeo, new THREE.MeshLambertMaterial({ color: 0x2f4a22 }));
+    skirt.position.y = 2.25;
+    this.scene.add(skirt);
   }
 
   /**
@@ -548,8 +558,8 @@ export class GameScene {
 
   private buildFixedMap() {
     // Um lampião baixo sinaliza a passagem entre as encostas.
-    for (const c of COMPOUNDS) {
-      const door = compoundEntrance(c);
+    for (const c of this.model.compounds) {
+      const door = this.model.compoundEntrance(c);
       const horizontal = c.facing === 'north' || c.facing === 'south';
       const x = door.x + (horizontal ? 2.8 : 0), z = door.z + (horizontal ? 0 : 2.8);
       const lamp = createLanternModel();
@@ -604,18 +614,18 @@ export class GameScene {
     // Pedras soltas espalhadas pelo chão plano, no mesmo InstancedMesh.
     if (stone) {
       const scatter = new THREE.Object3D();
-      const step = 11, half = WORLD.half - 6;
+      const step = 11, half = WORLD.half - 28;
       for (let gx = -half; gx <= half; gx += step) {
         for (let gz = -half; gz <= half; gz += step) {
           const h = Math.abs(Math.sin(gx * 12.9898 + gz * 78.233) * 43758.5453) % 1;
           if (h > 0.5) continue;
           const x = gx + (h * 2 - 1) * step * 0.38;
           const z = gz + (((h * 7) % 1) * 2 - 1) * step * 0.38;
-          if (!isLandAt(x, z) || isWaterAtWorld(x, z)) continue;
-          if (distanceToTrails(x, z) < 3.5) continue;
+          if (!this.model.isLandAt(x, z) || this.model.isWaterAtWorld(x, z)) continue;
+          if (this.model.distanceToTrails(x, z) < 3.5) continue;
           if (Math.hypot(x, z) < 12) continue;
-          if (Math.hypot(x - CRYPT_POSITION.x, z - CRYPT_POSITION.z) < 15) continue;
-          if (COMPOUNDS.some(c => Math.abs(x - c.x) < c.width / 2 + 3 && Math.abs(z - c.z) < c.depth / 2 + 3)) continue;
+          if (Math.hypot(x - this.model.cryptPosition.x, z - this.model.cryptPosition.z) < 15) continue;
+          if (this.model.compounds.some(c => Math.abs(x - c.x) < c.width / 2 + 3 && Math.abs(z - c.z) < c.depth / 2 + 3)) continue;
           const s = 0.5 + h * 0.7;
           scatter.position.set(x, this.heightAt(x, z) - 0.2, z);
           scatter.rotation.set(0, h * Math.PI * 2, 0);
@@ -648,7 +658,7 @@ export class GameScene {
     // Pontes sobre os rios.
     const plankMat = new THREE.MeshLambertMaterial({ color: '#6b5236' });
     const railMat = new THREE.MeshLambertMaterial({ color: '#4a3827' });
-    for (const b of BRIDGES) {
+    for (const b of this.model.bridges) {
       const horizontal = b.width >= b.depth;
       const deck = new THREE.Mesh(new THREE.BoxGeometry(b.width, 0.4, b.depth), plankMat);
       deck.position.set(b.x, BRIDGE_Y - 0.2, b.z);
@@ -684,7 +694,7 @@ export class GameScene {
     const drape = (geo: THREE.BufferGeometry, lift: number) => {
       const pos = geo.attributes.position as THREE.BufferAttribute;
       for (let i = 0; i < pos.count; i++) {
-        pos.setY(i, this.heightAt(CRYPT_POSITION.x + pos.getX(i), CRYPT_POSITION.z + pos.getZ(i)) + lift);
+        pos.setY(i, this.heightAt(this.model.cryptPosition.x + pos.getX(i), this.model.cryptPosition.z + pos.getZ(i)) + lift);
       }
       pos.needsUpdate = true;
       geo.computeVertexNormals();
@@ -698,7 +708,7 @@ export class GameScene {
       mat.polygonOffsetFactor = factor;
       mat.polygonOffsetUnits = factor * 2;
       const decal = new THREE.Mesh(geo, mat);
-      decal.position.set(CRYPT_POSITION.x, 0, CRYPT_POSITION.z);
+      decal.position.set(this.model.cryptPosition.x, 0, this.model.cryptPosition.z);
       decal.renderOrder = order;
       this.scene.add(decal);
     };
@@ -707,7 +717,7 @@ export class GameScene {
 
   /** altura do terreno em coordenadas de mundo */
   heightAt(x: number, z: number): number {
-    if (isBridgeAtWorld(x, z)) return BRIDGE_Y;
+    if (this.model.isBridgeAtWorld(x, z)) return BRIDGE_Y;
     const n = this.map.tiles;
     const gx = THREE.MathUtils.clamp((x + WORLD.half) / WORLD.tileSize, 0, n - 0.0001);
     const gz = THREE.MathUtils.clamp((z + WORLD.half) / WORLD.tileSize, 0, n - 0.0001);
@@ -979,7 +989,7 @@ export class GameScene {
       g.userData.level = b.level;
       g.userData.goldProduced = b.goldProduced ?? 0;
       g.userData.recruiting = !!b.recruitment;
-      if (visible && recruited) this.floatingText('Peão pronto', g.position.clone().add(new THREE.Vector3(0, 5, 0)), '#c0e4a7');
+      if (visible && recruited) this.floatingText(t('Peão pronto'), g.position.clone().add(new THREE.Vector3(0, 5, 0)), '#c0e4a7');
       if (b.lastShot && b.lastShot.tick !== g.userData.lastShotTick) {
         if (g.userData.lastShotTick !== undefined || snap.tick - b.lastShot.tick <= 2) {
           if (visible) this.towerShotEffect(g, b.lastShot);
@@ -991,11 +1001,11 @@ export class GameScene {
         // O sangue da Cripta é informação do Vampiro.
         if (!isCrypt || teamOf(this.localOwner) === 'vampire') {
           this.productionEffect(g.position, goldDelta, isCrypt ? 'sangue' : 'ouro',
-            isCrypt ? '#ff8b8b' : '#ffe48b', isCrypt ? '#a51f30' : '#f8ca4f');
+            isCrypt ? '#ff8b8b' : '#ffe48b');
         }
       }
       if (visible && completed) {
-        this.floatingText('Obra concluída', g.position.clone().add(new THREE.Vector3(0, 5, 0)), '#c0e4a7');
+        this.floatingText(t('Obra concluída'), g.position.clone().add(new THREE.Vector3(0, 5, 0)), '#c0e4a7');
         this.dustEffect(g.position, '#bca77f');
       }
       g.scale.y = b.done ? 1 : Math.max(0.15, b.progress);
@@ -1172,7 +1182,7 @@ export class GameScene {
     // Células (3×3) ocupadas por nós de madeira, para não sobrepor a coleta.
     const cell = 2;
     const occupied = new Set<string>();
-    for (const n of RESOURCE_PLACEMENTS) {
+    for (const n of this.model.resourcePlacements) {
       const cx = Math.floor(n.x / cell), cz = Math.floor(n.z / cell);
       for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) occupied.add(`${cx + dx},${cz + dz}`);
     }
@@ -1185,9 +1195,9 @@ export class GameScene {
         const jx = (decorHash(gx * 0.7, gz * 1.3) - 0.5) * step * 0.9;
         const jz = (decorHash(gz * 1.1, gx * 0.5) - 0.5) * step * 0.9;
         const x = gx + jx, z = gz + jz;
-        if (!isForestAt(x, z)) continue;
+        if (!this.model.isForestAt(x, z)) continue;
         // Mantém a base do Vampiro (cripta e praça) livre de árvores decorativas.
-        if (Math.hypot(x - CRYPT_POSITION.x, z - CRYPT_POSITION.z) < CRYPT_DECAL_RADIUS + 10) continue;
+        if (Math.hypot(x - this.model.cryptPosition.x, z - this.model.cryptPosition.z) < CRYPT_DECAL_RADIUS + 10) continue;
         if (occupied.has(`${Math.floor(x / cell)},${Math.floor(z / cell)}`)) continue;
         if (obstacles.some(o => Math.abs(x - o.x) < o.width / 2 + 1.6 && Math.abs(z - o.z) < o.depth / 2 + 1.6)) continue;
         spots.push([x, z, decorHash(x, z), decorHash(z, x)]);
@@ -1552,8 +1562,8 @@ export class GameScene {
     this.addEffect(sprite, new THREE.Vector3(0, 1.8, 0), 1.8);
   }
 
-  /** Número flutuante de sangue com o ícone de gota (ganho de sangue). */
-  private bloodFloating(position: THREE.Vector3, amount: number, color = '#ff5b7a') {
+  /** Número flutuante de ganho com a ilustração do recurso (ouro/sangue). */
+  private resourceFloating(position: THREE.Vector3, amount: number, kind: ResourceKind, color: string) {
     const canvas = document.createElement('canvas');
     canvas.width = 512; canvas.height = 96;
     const ctx = canvas.getContext('2d')!;
@@ -1561,24 +1571,31 @@ export class GameScene {
     ctx.font = 'bold 48px system-ui';
     const textW = ctx.measureText(text).width;
     const iconH = 56, gap = 14;
-    const startX = (canvas.width - (iconH * 0.66 + gap + textW)) / 2;
+    const image = resourceImage(kind);
+    const iconW = image ? iconH : iconH * 0.66;
+    const startX = (canvas.width - (iconW + gap + textW)) / 2;
     const cy = canvas.height / 2;
-    const cx = startX + iconH * 0.33;
-    const grad = ctx.createLinearGradient(cx, cy - iconH / 2, cx, cy + iconH / 2);
-    grad.addColorStop(0, '#ffb3c4');
-    grad.addColorStop(1, '#b3122f');
-    ctx.fillStyle = grad;
-    ctx.beginPath();
-    ctx.moveTo(cx, cy - iconH / 2);
-    ctx.bezierCurveTo(cx + iconH * 0.44, cy - iconH * 0.02, cx + iconH * 0.34, cy + iconH / 2, cx, cy + iconH / 2);
-    ctx.bezierCurveTo(cx - iconH * 0.34, cy + iconH / 2, cx - iconH * 0.44, cy - iconH * 0.02, cx, cy - iconH / 2);
-    ctx.closePath();
-    ctx.fill();
-    ctx.fillStyle = 'rgba(255,255,255,0.55)';
-    ctx.beginPath();
-    ctx.ellipse(cx - iconH * 0.1, cy + iconH * 0.1, iconH * 0.06, iconH * 0.12, -0.35, 0, Math.PI * 2);
-    ctx.fill();
-    const tx = startX + iconH * 0.66 + gap;
+    if (image) {
+      ctx.drawImage(image, startX, cy - iconH / 2, iconH, iconH);
+    } else if (kind === 'blood') {
+      // Fallback vetorial (gota) enquanto a imagem não carregou.
+      const cx = startX + iconH * 0.33;
+      const grad = ctx.createLinearGradient(cx, cy - iconH / 2, cx, cy + iconH / 2);
+      grad.addColorStop(0, '#ffb3c4');
+      grad.addColorStop(1, '#b3122f');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy - iconH / 2);
+      ctx.bezierCurveTo(cx + iconH * 0.44, cy - iconH * 0.02, cx + iconH * 0.34, cy + iconH / 2, cx, cy + iconH / 2);
+      ctx.bezierCurveTo(cx - iconH * 0.34, cy + iconH / 2, cx - iconH * 0.44, cy - iconH * 0.02, cx, cy - iconH / 2);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.55)';
+      ctx.beginPath();
+      ctx.ellipse(cx - iconH * 0.1, cy + iconH * 0.1, iconH * 0.06, iconH * 0.12, -0.35, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    const tx = startX + iconW + gap;
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
     ctx.lineWidth = 7; ctx.strokeStyle = '#111821';
@@ -1593,18 +1610,17 @@ export class GameScene {
     this.addEffect(sprite, new THREE.Vector3(0, 1.8, 0), 1.8);
   }
 
-  private productionEffect(position: THREE.Vector3, amount: number, label = 'ouro', textColor = '#ffe48b', coinColor = '#f8ca4f') {
+  /** Número flutuante de sangue (ganho de sangue). */
+  private bloodFloating(position: THREE.Vector3, amount: number, color = '#ff5b7a') {
+    this.resourceFloating(position, amount, 'blood', color);
+  }
+
+  private productionEffect(position: THREE.Vector3, amount: number, label = 'ouro', textColor = '#ffe48b') {
     if (label === 'sangue') {
       this.bloodFloating(position.clone().add(new THREE.Vector3(0, 12, 0)), amount);
       return;
     }
-    this.floatingText(`+${amount} ${label}`, position.clone().add(new THREE.Vector3(0, 8, 0)), textColor);
-    for (let i = 0; i < Math.min(3, amount + 1); i++) {
-      const coin = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.08, 12), new THREE.MeshBasicMaterial({ color: coinColor, transparent: true }));
-      coin.position.copy(position).add(new THREE.Vector3((i - 1) * 0.6, 7, 0));
-      coin.rotation.x = Math.PI / 2;
-      this.addEffect(coin, new THREE.Vector3((i - 1) * 0.4, 2 + i * 0.2, 0), 1.5, true);
-    }
+    this.resourceFloating(position.clone().add(new THREE.Vector3(0, 8, 0)), amount, 'gold', textColor);
   }
 
   private dustEffect(position: THREE.Vector3, color: string) {
@@ -1804,11 +1820,11 @@ export class GameScene {
     this.setAura(g, 'channelingTeleport', 0x5aa9ff, !!flags.channelingTeleport, 1.7);
     const pos = g.position.clone();
     const head = pos.clone().add(new THREE.Vector3(0, 3.1 * scale, 0));
-    if (started('fortify')) { this.ringPulse(pos.x, pos.z, 0xffd76a, 1.2 * scale, 2.6, 0.7); this.floatingText('Fortificado', head, '#ffe7a6'); }
-    if (started('entangle')) { this.sparkBurst(pos, 0x7ee07e, 14, 3.5, 0.9); this.floatingText('Enredado', head, '#b7f5a8'); }
-    if (started('silenced')) { this.sparkBurst(pos, 0xc78aff, 14, 3.5, 0.9); this.floatingText('Silenciado', head, '#dcbcff'); }
-    if (started('batForm')) { this.sparkBurst(pos, 0x7a4dff, 20, 4.2, 1); this.floatingText('Forma de Morcego', head, '#c9b6ff'); }
-    if (started('channelingTeleport')) { this.ringPulse(pos.x, pos.z, 0x5aa9ff, 1.1, 2.4, 0.8); this.floatingText('Canalizando…', head, '#bcdcff'); }
+    if (started('fortify')) { this.ringPulse(pos.x, pos.z, 0xffd76a, 1.2 * scale, 2.6, 0.7); this.floatingText(t('Fortificado'), head, '#ffe7a6'); }
+    if (started('entangle')) { this.sparkBurst(pos, 0x7ee07e, 14, 3.5, 0.9); this.floatingText(t('Enredado'), head, '#b7f5a8'); }
+    if (started('silenced')) { this.sparkBurst(pos, 0xc78aff, 14, 3.5, 0.9); this.floatingText(t('Silenciado'), head, '#dcbcff'); }
+    if (started('batForm')) { this.sparkBurst(pos, 0x7a4dff, 20, 4.2, 1); this.floatingText(t('Forma de Morcego'), head, '#c9b6ff'); }
+    if (started('channelingTeleport')) { this.ringPulse(pos.x, pos.z, 0x5aa9ff, 1.1, 2.4, 0.8); this.floatingText(t('Canalizando…'), head, '#bcdcff'); }
     g.userData.statusFlags = flags;
   }
 
@@ -1849,7 +1865,7 @@ export class GameScene {
       this.prevRevealKey = key;
       this.revealLabelSecond = -1;
       this.ringPulse(r.x, r.z, 0x9fd0ff, r.radius * 0.15, 8, 1);
-      this.floatingText('Revelar Área', new THREE.Vector3(r.x, this.heightAt(r.x, r.z) + 6, r.z), '#bfe4ff');
+      this.floatingText(t('Revelar Área'), new THREE.Vector3(r.x, this.heightAt(r.x, r.z) + 6, r.z), '#bfe4ff');
     }
     // Contagem regressiva legível enquanto a área fica revelada.
     const second = Math.ceil(r.remaining);
@@ -2220,7 +2236,11 @@ export class GameScene {
     }
     this.fog.color.copy(sky);
     this.scene.background = sky;
-    this.fogUniforms.uFogStrength.value = phase === 'night' ? FOG_NIGHT_STRENGTH : FOG_DAY_STRENGTH;
+    // À noite o vampiro vê melhor no escuro: sombra de guerra mais leve para ele.
+    const vampireAtNight = phase === 'night' && teamOf(this.localOwner) === 'vampire';
+    this.fogUniforms.uFogStrength.value = phase === 'night'
+      ? vampireAtNight ? FOG_VAMPIRE_NIGHT_STRENGTH : FOG_NIGHT_STRENGTH
+      : FOG_DAY_STRENGTH;
 
     // tochas piscam à noite
     if (phase === 'night' && this.torches.length === 0) {
@@ -2262,18 +2282,13 @@ export class GameScene {
         if (o.userData.pick) return o.userData.pick;
       }
     }
-    // Pequena tolerância em pixels, inclusive sob árvores e estruturas.
-    const rect = this.renderer.domElement.getBoundingClientRect();
-    let nearest = 10;
-    let unitId: number | undefined;
-    for (const [id, g] of this.unitMeshes) {
-      if (!g.visible) continue;
-      const p = this.unitScreenPosition(id)!;
-      if (p.z < -1 || p.z > 1) continue;
-      const d = Math.hypot((p.x - nx) * rect.width / 2, (p.y - ny) * rect.height / 2);
-      if (d < nearest) { nearest = d; unitId = id; }
-    }
+    // Tolerância em pixels igual à do retículo de alvo (unitUnderCursor): se o
+    // cursor marcou uma unidade, o clique deve acertá-la mesmo que a geometria
+    // esteja escondida por uma copa, tronco ou estrutura.
+    const unitId = this.unitUnderCursor(nx, ny);
     if (unitId !== undefined) return { unitId };
+
+    const rect = this.renderer.domElement.getBoundingClientRect();
     // Entre estruturas e recursos, conserva a ordem de profundidade.
     const hits = this.raycaster.intersectObjects([
       ...[...this.buildingMeshes.values()].filter(g => g.visible), ...this.nodeMeshes.values(),
@@ -2281,23 +2296,46 @@ export class GameScene {
       ...this.mapOccluders, this.terrain,
     ], true);
     const hit = hits[0];
+    let hitPick: { unitId?: number; nodeId?: number; buildingId?: number } | undefined;
+    let woodNodeId: number | undefined;
     if (hit) {
       // Árvores de madeira são instanciadas: instanceId → nó.
       const ids = (hit.object.userData as { woodNodeIds?: number[] }).woodNodeIds;
       if (ids && hit.instanceId !== undefined) {
-        const nodeId = ids[hit.instanceId];
-        if (nodeId !== undefined) return { nodeId };
-      }
-      if (hit.object !== this.terrain) {
+        woodNodeId = ids[hit.instanceId];
+      } else if (hit.object !== this.terrain) {
         for (let o: THREE.Object3D | null = hit.object; o; o = o.parent) {
-          if (o.userData.pick) return o.userData.pick;
+          if (o.userData.pick) { hitPick = o.userData.pick; break; }
         }
       }
     }
-    // Muros e estruturas finas/vasadas são difíceis de acertar no pixel: se o
-    // raio caiu no chão, escolhe o prédio mais próximo na tela dentro da folga.
-    const buildingId = this.buildingAtScreen(nx, ny, rect);
-    return buildingId === undefined ? {} : { buildingId };
+    // Muros e estruturas finas/vasadas são difíceis de acertar no pixel: escolhe
+    // o prédio mais próximo na tela dentro da folga; se não houver nenhum perto
+    // do centro projetado (construções grandes, como a Cripta), usa a área do
+    // prédio no mundo sob o clique. A construção vence a árvore do raio: sob
+    // uma copa, clicar na edificação não deve virar coleta de madeira.
+    const groundPoint = hits.find((h) => h.object === this.terrain)?.point;
+    const buildingId = hitPick?.buildingId
+      ?? this.buildingAtScreen(nx, ny, rect)
+      ?? (groundPoint ? this.buildingAtWorld(groundPoint.x, groundPoint.z) : undefined);
+    if (buildingId !== undefined) return { buildingId };
+    if (woodNodeId !== undefined) return { nodeId: woodNodeId };
+    return hitPick ?? {};
+  }
+
+  /** Prédio (visível) cuja área no mundo contém ou beira o ponto clicado. */
+  private buildingAtWorld(x: number, z: number): number | undefined {
+    let nearest = 2 * 2;
+    let found: number | undefined;
+    for (const [id, g] of this.buildingMeshes) {
+      if (!g.visible) continue;
+      const half = (BUILDING_SIZE[g.userData.kind as BuildKind] ?? 6) * 0.5 + 2;
+      const dx = Math.max(0, Math.abs(x - g.position.x) - half);
+      const dz = Math.max(0, Math.abs(z - g.position.z) - half);
+      const d2 = dx * dx + dz * dz;
+      if (d2 < nearest) { nearest = d2; found = id; }
+    }
+    return found;
   }
 
   /** Prédio (visível) mais próximo do cursor, para seleção tolerante. */

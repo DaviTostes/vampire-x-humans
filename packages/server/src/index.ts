@@ -15,6 +15,7 @@ import {
   chooseRole,
   setReady,
   setRoomDurations,
+  setRoomMap,
   startReason,
   broadcastLobby,
   lobbyInfo,
@@ -285,6 +286,15 @@ wss.on('connection', (ws) => {
       clientRoom.delete(ws);
       ws.send(JSON.stringify({ type: 'left' }));
       broadcastLobby(room);
+      return;
+    }
+    if (msg.type === 'map') {
+      const room = clientRoom.get(ws);
+      const client = room?.clients.find(c => c.ws === ws);
+      if (!room || !client) { error('Entre em uma sala primeiro'); return; }
+      const message = setRoomMap(room, client, msg.mapId);
+      if (message) error(message);
+      else broadcastLobby(room);
       return;
     }
     if (msg.type === 'settings') {

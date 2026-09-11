@@ -6,9 +6,13 @@ import { Net } from './net.js';
 import { Lobby } from './lobby.js';
 import { assetRegistry } from './assets/asset-registry.js';
 import { LoadingScreen } from './loading.js';
+import { startMatchMusic } from './music.js';
 import { installCursors } from './cursor.js';
+import { preloadResourceIcons } from './resource-icons.js';
+import { setActiveMapId } from '@vampire/shared';
 
 installCursors();
+preloadResourceIcons();
 
 const app = document.getElementById('app')!;
 const net = new Net();
@@ -31,7 +35,11 @@ const unsubscribe = net.subscribe(() => {
 void net.connect().then(() => { lobby.maybeRejoin(); }).catch(() => lobby.render());
 
 function startGame(net: Net) {
-  const scene = new GameScene(app, net.lobby!.seed);
+  // Música de fundo da partida (em loop).
+  startMatchMusic();
+  // O mapa escolhido no lobby define o mundo que a cena constrói.
+  setActiveMapId(net.lobby!.mapId);
+  const scene = new GameScene(app, net.lobby!.seed, net.lobby!.mapId);
   // Fog de guerra: esconde unidades inimigas fora da visão do time local.
   scene.setLocalPlayer(net.myId);
   // No teste solo o jogador controla os dois lados: o "dono ativo" segue a

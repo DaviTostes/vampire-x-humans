@@ -1,8 +1,8 @@
 // Tipos de estado, comandos e snapshots compartilhados entre server e client
 
-import type { BuildKind, VampireItemId, VampireSkillId, HumanAbilityId, VampireAbilityId, WorkerRole } from './constants.js';
+import type { BuildKind, VampireItemId, VampireSkillId, HumanAbilityId, VampireAbilityId, WorkerRole, MapPresetId } from './constants.js';
 
-export type { BuildKind, HumanAbilityId, VampireAbilityId, WorkerRole };
+export type { BuildKind, HumanAbilityId, VampireAbilityId, WorkerRole, MapPresetId };
 
 export type Role = 'human' | 'vampire';
 
@@ -105,6 +105,7 @@ export interface GameState {
   practice?: boolean;
   tick: number;
   time: number; // segundos desde o início
+  mapId: MapPresetId;
   phase: 'day' | 'night';
   phaseTime: number; // tempo restante da fase
   daySeconds: number; // duração configurada do dia
@@ -153,6 +154,7 @@ export interface Snapshot {
   practice?: boolean;
   tick: number;
   time: number;
+  mapId: MapPresetId;
   phase: 'day' | 'night';
   phaseTime: number;
   daySeconds: number;

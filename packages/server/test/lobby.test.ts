@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { WebSocket } from 'ws';
-import { createRoom, joinRoom, chooseRole, setReady, setRoomDurations, startRoom, startReason, stepRoom, leaveRoom, lobbyInfo, rooms } from '../src/rooms.js';
+import { createRoom, joinRoom, chooseRole, setReady, setRoomDurations, setRoomMap, startRoom, startReason, stepRoom, leaveRoom, lobbyInfo, rooms } from '../src/rooms.js';
 import { step, DAY_LENGTH_MIN, NIGHT_LENGTH_MAX } from '@vampire/shared';
 
 function join(room: ReturnType<typeof createRoom>, name: string) {
@@ -107,6 +107,21 @@ test('o anfitrião configura as durações do dia e da noite; convidados não', 
   assert.equal(startRoom(room, host.id), true);
   assert.equal(room.session!.state.daySeconds, 90);
   assert.equal(room.session!.state.nightSeconds, 300);
+});
+
+test('o anfitrião escolhe o mapa; convidados não e mapas inválidos são rejeitados', () => {
+  const room = createRoom();
+  const host = join(room, 'A');
+  const guest = join(room, 'B');
+  assert.equal(setRoomMap(room, guest, 'labyrinth'), 'Somente o anfitrião pode escolher o mapa');
+  assert.equal(setRoomMap(room, host, 'nao-existe' as never), 'Mapa inválido');
+  assert.equal(setRoomMap(room, host, 'labyrinth'), null);
+  assert.equal(lobbyInfo(room).mapId, 'labyrinth');
+  chooseRole(room, host, 'vampire'); chooseRole(room, guest, 'human');
+  setReady(room, host, true); setReady(room, guest, true);
+  assert.equal(startRoom(room, host.id), true);
+  assert.equal(room.session!.state.mapId, 'labyrinth');
+  assert.ok(room.session!.state.nodes.length > 0, 'mapa do labirinto tem recursos');
 });
 
 test('ao terminar a partida a sala volta ao lobby pronta para revanche', () => {

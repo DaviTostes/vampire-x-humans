@@ -1,7 +1,7 @@
 // Controles RTS: câmera, seleção, ordens, ghost de construção
 
 import * as THREE from 'three';
-import { BUILDING_SIZE, BUILD_COSTS, BUILDABLE, WORLD, VAMPIRE_PLAYER_ID, SPEC_ENTITY_LIMITS, HUMAN_ABILITIES, VAMPIRE_ABILITIES, isWaterAtWorld, canBuildKind, canPlaceBuilding, type BuildKind, type HumanAbilityId, type Snapshot, type VampireAbilityId } from '@vampire/shared';
+import { BUILDING_SIZE, BUILD_COSTS, BUILDABLE, WORLD, VAMPIRE_PLAYER_ID, SPEC_ENTITY_LIMITS, HUMAN_ABILITIES, VAMPIRE_ABILITIES, canBuildKind, canPlaceBuilding, type BuildKind, type HumanAbilityId, type Snapshot, type VampireAbilityId } from '@vampire/shared';
 import type { GameScene } from './scene.js';
 import type { Net } from './net.js';
 import { RTS_CAMERA } from './camera.js';
@@ -90,6 +90,30 @@ export class RtsControls {
 
   // ---------- câmera ----------
 
+  /**
+   * Limita o alvo da câmera à parte do mapa que ainda aparece na tela.
+   * Calcula a pegada visível no chão (por eixo) a partir do FOV/zoom, para a
+   * câmera chegar o mais perto possível da borda SEM mostrar o vazio.
+   */
+  private clampTarget() {
+    const dist = RTS_CAMERA.distance * this.zoom;
+    const vf = THREE.MathUtils.degToRad(RTS_CAMERA.fov) / 2;
+    const pitch = Math.atan(RTS_CAMERA.elevation / RTS_CAMERA.depth);
+    const h = dist * RTS_CAMERA.elevation;
+    const near = h / Math.tan(pitch + vf);
+    const farG = h / Math.tan(Math.max(0.02, pitch - vf));
+    const D = dist * RTS_CAMERA.depth;
+    const hf = Math.atan(Math.tan(vf) * this.scene.camera.aspect);
+    const half = WORLD.half;
+    const cap = half * 0.9;
+    // Margem de segurança de 12% para variações de relevo/aspecto.
+    const marginX = Math.min(cap, farG * Math.tan(hf) * 1.12);
+    const marginZback = Math.min(cap, farG - D); // lado oposto à câmera (topo)
+    const marginZfront = Math.min(cap, Math.max(0, D - near)); // lado da câmera (base)
+    this.camTarget.x = THREE.MathUtils.clamp(this.camTarget.x, -half + marginX, half - marginX);
+    this.camTarget.z = THREE.MathUtils.clamp(this.camTarget.z, -half + marginZback, half - marginZfront);
+  }
+
   private updateCamera(dt: number) {
     const speed = RTS_CAMERA.panSpeed * dt * this.zoom;
     const k = this.keys;
@@ -97,12 +121,13 @@ export class RtsControls {
     if (k.has('s') || k.has('arrowdown')) this.camTarget.z += speed;
     if (k.has('a') || k.has('arrowleft')) this.camTarget.x -= speed;
     if (k.has('d') || k.has('arrowright')) this.camTarget.x += speed;
-    const lim = WORLD.half - 1;
-    this.camTarget.x = THREE.MathUtils.clamp(this.camTarget.x, -lim, lim);
-    this.camTarget.z = THREE.MathUtils.clamp(this.camTarget.z, -lim, lim);
-
-    this.camTarget.y = this.scene.heightAt(this.camTarget.x, this.camTarget.z);
+    this.clampTarget();
     const dist = RTS_CAMERA.distance * this.zoom;
+
+    // A altura do alvo é suavizada: os platôs dos refúgios têm degraus, e
+    // seguir o terreno direto fazia a câmera pular ao cruzar a borda.
+    const groundY = this.scene.heightAt(this.camTarget.x, this.camTarget.z);
+    this.camTarget.y += (groundY - this.camTarget.y) * Math.min(1, dt * RTS_CAMERA.heightSmoothing);
     const cam = this.scene.camera;
     const desired = new THREE.Vector3(
       this.camTarget.x,
@@ -117,6 +142,18 @@ export class RtsControls {
 
   focusOn(x: number, z: number) {
     this.camTarget.set(x, this.scene.heightAt(x, z), z);
+    this.clampTarget();
+    this.camTarget.y = this.scene.heightAt(this.camTarget.x, this.camTarget.z);
+    // Encaixa a câmera na hora: sem "wobble" de girar o alvo antes da posição
+    // alcançar (o que dava a sensação de shake ao clicar no minimapa).
+    const dist = RTS_CAMERA.distance * this.zoom;
+    const cam = this.scene.camera;
+    cam.position.set(
+      this.camTarget.x,
+      this.camTarget.y + dist * RTS_CAMERA.elevation,
+      this.camTarget.z + dist * RTS_CAMERA.depth,
+    );
+    cam.lookAt(this.camTarget);
   }
 
   /** Seleciona e centraliza o personagem principal (tecla Espaço). */
@@ -241,7 +278,7 @@ export class RtsControls {
     if (this.vampireAbilityMode === 'revealArea') {
       const hit = this.scene.screenToGround(n.x, n.y);
       if (!hit) { this.scene.clearAbilityMarker(); return; }
-      const valid = !isWaterAtWorld(hit.x, hit.z);
+      const valid = !this.scene.model.isWaterAtWorld(hit.x, hit.z);
       this.scene.setAbilityMarker(hit.x, hit.z, VAMPIRE_ABILITIES.revealArea.radius ?? 30, valid ? 0x9fd0ff : 0xff5a5a);
       return;
     }
@@ -250,7 +287,7 @@ export class RtsControls {
       if (!hit) { this.scene.clearAbilityMarker(); return; }
       const hero = snap.units.find(u => u.owner === this.getMyId() && u.kind === 'worker' && u.hero);
       const range = HUMAN_ABILITIES.teleport.maxRange ?? 0;
-      const valid = !!hero && Math.hypot(hit.x - hero.x, hit.z - hero.z) <= range && !isWaterAtWorld(hit.x, hit.z);
+      const valid = !!hero && Math.hypot(hit.x - hero.x, hit.z - hero.z) <= range && !this.scene.model.isWaterAtWorld(hit.x, hit.z);
       this.scene.setAbilityMarker(hit.x, hit.z, 0, valid ? 0x6ad6ff : 0xff5a5a);
       return;
     }

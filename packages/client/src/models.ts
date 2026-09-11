@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { BUILDING_SIZE, COMPOUNDS, compoundEntrance, type BuildingKind } from '@vampire/shared';
+import { BUILDING_SIZE, activeMapModel, type BuildingKind } from '@vampire/shared';
 import { assetRegistry } from './assets/asset-registry.js';
 
 export const PLAYER_COLORS = ['#456a9b', '#934a45', '#537554', '#77608d'];
@@ -591,7 +591,8 @@ export function createBuildingModel(kind: BuildingKind, owner: number, done: boo
 }
 
 export function orientEntranceWall(g: THREE.Group, x: number, z: number) {
-  const compound = COMPOUNDS.find(c => { const p = compoundEntrance(c); return Math.hypot(x - p.x, z - p.z) < 3; });
+  const model = activeMapModel();
+  const compound = model.compounds.find(c => { const p = model.compoundEntrance(c); return Math.hypot(x - p.x, z - p.z) < 3; });
   if (compound?.facing === 'east' || compound?.facing === 'west') g.rotation.y = Math.PI / 2;
 }
 

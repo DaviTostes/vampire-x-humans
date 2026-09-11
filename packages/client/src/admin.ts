@@ -1,5 +1,7 @@
 import { GAME_CONFIG, type Snapshot } from '@vampire/shared';
 import type { Net } from './net.js';
+import { onLocaleChange, t } from './i18n.js';
+import { resourceIcon } from './resource-icons.js';
 
 export class AdminPanel {
   private el = document.createElement('details');
@@ -23,12 +25,7 @@ export class AdminPanel {
     document.head.appendChild(style);
     this.el.className = 'vxh-admin';
     this.el.hidden = true;
-    this.el.innerHTML = `<summary>Admin · teste solo</summary><div class="vxh-admin-content">
-      <small>Ferramentas disponíveis apenas no teste solo.</small>
-      <label for="admin-amount">Quantidade de recursos</label>
-      <input id="admin-amount" type="number" min="1" max="${GAME_CONFIG.admin.maxResourceAmount}" step="1" value="${GAME_CONFIG.admin.defaultResourceAmount}" required>
-      <div class="vxh-admin-actions"><button data-admin="gold">+ Ouro</button><button data-admin="wood">+ Madeira</button><button data-admin="blood">+ Sangue</button>
-      <button data-admin="day">Dia</button><button data-admin="night">Noite</button><button data-admin="heal">Curar unidades</button></div></div>`;
+    this.render();
     this.amount = this.el.querySelector('input')!;
     this.el.addEventListener('click', event => {
       const action = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-admin]')?.dataset.admin;
@@ -44,6 +41,21 @@ export class AdminPanel {
       else if (action === 'heal') net.command({ type: 'admin', action: 'heal' });
     });
     container.appendChild(this.el);
+    onLocaleChange(() => {
+      const value = this.amount?.value;
+      this.render();
+      this.amount = this.el.querySelector('input')!;
+      if (value) this.amount.value = value;
+    });
+  }
+
+  private render() {
+    this.el.innerHTML = `<summary>${t('Admin · teste solo')}</summary><div class="vxh-admin-content">
+      <small>${t('Ferramentas disponíveis apenas no teste solo.')}</small>
+      <label for="admin-amount">${t('Quantidade de recursos')}</label>
+      <input id="admin-amount" type="number" min="1" max="${GAME_CONFIG.admin.maxResourceAmount}" step="1" value="${GAME_CONFIG.admin.defaultResourceAmount}" required>
+      <div class="vxh-admin-actions"><button data-admin="gold">${resourceIcon('gold')} ${t('+ Ouro')}</button><button data-admin="wood">${resourceIcon('wood')} ${t('+ Madeira')}</button><button data-admin="blood">${resourceIcon('blood')} ${t('+ Sangue')}</button>
+      <button data-admin="day">${t('Dia')}</button><button data-admin="night">${t('Noite')}</button><button data-admin="heal">${t('Curar unidades')}</button></div></div>`;
   }
 
   update(snap: Snapshot) {

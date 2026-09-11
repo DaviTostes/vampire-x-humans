@@ -61,7 +61,7 @@ jobs:
       - name: Enviar arquivos
         run: |
           ssh -p "$SSH_PORT" "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" "mkdir -p $APP_DIR"
-          tar czf - --exclude=.git --exclude=node_modules --exclude=.github . \
+          tar czf - --exclude=.git --exclude=node_modules --exclude=.github --exclude='*.mkv' --exclude='*.rar' . \
             | ssh -p "$SSH_PORT" "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
             "tar -xzf - -C $APP_DIR"
 

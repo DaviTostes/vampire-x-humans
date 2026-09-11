@@ -1,8 +1,9 @@
 // Compatibilidade dos sistemas: todos os valores editáveis vêm do arquivo central.
 import { GAME_CONFIG } from '../../../game.config.js';
-export { GAME_CONFIG } from '../../../game.config.js';
+export { GAME_CONFIG, MAP_PRESETS, DEFAULT_MAP_ID } from '../../../game.config.js';
 export type { BuildKind } from '../../../game.config.js';
 export type { VampireItemId, VampireSkillId, HumanAbilityId, VampireAbilityId, WorkerRole, SpecCost, SpecPrerequisite } from '../../../game.config.js';
+export type { MapPresetId, MapPresetConfig, RefugeConfig, RefugeStyle, MazeRing } from '../../../game.config.js';
 import type { BuildKind, WorkerRole, SpecCost, SpecPrerequisite } from '../../../game.config.js';
 
 // Escala global do mapa (game.config.ts → map.scale). O mundo e todas as

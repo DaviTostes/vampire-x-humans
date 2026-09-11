@@ -1,5 +1,6 @@
 // Rede orientada a eventos: o lobby só avança após a confirmação do servidor.
-import type { Command, LobbyInfo, ResourceNode, Role, Snapshot } from '@vampire/shared';
+import type { Command, LobbyInfo, ResourceNode, Role, Snapshot, MapPresetId } from '@vampire/shared';
+import { t, tServer } from './i18n.js';
 export type { LobbyInfo } from '@vampire/shared';
 
 // Após o fim da partida, o cliente lembra o código da sala para voltar
@@ -61,11 +62,11 @@ export class Net {
       ws.onopen = () => {
         this.connection = 'online'; this.notify(); resolve();
       };
-      ws.onerror = () => reject(new Error('Não foi possível conectar ao servidor'));
+      ws.onerror = () => reject(new Error(t('Não foi possível conectar ao servidor')));
       ws.onclose = () => {
         this.connection = 'offline';
         this.pending = null;
-        this.error = 'Conexão perdida. Reconecte para entrar novamente na sala.';
+        this.error = t('Conexão perdida. Reconecte para entrar novamente na sala.');
         if (!this.started) { this.lobby = null; this.clientId = null; this.myId = -1; }
         this.notify();
       };
@@ -115,7 +116,7 @@ export class Net {
         this.setNodes([]);
         this.error = '';
         break;
-      case 'error': this.error = msg.message; break;
+      case 'error': this.error = tServer(msg.message); break;
       default: return;
     }
     this.pending = null;
@@ -144,7 +145,7 @@ export class Net {
 
   send(msg: object): boolean {
     if (this.ws?.readyState !== WebSocket.OPEN) {
-      this.error = 'Sem conexão com o servidor'; this.pending = null; this.notify(); return false;
+      this.error = t('Sem conexão com o servidor'); this.pending = null; this.notify(); return false;
     }
     this.ws.send(JSON.stringify(msg));
     return true;
@@ -166,6 +167,7 @@ export class Net {
   // Alteração de tempos não passa por `pending`: o host pode ajustar várias
   // vezes seguidas e o servidor confirma com um novo `lobby`.
   settings(daySeconds: number, nightSeconds: number) { this.send({ type: 'settings', daySeconds, nightSeconds }); }
+  setMap(mapId: MapPresetId) { this.send({ type: 'map', mapId }); }
   start() { this.request('start'); }
   leave() { this.request('leave'); }
 }

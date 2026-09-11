@@ -1,4 +1,4 @@
-import type { Role } from './types.js';
+import type { Role, MapPresetId } from './types.js';
 
 export interface LobbyPlayer {
   id: string;
@@ -16,6 +16,8 @@ export interface LobbyInfo {
   // Durações configuradas pelo anfitrião (segundos), aplicadas ao iniciar.
   daySeconds: number;
   nightSeconds: number;
+  // Mapa escolhido pelo anfitrião.
+  mapId: MapPresetId;
   canStart: boolean;
   startReason: string | null;
 }

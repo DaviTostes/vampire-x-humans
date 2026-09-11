@@ -1,10 +1,11 @@
 import {
-  GAME_CONFIG, MAX_HUMANS, MAX_PLAYERS,
+  GAME_CONFIG, MAP_PRESETS, MAX_HUMANS, MAX_PLAYERS,
   DAY_LENGTH_MIN, DAY_LENGTH_MAX, NIGHT_LENGTH_MIN, NIGHT_LENGTH_MAX,
-  type Role,
+  type MapPresetId, type Role,
 } from '@vampire/shared';
 import { Net, takeRejoinCode } from './net.js';
 import { portrait } from './portraits.js';
+import { createLocaleSwitcher, onLocaleChange, t, tServer } from './i18n.js';
 import './lobby.css';
 
 function escapeHtml(value: string) {
@@ -32,11 +33,13 @@ export class Lobby {
   private code = '';
   private copyMessage = '';
   private unsubscribe: () => void;
+  private unsubscribeLocale: () => void;
 
   constructor(private container: HTMLElement, private net: Net) {
     this.el.className = 'lobby-screen';
     container.appendChild(this.el);
     this.unsubscribe = net.subscribe(() => this.render());
+    this.unsubscribeLocale = onLocaleChange(() => this.render());
     this.el.addEventListener('input', e => {
       const input = e.target as HTMLInputElement;
       if (input.id === 'v-name') { this.name = input.value; saveName(this.name); }
@@ -72,6 +75,7 @@ export class Lobby {
           this.net.ready(!me?.ready); break;
         }
         case 'role': this.net.chooseRole(button.dataset.role as Role); break;
+        case 'map': this.net.setMap(button.dataset.map as MapPresetId); break;
         case 'copy': void this.copyCode(); break;
         case 'reconnect': void this.net.connect().catch(() => this.render()); break;
       }
@@ -81,7 +85,7 @@ export class Lobby {
 
   private join() {
     if (this.code.length !== GAME_CONFIG.lobby.codeLength) {
-      this.net.error = `Digite o código de ${GAME_CONFIG.lobby.codeLength} caracteres da sala.`;
+      this.net.error = t('Digite o código de {n} caracteres da sala.', { n: GAME_CONFIG.lobby.codeLength });
       this.render(); return;
     }
     this.net.join(this.code, this.name);
@@ -109,41 +113,45 @@ export class Lobby {
     if (!code) return;
     try {
       await navigator.clipboard.writeText(code);
-      this.copyMessage = 'Código copiado';
-    } catch { this.copyMessage = `Compartilhe o código ${code}`; }
+      this.copyMessage = t('Código copiado');
+    } catch { this.copyMessage = t('Compartilhe o código {code}', { code }); }
     this.render();
   }
 
   render() {
     const { lobby, pending, connection } = this.net;
     const busy = !!pending || connection !== 'online';
-    const connectionLabel = connection === 'online' ? 'Conectado' : connection === 'connecting' ? 'Conectando…' : 'Desconectado';
+    const connectionLabel = connection === 'online' ? t('Conectado') : connection === 'connecting' ? t('Conectando…') : t('Desconectado');
     this.el.innerHTML = `
       <div class="lobby-atmosphere" aria-hidden="true"></div>
       <div class="lobby-shell">
         <header class="lobby-header"><a class="lobby-brand" href="/">V<span>×</span>H</a>
-          <div class="lobby-header-actions"><span class="lobby-connection ${connection}"><i></i>${connectionLabel}</span>
-          ${lobby ? `<button data-action="leave" class="lobby-leave" ${busy ? 'disabled' : ''}>✕ Sair da sala</button>` : ''}</div></header>
+          <div class="lobby-header-actions">
+          <div class="lobby-lang-row"><span>${t('Idioma')}</span></div>
+          <span class="lobby-connection ${connection}"><i></i>${connectionLabel}</span>
+          ${lobby ? `<button data-action="leave" class="lobby-leave" ${busy ? 'disabled' : ''}>✕ ${t('Sair da sala')}</button>` : ''}</div></header>
         <div class="lobby-error" role="alert" ${this.net.error ? '' : 'hidden'}>${escapeHtml(this.net.error)}</div>
         ${lobby ? this.roomView(busy) : this.entryView(busy)}
       </div>`;
+    const langRow = this.el.querySelector('.lobby-lang-row')!;
+    langRow.appendChild(createLocaleSwitcher());
   }
 
   private entryView(busy: boolean) {
     return `<main class="lobby-entry">
       <section class="lobby-intro">
         <h1>Vampire <em>×</em> Humans</h1>
-        <p>Um vampiro caça. Os outros constroem defesas e tentam sobreviver até o amanhecer.</p>
-        <div class="lobby-factions"><div>${portrait(false)}<span>Humanos<small>até ${MAX_HUMANS}</small></span></div>
-          <b>VS</b><div>${portrait(true)}<span>Vampiro</span></div></div>
+        <p>${t('Um vampiro caça. Os outros constroem defesas e tentam sobreviver até o amanhecer.')}</p>
+        <div class="lobby-factions"><div>${portrait(false)}<span>${t('Humanos')}<small>${t('até {n}', { n: MAX_HUMANS })}</small></span></div>
+          <b>VS</b><div>${portrait(true)}<span>${t('Vampiro')}</span></div></div>
       </section>
       <section class="lobby-card lobby-entry-card">
-        <label for="v-name">Seu nome</label><input id="v-name" maxlength="24" autocomplete="nickname" placeholder="Seu nome" value="${escapeHtml(this.name)}" ${busy ? 'disabled' : ''}>
-        <button class="lobby-primary" data-action="create" id="v-create" ${busy ? 'disabled' : ''}>${this.net.pending === 'create' ? 'Criando…' : 'Criar sala'} <span>→</span></button>
-        <div class="lobby-divider">ou</div>
-        <label for="v-code">Entrar com código</label><div class="lobby-join-row"><input id="v-code" maxlength="${GAME_CONFIG.lobby.codeLength}" autocomplete="off" spellcheck="false" placeholder="Código" value="${escapeHtml(this.code)}" ${busy ? 'disabled' : ''}>
-          <button data-action="join" id="v-join" ${busy ? 'disabled' : ''}>${this.net.pending === 'join' ? 'Entrando…' : 'Entrar'}</button></div>
-        ${this.net.connection === 'offline' ? '<button data-action="reconnect" class="lobby-reconnect">Reconectar</button>' : ''}
+        <label for="v-name">${t('Seu nome')}</label><input id="v-name" maxlength="24" autocomplete="nickname" placeholder="${t('Seu nome')}" value="${escapeHtml(this.name)}" ${busy ? 'disabled' : ''}>
+        <button class="lobby-primary" data-action="create" id="v-create" ${busy ? 'disabled' : ''}>${this.net.pending === 'create' ? t('Criando…') : t('Criar sala')} <span>→</span></button>
+        <div class="lobby-divider">${t('ou')}</div>
+        <label for="v-code">${t('Entrar com código')}</label><div class="lobby-join-row"><input id="v-code" maxlength="${GAME_CONFIG.lobby.codeLength}" autocomplete="off" spellcheck="false" placeholder="${t('Código')}" value="${escapeHtml(this.code)}" ${busy ? 'disabled' : ''}>
+          <button data-action="join" id="v-join" ${busy ? 'disabled' : ''}>${this.net.pending === 'join' ? t('Entrando…') : t('Entrar')}</button></div>
+        ${this.net.connection === 'offline' ? `<button data-action="reconnect" class="lobby-reconnect">${t('Reconectar')}</button>` : ''}
       </section></main>`;
   }
 
@@ -158,7 +166,7 @@ export class Lobby {
       const selected = me?.role === role;
       const full = count >= max && !selected;
       return `<button data-action="role" data-role="${role}" class="lobby-role ${role} ${selected ? 'selected' : ''}" aria-pressed="${selected}" ${busy || full ? 'disabled' : ''}>
-        ${portrait(role === 'vampire')}<span><strong>${role === 'human' ? 'Humano' : 'Vampiro'}</strong></span><b>${count}/${max}</b></button>`;
+        ${portrait(role === 'vampire')}<span><strong>${role === 'human' ? t('Humano') : t('Vampiro')}</strong></span><b>${count}/${max}</b></button>`;
     };
     // Só o anfitrião recebe campos editáveis; os demais veem apenas os valores.
     const timeField = (id: string, label: string, seconds: number, min: number, max: number, step: number) => {
@@ -168,33 +176,45 @@ export class Lobby {
         : `<b class="lobby-setting-value">${value}</b>`;
       return `<div class="lobby-setting"><label for="${id}">${label} <span>(min)</span></label>${field}</div>`;
     };
+    // Cartões de mapa: só o anfitrião pode selecionar.
+    const mapCards = (Object.entries(MAP_PRESETS) as Array<[MapPresetId, { name: string; description: string }]>)
+      .map(([id, preset]) => {
+        const selected = lobby.mapId === id;
+        return `<button data-action="map" data-map="${id}" class="lobby-map ${selected ? 'selected' : ''}" aria-pressed="${selected}" ${!isHost || busy ? 'disabled' : ''}>
+          <strong>${escapeHtml(t(preset.name))}</strong><small>${escapeHtml(t(preset.description))}</small></button>`;
+      }).join('');
+    const hostLabel = isHost ? t('Você define') : t('Definido pelo anfitrião');
     return `<main class="lobby-room">
-      <div class="lobby-room-heading"><h1>Sala</h1>
-        <div class="lobby-invite"><button data-action="copy" title="Copiar código"><b>${lobby.code}</b><small>Copiar</small></button><small aria-live="polite">${escapeHtml(this.copyMessage || 'Compartilhe o código')}</small></div></div>
-      <div class="lobby-room-columns"><section class="lobby-card lobby-roster"><div class="lobby-section-title"><h2>Jogadores</h2><span>${lobby.players.length}/${MAX_PLAYERS}</span></div>
+      <div class="lobby-room-heading"><h1>${t('Sala')}</h1>
+        <div class="lobby-invite"><button data-action="copy" title="${t('Copiar')}"><b>${lobby.code}</b><small>${t('Copiar')}</small></button><small aria-live="polite">${escapeHtml(this.copyMessage || t('Compartilhe o código'))}</small></div></div>
+      <div class="lobby-room-columns"><section class="lobby-card lobby-roster"><div class="lobby-section-title"><h2>${t('Jogadores')}</h2><span>${lobby.players.length}/${MAX_PLAYERS}</span></div>
         <div class="lobby-player-list" aria-live="polite">${lobby.players.map(p => `<div class="lobby-player ${p.id === this.net.clientId ? 'self' : ''}" data-client-id="${p.id}">
           <div class="lobby-avatar">${p.role ? portrait(p.role === 'vampire') : '<span>?</span>'}</div>
-          <div class="lobby-player-name"><strong>${escapeHtml(p.name)}${p.id === this.net.clientId ? '<small>VOCÊ</small>' : ''}</strong>
-            <span>${p.role === 'vampire' ? 'Vampiro' : p.role === 'human' ? 'Humano' : 'Escolhendo equipe'}${p.id === lobby.hostId ? ' · Anfitrião' : ''}</span></div>
-          <span class="lobby-ready-state ${p.ready ? 'ready' : ''}">${p.ready ? '✓ Pronto' : 'Preparando'}</span></div>`).join('')}
+          <div class="lobby-player-name"><strong>${escapeHtml(p.name)}${p.id === this.net.clientId ? `<small>${t('VOCÊ')}</small>` : ''}</strong>
+            <span>${p.role === 'vampire' ? t('Vampiro') : p.role === 'human' ? t('Humano') : t('Escolhendo equipe')}${p.id === lobby.hostId ? ` · ${t('Anfitrião')}` : ''}</span></div>
+          <span class="lobby-ready-state ${p.ready ? 'ready' : ''}">${p.ready ? `✓ ${t('Pronto')}` : t('Preparando')}</span></div>`).join('')}
           ${Array.from({ length: Math.max(0, MAX_PLAYERS - lobby.players.length) }, () => '<div class="lobby-empty-slot"><span>＋</span></div>').join('')}
-        </div><div class="lobby-roster-footer"><span>${readyCount}/${lobby.players.length} prontos</span><button data-action="leave" class="lobby-leave" ${busy ? 'disabled' : ''}>✕ Sair</button></div>
+        </div><div class="lobby-roster-footer"><span>${readyCount}/${lobby.players.length} ${t('prontos')}</span><button data-action="leave" class="lobby-leave" ${busy ? 'disabled' : ''}>✕ ${t('Sair')}</button></div>
       </section><section class="lobby-card lobby-preparation">
         ${roleCard('human', humans, MAX_HUMANS)}${roleCard('vampire', vampires, 1)}
         <div class="lobby-settings">
-          <div class="lobby-settings-heading"><h3>Tempos da partida</h3><span>${isHost ? 'Você define' : 'Definido pelo anfitrião'}</span></div>
-          <div class="lobby-settings-grid">
-            ${timeField('v-day', 'Dia', lobby.daySeconds, DAY_LENGTH_MIN / 60, DAY_LENGTH_MAX / 60, 0.5)}
-            ${timeField('v-night', 'Noite', lobby.nightSeconds, NIGHT_LENGTH_MIN / 60, NIGHT_LENGTH_MAX / 60, 1)}
-          </div>
-          <p class="lobby-help">Se o dia raiar de novo, os humanos vencem. O vampiro compra itens na Cripta a qualquer momento.</p>
+          <div class="lobby-settings-heading"><h3>${t('Mapa')}</h3><span>${hostLabel}</span></div>
+          <div class="lobby-map-grid">${mapCards}</div>
         </div>
-        <button data-action="ready" class="lobby-ready-button ${me?.ready ? 'confirmed' : ''}" ${busy || !me?.role ? 'disabled' : ''}>${me?.ready ? '✓ Pronto — cancelar' : 'Estou pronto'}</button>
+        <div class="lobby-settings">
+          <div class="lobby-settings-heading"><h3>${t('Tempos da partida')}</h3><span>${hostLabel}</span></div>
+          <div class="lobby-settings-grid">
+            ${timeField('v-day', t('Dia'), lobby.daySeconds, DAY_LENGTH_MIN / 60, DAY_LENGTH_MAX / 60, 0.5)}
+            ${timeField('v-night', t('Noite'), lobby.nightSeconds, NIGHT_LENGTH_MIN / 60, NIGHT_LENGTH_MAX / 60, 1)}
+          </div>
+          <p class="lobby-help">${t('Se o dia raiar de novo, os humanos vencem. O vampiro compra itens na Cripta a qualquer momento.')}</p>
+        </div>
+        <button data-action="ready" class="lobby-ready-button ${me?.ready ? 'confirmed' : ''}" ${busy || !me?.role ? 'disabled' : ''}>${me?.ready ? t('✓ Pronto — cancelar') : t('Estou pronto')}</button>
       </section></div>
-      <div class="lobby-start-bar"><div><strong>${lobby.canStart ? (lobby.players.length === 1 ? 'Pronto para testar sozinho.' : 'Todos prontos.') : escapeHtml(lobby.startReason ?? '')}</strong></div>
-        <button data-action="start" class="lobby-primary" ${busy || !isHost || !lobby.canStart ? 'disabled' : ''}>${this.net.pending === 'start' ? 'Iniciando…' : isHost ? (lobby.players.length === 1 ? 'Iniciar teste solo' : 'Iniciar partida') : 'Aguardando anfitrião'} <span>→</span></button></div>
+      <div class="lobby-start-bar"><div><strong>${lobby.canStart ? t(lobby.players.length === 1 ? 'Pronto para testar sozinho.' : 'Todos prontos.') : escapeHtml(tServer(lobby.startReason))}</strong></div>
+        <button data-action="start" class="lobby-primary" ${busy || !isHost || !lobby.canStart ? 'disabled' : ''}>${this.net.pending === 'start' ? t('Iniciando…') : isHost ? t(lobby.players.length === 1 ? 'Iniciar teste solo' : 'Iniciar partida') : t('Aguardando anfitrião')} <span>→</span></button></div>
     </main>`;
   }
 
-  destroy() { this.unsubscribe(); this.el.remove(); }
+  destroy() { this.unsubscribe(); this.unsubscribeLocale(); this.el.remove(); }
 }

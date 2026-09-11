@@ -158,33 +158,32 @@ O relógio no topo da tela mostra a fase atual e o tempo restante. As torres fun
 
 ---
 
-## 5. O mapa: Vale da Vigília
+## 5. Os mapas
 
-O Vale da Vigília é um **mapa fixo**, com a mesma disposição em todas as partidas. Conhecer seus caminhos, recursos e entradas faz parte da estratégia.
+A partida usa um entre **dois mapas fixos**, escolhidos pelo anfitrião no lobby. O mesmo `mapId` é usado pelo servidor e pelo navegador, então todos jogam o mesmo mundo.
 
-### Elementos principais
+### Vale da Vigília (clássico)
+
+O mapa original, mais aberto: ilha cercada de água, oito refúgios parecidos e floresta esparsa. Bom para partidas diretas.
+
+### Labirinto de Dédalo (complexo)
+
+Mapa gerado por algoritmo determinístico (o servidor e o navegador produzem exatamente o mesmo mundo): uma grade de **corredores finos e sinuosos** com becos sem saída e loops principais.
+
+- As paredes são **cristas de rocha irregulares** e a floresta cresce sobre elas.
+- O eixo dos corredores tem **piso de pedra** (o mesmo material das trilhas).
+- Cada um dos **8 refúgios** é um **beco sem saída** do próprio labirinto: as mesmas filas de pedra o cercam, e a única abertura é um **vão do tamanho do caminho de pedra**, onde o Muro é construído para lacrar a passagem.
+- A praça central da Cripta e o entorno imediato ficam abertos.
+
+### Elementos principais (ambos)
 
 - **Clareira central:** ponto de partida dos Humanos, com chão natural e trilhas entre as árvores.
-- **Ilha florestal:** terreno de contorno irregular e eixo inclinado, cercado pelo mar, com enseadas e praias.
-- **Base do Vampiro:** a Cripta e as quatro lojas, a noroeste da ilha.
-- **Rios e pontes:** canais sinuosos dividem o vale em regiões. As **pontes** são o único caminho sobre a água — unidades atravessam, mas não é possível construir sobre elas.
-- **Relevo:** colinas e mesas elevadas dão altura ao terreno; o interior das bases é plano para construir.
+- **Base do Vampiro:** a Cripta no centro do mapa, que vende itens e habilidades a qualquer momento.
+- **Águas e pontes:** onde há canais, as **pontes** são o único caminho sobre a água — unidades atravessam, mas não é possível construir sobre elas.
 - **Florestas e árvores de coleta:** fontes de madeira.
-- **Minas:** 4 na praça central e 1 exposta fora da entrada de cada refúgio — ouro exige sair das muralhas.
-- **Oito refúgios:** clareiras naturais distribuídas pelo vale.
+- **Oito refúgios:** clareiras naturais distribuídas pelo vale, cada uma com uma única passagem.
 
-### Refúgios
-
-1. Clareira dos Pinheiros
-2. Refúgio da Pedreira
-3. Bosque da Lua
-4. Abrigo do Poente
-5. Clareira da Aurora
-6. Refúgio dos Corvos
-7. Vale das Cinzas
-8. Bosque da Névoa
-
-Cada refúgio é uma **base natural**: uma clareira abrigada numa reentrância da montanha. Maciços assimétricos, encostas e floresta delimitam o espaço. O interior fica livre para construir; a coleta acontece fora, com minas ao lado das trilhas.
+Cada refúgio é uma **base natural**: uma clareira abrigada por encostas rochosas, com floresta ao redor. O interior fica livre para construir.
 
 ### A entrada e o muro
 

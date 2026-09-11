@@ -20,6 +20,7 @@ import {
   PEON,
   workerStats,
   GAME_CONFIG,
+  DEFAULT_MAP_ID,
   INTERACTION,
   VAMPIRE_PLAYER_ID,
   WORLD,
@@ -47,6 +48,7 @@ import {
   repairerRepairRate,
   type BuildKind,
   type HumanAbilityId,
+  type MapPresetId,
   type SpecPrerequisite,
   type VampireAbilityId,
   type VampireItemId,
@@ -114,9 +116,10 @@ export function createSession(
   playerIds?: number[],
   daySeconds?: number,
   nightSeconds?: number,
+  mapId: MapPresetId = DEFAULT_MAP_ID,
 ): Session {
-  const state = createGameState(names, seed, playerIds, daySeconds, nightSeconds);
-  const map = generateMap(seed); // determinístico — mesmo resultado do client
+  const state = createGameState(names, seed, playerIds, daySeconds, nightSeconds, mapId);
+  const map = generateMap(mapId); // determinístico — mesmo resultado do client
   return { state, map, commandSeq: {}, navigation: new Navigation(state, map) };
 }
 
@@ -660,7 +663,15 @@ export function applyCommand(session: Session, playerId: number, cmd: Command): 
         ability.range == null || dist(hero.x, hero.z, target.x, target.z) <= ability.range;
       if (cmd.ability === 'entangle' || cmd.ability === 'silencer') {
         if (!vampire || cmd.targetId !== vampire.id || !inRange(vampire)) return;
-        setVampireStatus(s, cmd.ability === 'entangle' ? 'entangled' : 'silenced', ability.duration ?? 0);
+        if (cmd.ability === 'silencer') {
+          setVampireStatus(s, 'silenced', ability.duration ?? 0);
+          // Silenciar interrompe a canalização em andamento: sem isso, um
+          // Teleport para a Base já iniciado concluía mesmo com o vampiro
+          // silenciado (seção 17/25).
+          if (vampireStatus(s, 'channelingTeleport') > 0) clearVampireStatus(s, 'channelingTeleport');
+        } else {
+          setVampireStatus(s, 'entangled', ability.duration ?? 0);
+        }
       } else if (cmd.ability === 'fortify') {
         const target = unitById(s, cmd.targetId ?? -1) ?? buildingById(s, cmd.targetId ?? -1);
         if (!target || target.owner !== playerId) return;
@@ -1127,6 +1138,7 @@ export function makeSnapshot(s: GameState, includeNodes = true): Snapshot {
     practice: s.practice ?? false,
     tick: s.tick,
     time: s.time,
+    mapId: s.mapId,
     phase: s.phase,
     phaseTime: s.phaseTime,
     daySeconds: s.daySeconds,
