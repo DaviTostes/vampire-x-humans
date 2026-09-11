@@ -45,6 +45,12 @@ interface LoadedProp {
   template: THREE.Group;
 }
 
+/** Progresso do preload: assets concluídos/ total, para a tela de loading. */
+export interface PreloadProgress {
+  loaded: number;
+  total: number;
+}
+
 interface BuildingAssetDefinition {
   /** Kind da construção (ex.: 'goldMine'). */
   kind: string;
@@ -289,15 +295,51 @@ class AssetRegistry {
   private readonly props = new Map<string, LoadedProp>();
   private readonly buildingTemplates = new Map<string, THREE.Group>();
   private preloadPromise: Promise<void> | null = null;
+  private preloadLoaded = 0;
+  private preloadTotal = 0;
+  private preloadListeners = new Set<(progress: PreloadProgress) => void>();
 
-  preload(): Promise<void> {
-    if (this.preloadPromise) return this.preloadPromise;
-    this.preloadPromise = Promise.all([
-      ...VISUAL_ASSETS.map((definition) => this.load(definition)),
-      ...PROP_ASSETS.map((definition) => this.loadProp(definition)),
-      ...BUILDING_ASSETS.map((definition) => this.loadBuilding(definition)),
-    ]).then(() => undefined);
+  preload(onProgress?: (progress: PreloadProgress) => void): Promise<void> {
+    if (this.preloadPromise) {
+      if (onProgress) {
+        this.preloadListeners.add(onProgress);
+        onProgress(this.preloadProgress());
+      }
+      return this.preloadPromise;
+    }
+    // Sequencial de propósito: disparar os ~100 MB em paralelo saturava a
+    // rede do VPS e concentrava o parse dos FBX na thread principal (travava
+    // a página). Carregando um por vez a interface continua respondendo.
+    const jobs: Array<() => Promise<void>> = [
+      ...VISUAL_ASSETS.map((definition) => () => this.load(definition)),
+      ...PROP_ASSETS.map((definition) => () => this.loadProp(definition)),
+      ...BUILDING_ASSETS.map((definition) => () => this.loadBuilding(definition)),
+    ];
+    this.preloadLoaded = 0;
+    this.preloadTotal = jobs.length;
+    if (onProgress) {
+      this.preloadListeners.add(onProgress);
+      onProgress(this.preloadProgress());
+    }
+    this.preloadPromise = (async () => {
+      for (const job of jobs) {
+        await job();
+        this.preloadLoaded += 1;
+        this.emitPreloadProgress();
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      }
+      this.preloadListeners.clear();
+    })();
     return this.preloadPromise;
+  }
+
+  private preloadProgress(): PreloadProgress {
+    return { loaded: this.preloadLoaded, total: this.preloadTotal };
+  }
+
+  private emitPreloadProgress() {
+    const progress = this.preloadProgress();
+    for (const listener of this.preloadListeners) listener(progress);
   }
 
   /**

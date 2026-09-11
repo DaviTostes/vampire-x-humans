@@ -48,6 +48,8 @@ export class Lobby {
     this.el.addEventListener('change', e => {
       const input = e.target as HTMLInputElement;
       if (input.id !== 'v-day' && input.id !== 'v-night') return;
+      // Só o anfitrião altera os tempos; o servidor revalida de qualquer forma.
+      if (!this.net.lobby || this.net.lobby.hostId !== this.net.clientId) return;
       const day = Number(this.el.querySelector<HTMLInputElement>('#v-day')?.value);
       const night = Number(this.el.querySelector<HTMLInputElement>('#v-night')?.value);
       if (Number.isFinite(day) && Number.isFinite(night)) this.net.settings(day * 60, night * 60);
@@ -158,6 +160,14 @@ export class Lobby {
       return `<button data-action="role" data-role="${role}" class="lobby-role ${role} ${selected ? 'selected' : ''}" aria-pressed="${selected}" ${busy || full ? 'disabled' : ''}>
         ${portrait(role === 'vampire')}<span><strong>${role === 'human' ? 'Humano' : 'Vampiro'}</strong></span><b>${count}/${max}</b></button>`;
     };
+    // Só o anfitrião recebe campos editáveis; os demais veem apenas os valores.
+    const timeField = (id: string, label: string, seconds: number, min: number, max: number, step: number) => {
+      const value = secondsToMinutes(seconds);
+      const field = isHost
+        ? `<input id="${id}" type="number" inputmode="decimal" min="${min}" max="${max}" step="${step}" value="${value}" ${busy ? 'disabled' : ''}>`
+        : `<b class="lobby-setting-value">${value}</b>`;
+      return `<div class="lobby-setting"><label for="${id}">${label} <span>(min)</span></label>${field}</div>`;
+    };
     return `<main class="lobby-room">
       <div class="lobby-room-heading"><h1>Sala</h1>
         <div class="lobby-invite"><button data-action="copy" title="Copiar código"><b>${lobby.code}</b><small>Copiar</small></button><small aria-live="polite">${escapeHtml(this.copyMessage || 'Compartilhe o código')}</small></div></div>
@@ -171,20 +181,16 @@ export class Lobby {
         </div><div class="lobby-roster-footer"><span>${readyCount}/${lobby.players.length} prontos</span><button data-action="leave" class="lobby-leave" ${busy ? 'disabled' : ''}>✕ Sair</button></div>
       </section><section class="lobby-card lobby-preparation">
         ${roleCard('human', humans, MAX_HUMANS)}${roleCard('vampire', vampires, 1)}
+        <div class="lobby-settings">
+          <div class="lobby-settings-heading"><h3>Tempos da partida</h3><span>${isHost ? 'Você define' : 'Definido pelo anfitrião'}</span></div>
+          <div class="lobby-settings-grid">
+            ${timeField('v-day', 'Dia', lobby.daySeconds, DAY_LENGTH_MIN / 60, DAY_LENGTH_MAX / 60, 0.5)}
+            ${timeField('v-night', 'Noite', lobby.nightSeconds, NIGHT_LENGTH_MIN / 60, NIGHT_LENGTH_MAX / 60, 1)}
+          </div>
+          <p class="lobby-help">Se o dia raiar de novo, os humanos vencem. O vampiro compra itens na Cripta a qualquer momento.</p>
+        </div>
         <button data-action="ready" class="lobby-ready-button ${me?.ready ? 'confirmed' : ''}" ${busy || !me?.role ? 'disabled' : ''}>${me?.ready ? '✓ Pronto — cancelar' : 'Estou pronto'}</button>
       </section></div>
-      <section class="lobby-card lobby-settings">
-        <div class="lobby-section-title"><h2>Tempos da partida</h2><span>${isHost ? 'Você define' : 'Definido pelo anfitrião'}</span></div>
-        <div class="lobby-settings-grid">
-          <div class="lobby-setting"><label for="v-day">Duração do dia <span>(min)</span></label>
-            <input id="v-day" type="number" inputmode="decimal" min="${DAY_LENGTH_MIN / 60}" max="${DAY_LENGTH_MAX / 60}" step="0.5" value="${secondsToMinutes(lobby.daySeconds)}" ${!isHost || busy ? 'disabled' : ''}>
-            <small>Tempo inicial só para os humanos construírem a base.</small></div>
-          <div class="lobby-setting"><label for="v-night">Duração da noite <span>(min)</span></label>
-            <input id="v-night" type="number" inputmode="decimal" min="${NIGHT_LENGTH_MIN / 60}" max="${NIGHT_LENGTH_MAX / 60}" step="1" value="${secondsToMinutes(lobby.nightSeconds)}" ${!isHost || busy ? 'disabled' : ''}>
-            <small>Período em que os humanos precisam sobreviver.</small></div>
-        </div>
-        <p class="lobby-help">Se o dia raiar de novo, os humanos vencem. O vampiro compra itens na Cripta a qualquer momento.</p>
-      </section>
       <div class="lobby-start-bar"><div><strong>${lobby.canStart ? (lobby.players.length === 1 ? 'Pronto para testar sozinho.' : 'Todos prontos.') : escapeHtml(lobby.startReason ?? '')}</strong></div>
         <button data-action="start" class="lobby-primary" ${busy || !isHost || !lobby.canStart ? 'disabled' : ''}>${this.net.pending === 'start' ? 'Iniciando…' : isHost ? (lobby.players.length === 1 ? 'Iniciar teste solo' : 'Iniciar partida') : 'Aguardando anfitrião'} <span>→</span></button></div>
     </main>`;

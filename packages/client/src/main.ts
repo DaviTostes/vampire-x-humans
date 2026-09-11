@@ -5,20 +5,27 @@ import { Hud } from './ui.js';
 import { Net } from './net.js';
 import { Lobby } from './lobby.js';
 import { assetRegistry } from './assets/asset-registry.js';
+import { LoadingScreen } from './loading.js';
 import { installCursors } from './cursor.js';
 
 installCursors();
 
 const app = document.getElementById('app')!;
-const visualAssetsReady = assetRegistry.preload();
 const net = new Net();
 const lobby = new Lobby(app, net);
+// Os modelos pesam ~100 MB e o parse dos FBX prende a thread principal. Em vez
+// de baixar tudo no menu (o que travava todo mundo), carregamos os assets no
+// início da partida, atrás de uma tela de loading, em sequência.
 const unsubscribe = net.subscribe(() => {
   if (!net.started) return;
   unsubscribe();
-  void visualAssetsReady.then(() => {
-    lobby.destroy();
+  lobby.destroy();
+  const loading = new LoadingScreen(app);
+  void assetRegistry.preload((progress) => loading.setProgress(progress)).then(() => {
+    // Monta a cena já carregada e só então revela o jogo, para não aparecer um
+    // quadro vazio entre a tela de loading e a partida.
     startGame(net);
+    return loading.finish();
   });
 });
 void net.connect().then(() => { lobby.maybeRejoin(); }).catch(() => lobby.render());
