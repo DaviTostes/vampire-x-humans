@@ -55,15 +55,17 @@ import { commandArt, factionCrest } from './hud-icons.js';
 import { resourceIcon } from './resource-icons.js';
 import { createLocaleSwitcher, onLocaleChange, t, tServer } from './i18n.js';
 import { createVolumeControl } from './music.js';
-import { VAMPIRE_ITEM_IDS, VAMPIRE_ITEM_INFO, VAMPIRE_SKILLS, vampireAttackSpeed, vampireEffectiveCooldown, vampireEffectiveSpeed, vampireItemBonuses, vampireItemCost, vampireItemBonus, vampireItemMaxLevel, vampireItemNextLevel, vampireShopAccess, vampireSkillMultiplier, repairerRepairRate, type VampireItemId, type VampireSkillId } from '@vampire/shared';
+import { VAMPIRE_ITEM_IDS, VAMPIRE_ITEM_INFO, VAMPIRE_SKILLS, VAMPIRE_ABILITIES, vampireAttackSpeed, vampireEffectiveCooldown, vampireEffectiveSpeed, vampireItemBonuses, vampireItemCost, vampireItemBonus, vampireItemMaxLevel, vampireItemNextLevel, vampireShopAccess, vampireSkillMultiplier, repairerRepairRate, type VampireItemId, type VampireSkillId } from '@vampire/shared';
 
 const WORKER_ROLE_SOURCES: Record<WorkerRole, string> = {
   lumberjack: 'Lenhador', miner: 'Minerador', repairer: 'Reparador',
 };
 const WORKER_ROLES: WorkerRole[] = ['lumberjack', 'miner', 'repairer'];
 const HUMAN_ABILITY_IDS: HumanAbilityId[] = ['entangle', 'fortify', 'teleport', 'silencer'];
-const HUMAN_ABILITY_KEYS = ['Q', 'E', 'R', 'T'];
-const VAMPIRE_ABILITY_KEYS: Record<string, string> = { revealArea: 'Q', batForm: 'E', teleportHome: 'R' };
+// Habilidades usam números (1..4); construções usam letras (Q/E/R/T/F).
+const HUMAN_ABILITY_KEYS = ['1', '2', '3', '4'];
+const VAMPIRE_ABILITY_KEYS: Record<string, string> = { revealArea: '1', batForm: '2', teleportHome: '3' };
+const BUILD_HOTKEYS: Partial<Record<BuildKind, string>> = { bank: 'Q', wall: 'E', tower: 'R', market: 'T', taverna: 'F' };
 
 function workerRoleName(role: WorkerRole): string {
   return t(WORKER_ROLE_SOURCES[role]);
@@ -490,14 +492,20 @@ export class Hud {
     this.abilityPanel.addEventListener('mouseleave', hideTip);
     this.abilityPanel.addEventListener('click', hideTip);
 
-    // Atalhos 1..9: acionam o botão correspondente do painel de comandos
-    // (construções de unidade ou ações de construção selecionada).
+    // Atalhos de teclado: números 1..4 acionam as habilidades do painel de
+    // habilidades; letras Q/E/R/T/F acionam as construções do painel de comandos.
     window.addEventListener('keydown', (e) => {
       if (e.repeat) return;
       if ((e.target as HTMLElement).matches('input, textarea, select')) return;
-      if (!/^[1-9]$/.test(e.key)) return;
-      const btn = this.cmdPanel.querySelector<HTMLButtonElement>(`button[data-hotkey="${e.key}"]`);
-      if (btn && !btn.disabled) { e.preventDefault(); btn.click(); }
+      if (/^[1-9]$/.test(e.key)) {
+        const btn = this.abilityPanel.querySelector<HTMLButtonElement>(`button[data-hotkey="${e.key}"]`);
+        if (btn && !btn.disabled) { e.preventDefault(); btn.click(); }
+        return;
+      }
+      const key = e.key.toUpperCase();
+      if (!/^[A-Z]$/.test(key)) return;
+      const buildBtn = this.cmdPanel.querySelector<HTMLButtonElement>(`button[data-hotkey="${key}"]`);
+      if (buildBtn && !buildBtn.disabled) { e.preventDefault(); buildBtn.click(); }
     });
 
     this.minimap.addEventListener('pointerdown', (e) => {
@@ -798,46 +806,25 @@ export class Hud {
       if (!kinds.length) {
         html = `<span>${t('Esta unidade não constrói.<br>Use o Humano ou um Minerador.')}</span>`;
       }
-      for (const [i, kind] of kinds.entries()) {
+      for (const kind of kinds) {
         const c = BUILD_COSTS[kind];
+        const hotkey = BUILD_HOTKEYS[kind];
         const limit = (SPEC_ENTITY_LIMITS as Record<string, number | undefined>)[kind];
         const owned = limit !== undefined ? snap.buildings.filter(b => b.owner === myId && b.kind === kind).length : 0;
         const atLimit = limit !== undefined && owned >= limit;
         const afford = !!me && me.wood >= c.wood && me.gold >= c.gold && !atLimit;
         const active = this.controls.buildMode === kind;
         const reason = atLimit ? t('Limite de {name} atingido ({owned}/{limit})', { name: buildingName(kind), owned, limit: limit ?? 0 })
-          : afford ? `${buildingHelp(kind)} — ${t('tecla {n}', { n: i + 1 })}` : shortageText(c);
-        html += `<button class="vxh-btn ${afford ? '' : 'vxh-unavailable'} ${active ? 'active' : ''}" data-build="${kind}" title="${reason}" ${afford ? '' : 'disabled'}>
-          ${buildingIcon(kind) ?? commandArt(kind)}${buildingName(kind)}${limit !== undefined ? `<small>${owned}/${limit}</small>` : ''}<span class="vxh-hotkey">${i + 1}</span>
+          : afford ? `${buildingHelp(kind)}${hotkey ? ` — ${t('tecla {n}', { n: hotkey })}` : ''}` : shortageText(c);
+        html += `<button class="vxh-btn ${afford ? '' : 'vxh-unavailable'} ${active ? 'active' : ''}" data-build="${kind}"${hotkey ? ` data-hotkey="${hotkey}"` : ''} title="${reason}" ${afford ? '' : 'disabled'}>
+          ${buildingIcon(kind) ?? commandArt(kind)}${buildingName(kind)}${limit !== undefined ? `<small>${owned}/${limit}</small>` : ''}${hotkey ? `<span class="vxh-hotkey">${hotkey}</span>` : ''}
           <small class="vxh-cost">${costMarkup(c)}</small><small>${Number((c.time / workerStats(selectedUnits.find(u => canBuildKind(u, kind)) ?? {}).buildRate).toFixed(1))}s</small></button>`;
       }
     }
     if (html !== this.panelHtml) {
       this.cmdPanel.innerHTML = html;
       this.panelHtml = html;
-      this.assignCommandHotkeys();
     }
-  }
-
-  /** Numera os botões do painel de comandos (1..9) e exibe o atalho no canto. */
-  private assignCommandHotkeys() {
-    const buttons = this.cmdPanel.querySelectorAll<HTMLButtonElement>('button.vxh-btn');
-    buttons.forEach((btn, index) => {
-      const n = index + 1;
-      let badge = btn.querySelector<HTMLSpanElement>('.vxh-hotkey');
-      if (n > 9) {
-        delete btn.dataset.hotkey;
-        badge?.remove();
-        return;
-      }
-      btn.dataset.hotkey = String(n);
-      if (!badge) {
-        badge = document.createElement('span');
-        badge.className = 'vxh-hotkey';
-        btn.appendChild(badge);
-      }
-      badge.textContent = String(n);
-    });
   }
 
   private panelHtml = '';
@@ -869,21 +856,26 @@ export class Hud {
       const st = snap.vampireStatuses ?? {};
       const reveal = snap.vampireReveal;
       const revealActive = !!reveal && reveal.remaining > 0;
-      const revealUses = snap.vampireRevealUses ?? 0;
-      const revealDisabled = revealActive || snap.phase !== 'night' || revealUses <= 0;
-      const revealState = revealActive ? t('Ativa · {s}s', { s: Math.ceil(reveal!.remaining) })
+      const revealCd = snap.vampireRevealCooldown ?? 0;
+      const revealMax = VAMPIRE_ABILITIES.revealArea.charges;
+      const revealCharges = snap.vampireRevealCharges ?? revealMax;
+      // Cargas controlam o uso; a fase/noite continua obrigatória.
+      const revealDisabled = snap.phase !== 'night' || revealCharges <= 0;
+      const revealChargesLabel = t('Cargas: {c}/{m}', { c: revealCharges, m: revealMax });
+      const revealState = `${revealActive ? t('Ativa · {s}s', { s: Math.ceil(reveal!.remaining) })
         : snap.phase !== 'night' ? t('Disponível apenas à noite')
-          : revealUses <= 0 ? t('Sem usos nesta noite (1 por noite)') : t('Revela uma área do mapa por 10s');
-      html += `<button class="vxh-btn ${this.controls.vampireAbilityMode === 'revealArea' ? 'active' : ''}" data-vampire-ability="revealArea" data-tip-title="${t('Revelar Área')}" data-tip-body="${revealState}" ${revealDisabled ? 'disabled' : ''}>
-        ${commandArt('revealArea')}<span class="vxh-hotkey">${VAMPIRE_ABILITY_KEYS.revealArea}</span></button>`;
+          : revealCd > 0 ? t('Recarga · {s}s', { s: Math.ceil(revealCd) }) : t('Revela uma área do mapa por 10s')} · ${revealChargesLabel}`;
+      const revealPct = revealCd > 0 ? Math.min(100, (revealCd / VAMPIRE_ABILITIES.revealArea.cooldown) * 100) : 0;
+      html += `<button class="vxh-btn ${this.controls.vampireAbilityMode === 'revealArea' ? 'active' : ''}" data-vampire-ability="revealArea" data-hotkey="${VAMPIRE_ABILITY_KEYS.revealArea}" data-tip-title="${t('Revelar Área')}" data-tip-body="${revealState}" ${revealDisabled ? 'disabled' : ''}>
+        ${commandArt('revealArea')}<span class="vxh-hotkey">${VAMPIRE_ABILITY_KEYS.revealArea}</span>${revealPct > 0 ? `<span class="vxh-cd" style="height:${revealPct.toFixed(0)}%"></span>` : ''}</button>`;
       const bat = st.batForm ?? 0;
       const exiting = st.exitingBatForm ?? 0;
       const batState = bat > 0 ? t('Ativa · {s}s', { s: Math.ceil(bat) }) : exiting > 0 ? t('Saindo da forma') : t('Invulnerável e mais rápido por até 15s');
-      html += `<button class="vxh-btn ${bat > 0 ? 'active' : ''}" data-vampire-ability="batForm" data-tip-title="${t('Forma de Morcego')}" data-tip-body="${batState}" ${bat > 0 || exiting > 0 ? 'disabled' : ''}>
+      html += `<button class="vxh-btn ${bat > 0 ? 'active' : ''}" data-vampire-ability="batForm" data-hotkey="${VAMPIRE_ABILITY_KEYS.batForm}" data-tip-title="${t('Forma de Morcego')}" data-tip-body="${batState}" ${bat > 0 || exiting > 0 ? 'disabled' : ''}>
         ${commandArt('batForm')}<span class="vxh-hotkey">${VAMPIRE_ABILITY_KEYS.batForm}</span></button>`;
       const chan = st.channelingTeleport ?? 0;
       const tpState = chan > 0 ? t('Canalizando · {s}s', { s: Math.ceil(chan * 10) / 10 }) : t('Canaliza 2,8s e retorna à base');
-      html += `<button class="vxh-btn ${chan > 0 ? 'active' : ''}" data-vampire-ability="teleportHome" data-tip-title="${t('Teleportar para a Base')}" data-tip-body="${tpState}" ${chan > 0 ? 'disabled' : ''}>
+      html += `<button class="vxh-btn ${chan > 0 ? 'active' : ''}" data-vampire-ability="teleportHome" data-hotkey="${VAMPIRE_ABILITY_KEYS.teleportHome}" data-tip-title="${t('Teleportar para a Base')}" data-tip-body="${tpState}" ${chan > 0 ? 'disabled' : ''}>
         ${commandArt('teleportHome')}<span class="vxh-hotkey">${VAMPIRE_ABILITY_KEYS.teleportHome}</span></button>`;
       // Habilidade "Golpe Sombrio" removida por enquanto.
     } else {
@@ -897,7 +889,7 @@ export class Hud {
         const state = cd > 0 ? t('Recarga · {s}s', { s: Math.ceil(cd) })
           : needsVampire && !vampireAlive ? t('Vampiro indisponível') : t(ability.description);
         const pct = cd > 0 ? Math.min(100, (cd / ability.cooldown) * 100) : 0;
-        html += `<button class="vxh-btn ${active ? 'active' : ''}" data-human-ability="${id}" data-tip-title="${t(ability.name)}" data-tip-body="${state}" ${disabled ? 'disabled' : ''}>
+        html += `<button class="vxh-btn ${active ? 'active' : ''}" data-human-ability="${id}" data-hotkey="${HUMAN_ABILITY_KEYS[i]}" data-tip-title="${t(ability.name)}" data-tip-body="${state}" ${disabled ? 'disabled' : ''}>
           ${commandArt(id)}<span class="vxh-hotkey">${HUMAN_ABILITY_KEYS[i]}</span>${pct > 0 ? `<span class="vxh-cd" style="height:${pct.toFixed(0)}%"></span>` : ''}</button>`;
       });
     }

@@ -96,7 +96,10 @@ export interface VampireState {
   statuses?: Partial<Record<VampireStatus, number>>;
   // Revelar Área (seção 15): centro e tempo restante da revelação ativa.
   reveal?: { x: number; z: number; remaining: number; radius: number } | null;
-  revealUses?: number; // usos restantes na noite atual (não acumula)
+  // Cargas disponíveis de Revelar Área (máx. `vampireAbilities.revealArea.charges`).
+  revealCharges?: number;
+  // Recarga restante (s) até a próxima carga de Revelar Área.
+  revealCooldown?: number;
 }
 
 export type GameResult = null | { winner: Role; reason: string };
@@ -177,5 +180,6 @@ export interface Snapshot {
   vampireStatuses?: Partial<Record<VampireStatus, number>>;
   // Revelar Área ativo (seção 15): centro, tempo restante e raio.
   vampireReveal?: { x: number; z: number; remaining: number; radius: number } | null;
-  vampireRevealUses?: number;
+  vampireRevealCharges?: number;
+  vampireRevealCooldown?: number;
 }

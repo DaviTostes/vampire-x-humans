@@ -69,19 +69,20 @@ test('o Vampiro compra na cripta também durante a noite', () => {
   assert.deepEqual(session.state.vampire.items, { damage: 1 });
 });
 
-test('Attack Speed respeita o limite de 600 e bloqueia níveis indefinidos', () => {
+test('Attack Speed acumula até o limite de 600 e tem 7 níveis', () => {
   const { session, vampire, crypt } = fixture();
   session.state.vampire.blood = 100000;
   standAt(vampire, crypt);
-  applyCommand(session, VAMPIRE_PLAYER_ID, { type: 'buyVampireItem', cryptId: crypt.id, itemId: 'attackSpeed' });
-  applyCommand(session, VAMPIRE_PLAYER_ID, { type: 'upgradeVampireItem', itemId: 'attackSpeed' });
-  assert.equal(session.state.vampire.items.attackSpeed, 2);
-  // Níveis 3–6 têm bônus A CONFIRMAR: não podem ser comprados.
-  assert.equal(vampireItemNextLevel('attackSpeed', 2), null);
-  applyCommand(session, VAMPIRE_PLAYER_ID, { type: 'upgradeVampireItem', itemId: 'attackSpeed' });
-  assert.equal(session.state.vampire.items.attackSpeed, 2, 'não inventa níveis 3–6');
-  // O limite absoluto nunca é ultrapassado (bônus nível 7 = +500).
+  // Compra os 7 níveis (o primeiro via compra; os demais via upgrade).
+  for (let level = 1; level <= 7; level++) {
+    if (level === 1) applyCommand(session, VAMPIRE_PLAYER_ID, { type: 'buyVampireItem', cryptId: crypt.id, itemId: 'attackSpeed' });
+    else applyCommand(session, VAMPIRE_PLAYER_ID, { type: 'upgradeVampireItem', itemId: 'attackSpeed' });
+  }
+  assert.equal(session.state.vampire.items.attackSpeed, 7);
+  // Bônus acumulado: 10+10+20+40+80+120+200 = 480; base 120 → 600 (limite).
   assert.equal(vampireAttackSpeed({ attackSpeed: 7 }), 600);
+  // Nível máximo: não há próximo nível.
+  assert.equal(vampireItemNextLevel('attackSpeed', 7), null);
 });
 
 test('Vampiro recebe 80% do dano em sangue', () => {

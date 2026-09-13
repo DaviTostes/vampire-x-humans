@@ -82,7 +82,7 @@ O Vampiro usa **apenas sangue** como moeda. A especificação chama a recompensa
 
 - **Sangue por dano** (`spec.bloodPerDamage`, padrão 0,80): o Vampiro recebe sangue sempre que causa dano. O arredondamento fica centralizado em `spec.roundingPolicy` (A CONFIRMAR; hoje usa truncamento).
 - **Cripta** (`spec.crypt`): gera sangue em **ciclos de duração fixa** (`buildings.crypt.cycleSeconds`), igual ao Banco. Cada upgrade aumenta o **sangue por ciclo** (`productionByLevel`: níveis 1–4 = 1/2/4/8), sem acelerar o intervalo. O Vampiro evolui a Cripta com sangue; o custo inicial do nível 1 continua A CONFIRMAR.
-- **Itens** (`spec.vampireItemTiers`): três categorias — **Dano**, **Vida** e **Attack Speed** — compradas com **sangue** na cripta. Attack Speed é limitada ao máximo de 600. Níveis com bônus marcado A CONFIRMAR (Attack Speed 3–6) não podem ser comprados. A política de acúmulo (`accumulation`) está em A CONFIRMAR e hoje é **substitutiva** (o nível novo substitui o anterior).
+- **Itens** (`spec.vampireItemTiers`): três categorias — **Dano** (10 níveis), **Vida** (10 níveis) e **Attack Speed** (7 níveis) — compradas com **sangue** na cripta. Attack Speed é limitada ao máximo de 600. O acúmulo é **cumulativo** (`accumulation: 'cumulative'`): cada nível soma seu bônus ao total anterior.
 
 O sangue também paga a skill legada "Golpe Sombrio" (fora da especificação).
 
@@ -90,7 +90,7 @@ O sangue também paga a skill legada "Golpe Sombrio" (fora da especificação).
 
 Em `spec.vampireAbilities`:
 
-- **Revelar Área** (10s): revela uma área no mapa. **1 uso por noite**, sem acúmulo; o uso volta a 1 quando a noite começa. Só pode ser usada à noite.
+- **Revelar Área** (10s): revela uma área no mapa. **2 cargas**, cada uma com **recarga de 60s**. Só pode ser usada à noite.
 - **Invisibilidade / Forma de Morcego**: o Vampiro fica **invulnerável** e mais rápido por até **15s**; ao terminar, há 1,5s de animação de saída.
 - **Teleport para a Base**: canaliza **2,8s** e então retorna à base (posição obtida da cripta/spawn).
 
@@ -113,7 +113,7 @@ A Taverna treina três funções, com limites por jogador em `spec.entityLimits`
 
 - **Lenhador** (máx. 20): coleta madeira. `spec.workers.lumberjack` define o custo de treino (custo do nível 1) e a progressão: `gatherInterval` cai de 8 para 1 segundo mantendo `lumberAmount: 4` por coleta.
 - **Minerador** (máx. 15): custa 2 madeiras, coleta ouro e constrói Minas de Ouro.
-- **Reparador** (máx. 1): repara Muros. `spec.workers.repairer` define custo, `repairSpeed` e `trainingTime` (0 = instantâneo).
+- **Reparador** (máx. 1): repara Muros. `spec.workers.repairer` define custo, `repairSpeed` e `trainingTime` (0 = instantâneo). O reparo do Humano foi reduzido em 1/3 (`interaction.repairRate`: 30 → 20 HP/s).
 
 Construção: **Lenhador e Reparador não constroem**. O **Humano** ergue todas as construções, exceto a Mina de Ouro; o **Minerador** constrói **apenas** a Mina de Ouro.
 

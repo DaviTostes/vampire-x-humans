@@ -353,8 +353,11 @@ function timberHall(g: THREE.Object3D, w: number, h: number, d: number, x = 0, z
 export function createBuildingModel(kind: BuildingKind, owner: number, done: boolean, level = 1): THREE.Group {
   const g = new THREE.Group();
   // Modelo GLB externo substitui o procedural quando disponível (ex.: Mina de Ouro).
-  const external = assetRegistry.buildingTemplate(kind);
-  if (external) {
+  // `level` seleciona a variação de nível já carregada; se a ideal ainda não chegou,
+  // usa-se a melhor disponível e a cena recria a malha quando o carregamento termina.
+  const externalAsset = assetRegistry.buildingTemplate(kind, level);
+  if (externalAsset) {
+    const external = externalAsset.template;
     // Encaixa a maior extensão horizontal no footprint da construção.
     external.updateMatrixWorld(true);
     const raw = new THREE.Box3().setFromObject(external).getSize(new THREE.Vector3());
@@ -366,6 +369,7 @@ export function createBuildingModel(kind: BuildingKind, owner: number, done: boo
     external.updateMatrixWorld(true);
     external.position.y -= new THREE.Box3().setFromObject(external).min.y;
     g.add(external);
+    g.userData.modelSrc = externalAsset.src;
     if (!done) g.traverse(o => { if (o instanceof THREE.Mesh) o.castShadow = false; });
     g.updateMatrixWorld(true);
     const bounds = new THREE.Box3().setFromObject(g);

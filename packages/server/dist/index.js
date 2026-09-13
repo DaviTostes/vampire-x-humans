@@ -268,9 +268,10 @@ var GAME_CONFIG = {
       hp: 500,
       size: 5,
       cost: { wood: 0, gold: 64, time: 4 },
-      maxLevel: 2,
+      maxLevel: 3,
       // Chave = nível ATUAL: 1 é o custo de ir do nível 1 para o 2.
-      upgradeCosts: { 1: { wood: 0, gold: 256 } }
+      // Nível 3 tem modelo próprio (market3.glb); o nível 2 reaproveita o do nível 1.
+      upgradeCosts: { 1: { wood: 0, gold: 256 }, 2: { wood: 0, gold: 512 } }
     },
     // Mina de Ouro: construída pelo Minerador e fonte de ouro (seção 10).
     // TODO(A CONFIRMAR): vida e tempo de obra não definidos; valor provisório.
@@ -285,8 +286,7 @@ var GAME_CONFIG = {
   },
   buildable: ["bank", "taverna", "wall", "tower", "goldMine", "market"],
   // Itens do Vampiro (dano/vida/Attack Speed): ver `spec.vampireItemTiers`.
-  // Comprados com OURO na cripta. (A antiga economia de sangue por item foi
-  // substituída pela especificação; `blood` permanece só para a skill legada.)
+  // Comprados com SANGUE na cripta (o preço de cada nível está na tabela).
   // Skills ativas do vampiro: compra única com sangue, depois uso com cooldown.
   vampireSkills: {
     powerStrike: {
@@ -322,8 +322,9 @@ var GAME_CONFIG = {
   // Frequência da simulação; não é o ciclo do Banco.
   interaction: {
     buildRange: 1.8,
-    repairRate: 30,
-    // HP restaurado por segundo por reparador, multiplicado por buildRate
+    // HP restaurado por segundo por reparador, multiplicado por buildRate.
+    // Reduzido em 1/3 (30 → 20): o Humano repara o Muro mais devagar.
+    repairRate: 20,
     woodGatherRange: 2.2,
     goldGatherRange: 3.5,
     formationSpacing: 1.8,
@@ -502,7 +503,9 @@ var GAME_CONFIG = {
         name: "Revelar \xC1rea",
         icon: "\u{1F441}",
         duration: 10,
-        usesPerNight: 1,
+        cooldown: 60,
+        // Duas cargas; cada carga recarrega em `cooldown` segundos (60s).
+        charges: 2,
         // TODO(A CONFIRMAR): raio, forma, alcance e se revela unidades invisíveis.
         radius: null,
         range: null
@@ -549,39 +552,43 @@ var GAME_CONFIG = {
       policy: null
     },
     // ---- Itens do Vampiro (seções 20–24) ----
-    // Cada nível guarda `bonus` e `cost` em gold. `bonus: null` = A CONFIRMAR.
+    // Cada nível guarda `bonus` e `cost` em SANGUE (moeda do Vampiro).
+    // Os valores são INCREMENTAIS: o bônus total no nível é a soma dos níveis
+    // anteriores até o atual (ver `vampireItemBonus`).
     vampireItemTiers: {
-      // TODO(A CONFIRMAR): modelo cumulativo (A) ou substitutivo (B).
-      accumulation: null,
+      accumulation: "cumulative",
       damage: {
         1: { bonus: 2, cost: 100 },
-        2: { bonus: 4, cost: 200 },
-        3: { bonus: 8, cost: 400 },
-        4: { bonus: 16, cost: 800 },
-        5: { bonus: 32, cost: 1600 },
-        6: { bonus: 64, cost: 3200 },
-        7: { bonus: 128, cost: 6400 },
-        8: { bonus: 256, cost: 12800 }
+        2: { bonus: 4, cost: 100 },
+        3: { bonus: 8, cost: 200 },
+        4: { bonus: 16, cost: 400 },
+        5: { bonus: 32, cost: 800 },
+        6: { bonus: 64, cost: 1600 },
+        7: { bonus: 128, cost: 3200 },
+        8: { bonus: 256, cost: 6400 },
+        9: { bonus: 256, cost: 12800 },
+        10: { bonus: 256, cost: 12800 }
       },
       health: {
         1: { bonus: 250, cost: 100 },
-        2: { bonus: 500, cost: 200 },
-        3: { bonus: 1e3, cost: 400 },
-        4: { bonus: 2e3, cost: 800 },
-        5: { bonus: 4e3, cost: 1600 },
-        6: { bonus: 8e3, cost: 3200 },
-        7: { bonus: 16e3, cost: 6400 },
-        8: { bonus: 32e3, cost: 12800 }
+        2: { bonus: 500, cost: 100 },
+        3: { bonus: 1e3, cost: 200 },
+        4: { bonus: 2e3, cost: 400 },
+        5: { bonus: 4e3, cost: 800 },
+        6: { bonus: 8e3, cost: 1600 },
+        7: { bonus: 16e3, cost: 3200 },
+        8: { bonus: 32e3, cost: 6400 },
+        9: { bonus: 32e3, cost: 12800 },
+        10: { bonus: 32e3, cost: 12800 }
       },
-      // TODO(A CONFIRMAR): bônus dos níveis 3–6 não definidos; NÃO duplicar.
       attackSpeed: {
-        1: { bonus: 20, cost: 100 },
-        2: { bonus: 40, cost: 200 },
-        3: { bonus: null, cost: 400 },
-        4: { bonus: null, cost: 800 },
-        5: { bonus: null, cost: 1600 },
-        6: { bonus: null, cost: 3200 },
-        7: { bonus: 500, cost: 6400 }
+        1: { bonus: 10, cost: 100 },
+        2: { bonus: 10, cost: 100 },
+        3: { bonus: 20, cost: 200 },
+        4: { bonus: 40, cost: 400 },
+        5: { bonus: 80, cost: 800 },
+        6: { bonus: 120, cost: 1600 },
+        7: { bonus: 200, cost: 3200 }
       }
     },
     // ---- Limites de entidades por jogador (seção 28) ----
@@ -1724,7 +1731,14 @@ function createGameState(names, _seed = 0, playerIds = Array.from({ length: MAX_
     result: null,
     players: createPlayers(names, ids),
     units,
-    vampire: { blood: 0, items: {}, skills: {}, revealUses: 1 },
+    vampire: {
+      blood: 0,
+      items: {},
+      skills: {},
+      // Revelar Área começa com todas as cargas disponíveis.
+      revealCharges: VAMPIRE_ABILITIES.revealArea.charges,
+      revealCooldown: 0
+    },
     seed: model.config.version,
     mapId,
     buildings: [
@@ -2529,16 +2543,19 @@ function applyCommand(session, playerId, cmd) {
       if (!vampire || !Object.hasOwn(VAMPIRE_ABILITIES, cmd.ability)) return;
       if (!vampireCanCast(s)) return;
       if (cmd.ability === "revealArea") {
-        if (s.phase !== "night" || (s.vampire.revealUses ?? 0) <= 0) return;
-        if (!Number.isFinite(cmd.x) || !Number.isFinite(cmd.z)) return;
         const ability = VAMPIRE_ABILITIES.revealArea;
+        const maxCharges = ability.charges;
+        const charges = s.vampire.revealCharges ?? maxCharges;
+        if (s.phase !== "night" || charges <= 0) return;
+        if (!Number.isFinite(cmd.x) || !Number.isFinite(cmd.z)) return;
         s.vampire.reveal = {
           x: cmd.x,
           z: cmd.z,
           remaining: ability.duration,
           radius: ability.radius ?? DEFAULT_REVEAL_RADIUS
         };
-        s.vampire.revealUses = (s.vampire.revealUses ?? 0) - 1;
+        s.vampire.revealCharges = charges - 1;
+        if ((s.vampire.revealCooldown ?? 0) <= 0) s.vampire.revealCooldown = ability.cooldown;
       } else if (cmd.ability === "batForm") {
         if (vampireInBatForm(s)) {
           if (VAMPIRE_ABILITIES.batForm.cancellable === true) clearVampireStatus(s, "batForm");
@@ -2568,7 +2585,6 @@ function applyCommand(session, playerId, cmd) {
       } else if (cmd.action === "phase" && (cmd.phase === "day" || cmd.phase === "night")) {
         s.phase = cmd.phase;
         s.phaseTime = cmd.phase === "day" ? s.daySeconds : s.nightSeconds;
-        if (cmd.phase === "night") s.vampire.revealUses = 1;
       } else if (cmd.action === "heal") {
         for (const unit of s.units) if (unit.owner === playerId && !unit.dead) unit.hp = unit.maxHp;
       }
@@ -2796,7 +2812,6 @@ function updatePhase(s, dt) {
   if (s.phase === "day") {
     s.phase = "night";
     s.phaseTime = s.nightSeconds;
-    s.vampire.revealUses = 1;
   } else {
     s.phase = "day";
     s.phaseTime = s.daySeconds;
@@ -2993,6 +3008,17 @@ function updateUnits(session, dt, index) {
       if (s.vampire.reveal) {
         s.vampire.reveal.remaining -= dt;
         if (s.vampire.reveal.remaining <= 0) s.vampire.reveal = null;
+      }
+      const revealMaxCharges = VAMPIRE_ABILITIES.revealArea.charges;
+      const revealCharges = s.vampire.revealCharges ?? revealMaxCharges;
+      if (revealCharges < revealMaxCharges) {
+        s.vampire.revealCooldown = Math.max(0, (s.vampire.revealCooldown ?? 0) - dt);
+        if (s.vampire.revealCooldown <= 0) {
+          s.vampire.revealCharges = revealCharges + 1;
+          s.vampire.revealCooldown = revealCharges + 1 < revealMaxCharges ? VAMPIRE_ABILITIES.revealArea.cooldown : 0;
+        }
+      } else {
+        s.vampire.revealCooldown = 0;
       }
     }
     if (u.kind === "vampire") {
@@ -3222,7 +3248,8 @@ function makeSnapshot(s, includeNodes = true) {
     ),
     vampireStatuses: s.vampire.statuses ? Object.fromEntries(Object.entries(s.vampire.statuses).map(([k, v]) => [k, Math.round((v ?? 0) * 10) / 10])) : void 0,
     vampireReveal: s.vampire.reveal ? { ...s.vampire.reveal, remaining: Math.round(s.vampire.reveal.remaining * 10) / 10 } : null,
-    vampireRevealUses: s.vampire.revealUses ?? 0
+    vampireRevealCharges: s.vampire.revealCharges ?? VAMPIRE_ABILITIES.revealArea.charges,
+    vampireRevealCooldown: Math.round((s.vampire.revealCooldown ?? 0) * 10) / 10
   };
 }
 

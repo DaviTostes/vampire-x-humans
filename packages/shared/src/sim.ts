@@ -434,15 +434,19 @@ export function applyCommand(session: Session, playerId: number, cmd: Command): 
       // Silenciador bloqueia habilidades do Vampiro (seção 25).
       if (!vampireCanCast(s)) return;
       if (cmd.ability === 'revealArea') {
-        // 1 uso por noite, sem acúmulo; reset no início da noite (seção 15).
-        if (s.phase !== 'night' || (s.vampire.revealUses ?? 0) <= 0) return;
-        if (!Number.isFinite(cmd.x) || !Number.isFinite(cmd.z)) return;
+        // Duas cargas; cada carga recarrega em 60s (ver `revealArea.charges`).
         const ability = VAMPIRE_ABILITIES.revealArea;
+        const maxCharges = ability.charges;
+        const charges = s.vampire.revealCharges ?? maxCharges;
+        if (s.phase !== 'night' || charges <= 0) return;
+        if (!Number.isFinite(cmd.x) || !Number.isFinite(cmd.z)) return;
         s.vampire.reveal = {
           x: cmd.x!, z: cmd.z!, remaining: ability.duration,
           radius: ability.radius ?? DEFAULT_REVEAL_RADIUS,
         };
-        s.vampire.revealUses = (s.vampire.revealUses ?? 0) - 1;
+        s.vampire.revealCharges = charges - 1;
+        // Inicia a recarga da carga gasta (se nenhuma estiver em andamento).
+        if ((s.vampire.revealCooldown ?? 0) <= 0) s.vampire.revealCooldown = ability.cooldown;
       } else if (cmd.ability === 'batForm') {
         if (vampireInBatForm(s)) {
           // Cancelamento manual é A CONFIRMAR; só cancela se configurado.
@@ -474,7 +478,6 @@ export function applyCommand(session: Session, playerId: number, cmd: Command): 
       } else if (cmd.action === 'phase' && (cmd.phase === 'day' || cmd.phase === 'night')) {
         s.phase = cmd.phase;
         s.phaseTime = cmd.phase === 'day' ? s.daySeconds : s.nightSeconds;
-        if (cmd.phase === 'night') s.vampire.revealUses = 1;
       } else if (cmd.action === 'heal') {
         for (const unit of s.units) if (unit.owner === playerId && !unit.dead) unit.hp = unit.maxHp;
       }
@@ -722,8 +725,6 @@ function updatePhase(s: GameState, dt: number): void {
   if (s.phase === 'day') {
     s.phase = 'night';
     s.phaseTime = s.nightSeconds;
-    // Revelar Área volta a 1 uso exatamente ao começar a noite (seção 15).
-    s.vampire.revealUses = 1;
   } else {
     // amanhecer: sobreviver à noite (ou às noites configuradas) vence o jogo.
     s.phase = 'day';
@@ -963,6 +964,19 @@ function updateUnits(session: Session, dt: number, index: TickIndex): void {
         s.vampire.reveal.remaining -= dt;
         if (s.vampire.reveal.remaining <= 0) s.vampire.reveal = null;
       }
+      // Recarga de Revelar Área: uma carga a cada 60s, acumulando até o máximo.
+      const revealMaxCharges = VAMPIRE_ABILITIES.revealArea.charges;
+      const revealCharges = s.vampire.revealCharges ?? revealMaxCharges;
+      if (revealCharges < revealMaxCharges) {
+        s.vampire.revealCooldown = Math.max(0, (s.vampire.revealCooldown ?? 0) - dt);
+        if (s.vampire.revealCooldown <= 0) {
+          s.vampire.revealCharges = revealCharges + 1;
+          // Ainda faltam cargas? Reinicia o ciclo para a próxima.
+          s.vampire.revealCooldown = revealCharges + 1 < revealMaxCharges ? VAMPIRE_ABILITIES.revealArea.cooldown : 0;
+        }
+      } else {
+        s.vampire.revealCooldown = 0;
+      }
     }
 
     if (u.kind === 'vampire') {
@@ -1200,6 +1214,7 @@ export function makeSnapshot(s: GameState, includeNodes = true): Snapshot {
       ? Object.fromEntries(Object.entries(s.vampire.statuses).map(([k, v]) => [k, Math.round((v ?? 0) * 10) / 10])) as Snapshot['vampireStatuses']
       : undefined,
     vampireReveal: s.vampire.reveal ? { ...s.vampire.reveal, remaining: Math.round(s.vampire.reveal.remaining * 10) / 10 } : null,
-    vampireRevealUses: s.vampire.revealUses ?? 0,
+    vampireRevealCharges: s.vampire.revealCharges ?? VAMPIRE_ABILITIES.revealArea.charges,
+    vampireRevealCooldown: Math.round((s.vampire.revealCooldown ?? 0) * 10) / 10,
   };
 }

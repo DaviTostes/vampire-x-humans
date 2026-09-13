@@ -6,9 +6,8 @@ import type { GameScene } from './scene.js';
 import type { Net } from './net.js';
 import { RTS_CAMERA } from './camera.js';
 
-// Keybinds das habilidades: Q/E/R/T (T é a skill ativa do Vampiro).
-const HUMAN_ABILITY_KEYS: Record<string, HumanAbilityId> = { q: 'entangle', e: 'fortify', r: 'teleport', t: 'silencer' };
-const VAMPIRE_ABILITY_KEYS: Record<string, VampireAbilityId> = { q: 'revealArea', e: 'batForm', r: 'teleportHome' };
+// Atalhos: construção em letras (Q/E/R/T/F) e habilidades em números (1..4),
+// ambos tratados pela HUD, que clica nos botões dos painéis correspondentes.
 
 export class RtsControls {
   selected: number[] = [];
@@ -53,9 +52,6 @@ export class RtsControls {
       if (e.repeat) return;
       // Espaço: foca e seleciona o personagem principal.
       if (e.code === 'Space') { e.preventDefault(); this.focusHero(); return; }
-      // Q/E/R/T: habilidades. Os atalhos 1..9 do painel de comandos são
-      // tratados pela HUD (unidades e construções).
-      if (key === 'q' || key === 'e' || key === 'r' || key === 't') this.abilityHotkey(key);
     });
     window.addEventListener('keyup', (e) => this.keys.delete(e.key.toLowerCase()));
     window.addEventListener('blur', () => {
@@ -174,37 +170,6 @@ export class RtsControls {
     this.scene.setSelection(this.selected);
     this.scene.setBuildingSelection(null);
     this.onSelectionChanged();
-  }
-
-  /** Atalhos Q/E/R/T das habilidades (T = skill ativa do Vampiro). */
-  private abilityHotkey(key: string) {
-    const snap = this.getSnap();
-    if (!snap || snap.result) return;
-    const myId = this.getMyId();
-    const isVamp = myId === VAMPIRE_PLAYER_ID;
-    // Habilidades são por classe: exigem o herói humano / vampiro selecionado.
-    const casterSelected = this.selected.some(id => {
-      const unit = snap.units.find(u => u.id === id);
-      if (!unit) return false;
-      return isVamp ? unit.kind === 'vampire' : unit.kind === 'worker' && unit.hero === true;
-    });
-    if (!casterSelected) return;
-    if (isVamp) {
-      const ability = VAMPIRE_ABILITY_KEYS[key];
-      if (ability) {
-        if (ability === 'revealArea') this.enterVampireAbility('revealArea');
-        else this.net.command({ type: 'castVampireAbility', ability });
-        return;
-      }
-      // Golpe Sombrio (tecla T) removido por enquanto.
-      return;
-    }
-    const id = HUMAN_ABILITY_KEYS[key];
-    if (!id) return;
-    const cd = snap.players.find(p => p.id === myId)?.abilityCooldowns?.[id] ?? 0;
-    if (cd > 0) return;
-    // Alterna o modo de alvo (mesmo fluxo do clique no botão).
-    this.enterAbility(id);
   }
 
   // ---------- mouse ----------

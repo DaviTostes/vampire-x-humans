@@ -1,4 +1,4 @@
-import { DAY_LENGTH, NIGHT_LENGTH, DEFAULT_MAP_ID, START_RESOURCES, VAMPIRE, WORKER, CRYPT, MAX_PLAYERS, VAMPIRE_PLAYER_ID, type MapPresetId } from './constants.js';
+import { DAY_LENGTH, NIGHT_LENGTH, DEFAULT_MAP_ID, START_RESOURCES, VAMPIRE, WORKER, CRYPT, MAX_PLAYERS, VAMPIRE_PLAYER_ID, VAMPIRE_ABILITIES, type MapPresetId } from './constants.js';
 import { getMapModel } from './mapgen.js';
 import type { GameState, PlayerState, Unit } from './types.js';
 
@@ -37,7 +37,11 @@ export function createGameState(
   if (100 >= nextId) nextId = 101; // cripta
   return {
     tick: 0, time: 0, phase: 'day', phaseTime: daySeconds, daySeconds, nightSeconds, day: 1, result: null,
-    players: createPlayers(names, ids), units, vampire: { blood: 0, items: {}, skills: {}, revealUses: 1 }, seed: model.config.version,
+    players: createPlayers(names, ids), units, vampire: {
+      blood: 0, items: {}, skills: {},
+      // Revelar Área começa com todas as cargas disponíveis.
+      revealCharges: VAMPIRE_ABILITIES.revealArea.charges, revealCooldown: 0,
+    }, seed: model.config.version,
     mapId,
     buildings: [
       { id: 100, kind: 'crypt', owner: -1, ...model.cryptPosition, hp: CRYPT.hp, maxHp: CRYPT.hp,

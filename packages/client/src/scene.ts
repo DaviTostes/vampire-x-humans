@@ -262,6 +262,8 @@ export class GameScene {
   private unitMeshes = new Map<number, THREE.Group>();
   private buildingMeshes = new Map<number, THREE.Group>();
   private nodeMeshes = new Map<number, THREE.Group>();
+  /** Construções cujo modelo de nível terminou de carregar e devem ser recriadas. */
+  private buildingRefresh = new Set<number>();
   private hoverEnemyId: number | null = null;
   private hoverRing: THREE.Group | null = null;
   private woodInstances: THREE.InstancedMesh[] = [];
@@ -998,7 +1000,8 @@ export class GameScene {
       const completed = g && g.userData.done === false && b.done;
       const recruited = g?.userData.recruiting && !b.recruitment;
       const goldDelta = g ? Math.max(0, (b.goldProduced ?? 0) - (g.userData.goldProduced ?? b.goldProduced ?? 0)) : 0;
-      if (g && (g.userData.done !== b.done || (b.kind === 'wall' && g.userData.level !== b.level))) {
+      if (g && (g.userData.done !== b.done || g.userData.level !== b.level || this.buildingRefresh.has(b.id))) {
+        this.buildingRefresh.delete(b.id);
         this.scene.remove(g);
         g = undefined;
       }
@@ -1010,6 +1013,22 @@ export class GameScene {
         this.buildingMeshes.set(b.id, g);
         this.scene.add(g);
         g.userData.pick = { buildingId: b.id };
+      }
+      // Variação de nível: se o GLB ideal do nível ainda não está pronto, usa o
+      // fallback já exibido e busca o modelo em segundo plano. Ao chegar, a malha
+      // é recriada no próximo snapshot (buildingRefresh).
+      if (g && !g.userData.variantPending) {
+        const desiredSrc = assetRegistry.buildingVariantSrc(b.kind, b.level);
+        if (desiredSrc && g.userData.modelSrc !== desiredSrc) {
+          g.userData.variantPending = true;
+          const buildingId = b.id;
+          assetRegistry.ensureBuildingVariant(b.kind, b.level).then((ready) => {
+            // Só recria quando o modelo chegou; falha mantém o fallback (sem repetir).
+            if (ready) this.buildingRefresh.add(buildingId);
+          }).catch(() => {
+            // Sem o GLB da variação, mantém o modelo atual (fallback/procedural).
+          });
+        }
       }
       const visible = this.isVisibleToLocal(b.owner, b.x, b.z);
       g.userData.kind = b.kind;
@@ -1063,6 +1082,7 @@ export class GameScene {
       if (!seenBuildings.has(id)) {
         this.scene.remove(g);
         this.buildingMeshes.delete(id);
+        this.buildingRefresh.delete(id);
         const bar = this.hpBars.get(id);
         if (bar) this.scene.remove(bar);
         this.hpBars.delete(id);

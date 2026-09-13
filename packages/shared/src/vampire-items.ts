@@ -10,8 +10,8 @@ import {
 import type { Building, Unit, VampireState } from './types.js';
 
 // ---- Itens do Vampiro (seções 20–24) ----
-// Três categorias; custo em OURO; bônus por nível. Níveis com bônus `null`
-// (A CONFIRMAR) não podem ser comprados.
+// Três categorias; custo em SANGUE; bônus por nível (acumulativo conforme a
+// tabela central).
 
 export const VAMPIRE_ITEM_IDS: VampireItemId[] = ['damage', 'health', 'attackSpeed'];
 
@@ -31,8 +31,8 @@ export function vampireItemMaxLevel(id: VampireItemId): number {
 }
 
 /**
- * Próximo nível comprável, ou `null` se indefinido (bônus A CONFIRMAR) ou máximo.
- * Bloquear níveis sem bônus evita inventar Attack Speed para os níveis 3–6.
+ * Próximo nível comprável, ou `null` se indefinido (bônus ausente) ou máximo.
+ * Bloquear níveis sem bônus evita inventar bônus não definidos na spec.
  */
 export function vampireItemNextLevel(id: VampireItemId, owned: number): number | null {
   const next = owned + 1;

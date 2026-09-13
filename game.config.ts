@@ -356,9 +356,10 @@ export const GAME_CONFIG = {
     market: {
       hp: 500, size: 5,
       cost: { wood: 0, gold: 64, time: 4 },
-      maxLevel: 2,
+      maxLevel: 3,
       // Chave = nível ATUAL: 1 é o custo de ir do nível 1 para o 2.
-      upgradeCosts: { 1: { wood: 0, gold: 256 } } as Record<number, { wood: number; gold: number }>,
+      // Nível 3 tem modelo próprio (market3.glb); o nível 2 reaproveita o do nível 1.
+      upgradeCosts: { 1: { wood: 0, gold: 256 }, 2: { wood: 0, gold: 512 } } as Record<number, { wood: number; gold: number }>,
     },
     // Mina de Ouro: construída pelo Minerador e fonte de ouro (seção 10).
     // TODO(A CONFIRMAR): vida e tempo de obra não definidos; valor provisório.
@@ -375,8 +376,7 @@ export const GAME_CONFIG = {
   buildable: ['bank', 'taverna', 'wall', 'tower', 'goldMine', 'market'] as BuildKind[],
 
   // Itens do Vampiro (dano/vida/Attack Speed): ver `spec.vampireItemTiers`.
-  // Comprados com OURO na cripta. (A antiga economia de sangue por item foi
-  // substituída pela especificação; `blood` permanece só para a skill legada.)
+  // Comprados com SANGUE na cripta (o preço de cada nível está na tabela).
 
   // Skills ativas do vampiro: compra única com sangue, depois uso com cooldown.
   vampireSkills: {
@@ -407,7 +407,9 @@ export const GAME_CONFIG = {
 
   interaction: {
     buildRange: 1.8,
-    repairRate: 30, // HP restaurado por segundo por reparador, multiplicado por buildRate
+    // HP restaurado por segundo por reparador, multiplicado por buildRate.
+    // Reduzido em 1/3 (30 → 20): o Humano repara o Muro mais devagar.
+    repairRate: 20,
     woodGatherRange: 2.2, goldGatherRange: 3.5,
     formationSpacing: 1.8,
     unitRadius: 0.55, unitSeparation: 1.4,
@@ -580,7 +582,9 @@ export const GAME_CONFIG = {
     // ---- Habilidades do Vampiro (seções 15–17) ----
     vampireAbilities: {
       revealArea: {
-        name: 'Revelar Área', icon: '👁', duration: 10, usesPerNight: 1,
+        name: 'Revelar Área', icon: '👁', duration: 10, cooldown: 60,
+        // Duas cargas; cada carga recarrega em `cooldown` segundos (60s).
+        charges: 2,
         // TODO(A CONFIRMAR): raio, forma, alcance e se revela unidades invisíveis.
         radius: null as number | null,
         range: null as number | null,
@@ -626,29 +630,31 @@ export const GAME_CONFIG = {
     },
 
     // ---- Itens do Vampiro (seções 20–24) ----
-    // Cada nível guarda `bonus` e `cost` em gold. `bonus: null` = A CONFIRMAR.
+    // Cada nível guarda `bonus` e `cost` em SANGUE (moeda do Vampiro).
+    // Os valores são INCREMENTAIS: o bônus total no nível é a soma dos níveis
+    // anteriores até o atual (ver `vampireItemBonus`).
     vampireItemTiers: {
-      // TODO(A CONFIRMAR): modelo cumulativo (A) ou substitutivo (B).
-      accumulation: null as 'cumulative' | 'substitutive' | null,
+      accumulation: 'cumulative' as const,
       damage: {
-        1: { bonus: 2, cost: 100 }, 2: { bonus: 4, cost: 200 },
-        3: { bonus: 8, cost: 400 }, 4: { bonus: 16, cost: 800 },
-        5: { bonus: 32, cost: 1600 }, 6: { bonus: 64, cost: 3200 },
-        7: { bonus: 128, cost: 6400 }, 8: { bonus: 256, cost: 12800 },
+        1: { bonus: 2, cost: 100 }, 2: { bonus: 4, cost: 100 },
+        3: { bonus: 8, cost: 200 }, 4: { bonus: 16, cost: 400 },
+        5: { bonus: 32, cost: 800 }, 6: { bonus: 64, cost: 1600 },
+        7: { bonus: 128, cost: 3200 }, 8: { bonus: 256, cost: 6400 },
+        9: { bonus: 256, cost: 12800 }, 10: { bonus: 256, cost: 12800 },
       } as Record<number, { bonus: number; cost: number }>,
       health: {
-        1: { bonus: 250, cost: 100 }, 2: { bonus: 500, cost: 200 },
-        3: { bonus: 1000, cost: 400 }, 4: { bonus: 2000, cost: 800 },
-        5: { bonus: 4000, cost: 1600 }, 6: { bonus: 8000, cost: 3200 },
-        7: { bonus: 16000, cost: 6400 }, 8: { bonus: 32000, cost: 12800 },
+        1: { bonus: 250, cost: 100 }, 2: { bonus: 500, cost: 100 },
+        3: { bonus: 1000, cost: 200 }, 4: { bonus: 2000, cost: 400 },
+        5: { bonus: 4000, cost: 800 }, 6: { bonus: 8000, cost: 1600 },
+        7: { bonus: 16000, cost: 3200 }, 8: { bonus: 32000, cost: 6400 },
+        9: { bonus: 32000, cost: 12800 }, 10: { bonus: 32000, cost: 12800 },
       } as Record<number, { bonus: number; cost: number }>,
-      // TODO(A CONFIRMAR): bônus dos níveis 3–6 não definidos; NÃO duplicar.
       attackSpeed: {
-        1: { bonus: 20, cost: 100 }, 2: { bonus: 40, cost: 200 },
-        3: { bonus: null, cost: 400 }, 4: { bonus: null, cost: 800 },
-        5: { bonus: null, cost: 1600 }, 6: { bonus: null, cost: 3200 },
-        7: { bonus: 500, cost: 6400 },
-      } as Record<number, { bonus: number | null; cost: number }>,
+        1: { bonus: 10, cost: 100 }, 2: { bonus: 10, cost: 100 },
+        3: { bonus: 20, cost: 200 }, 4: { bonus: 40, cost: 400 },
+        5: { bonus: 80, cost: 800 }, 6: { bonus: 120, cost: 1600 },
+        7: { bonus: 200, cost: 3200 },
+      } as Record<number, { bonus: number; cost: number }>,
     },
 
     // ---- Limites de entidades por jogador (seção 28) ----

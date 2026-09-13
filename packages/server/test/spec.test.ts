@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { applyCommand, createSession, step, vampireStatus, GAME_CONFIG, SPEC_ENTITY_LIMITS, VAMPIRE, VAMPIRE_PLAYER_ID, type Building, type Unit, type WorkerRole } from '@vampire/shared';
+import { applyCommand, createSession, step, vampireStatus, GAME_CONFIG, SPEC_ENTITY_LIMITS, VAMPIRE, VAMPIRE_ABILITIES, VAMPIRE_PLAYER_ID, type Building, type Unit, type WorkerRole } from '@vampire/shared';
 
 function fixture() {
   const session = createSession([], 42, [0, 4]);
@@ -294,22 +294,41 @@ test('Vampiro usa o mesmo dano contra unidades e construções (seção 13)', ()
   assert.equal(wall.maxHp - wall.hp, VAMPIRE.attackDamage * VAMPIRE.dayDamageMultiplier, 'dano diurno no muro');
 });
 
-test('Revelar Área: 1 uso por noite, não acumula e reseta na nova noite', () => {
+test('Revelar Área: 2 cargas com recarga de 60s cada', () => {
   const { session } = fixture();
   session.state.phase = 'night';
-  session.state.vampire.revealUses = 1;
-  applyCommand(session, 4, { type: 'castVampireAbility', ability: 'revealArea', x: 0, z: 0 });
+  session.state.phaseTime = session.state.nightSeconds;
+  const maxCharges = VAMPIRE_ABILITIES.revealArea.charges;
+  assert.equal(session.state.vampire.revealCharges, maxCharges, 'começa com todas as cargas');
+
+  // 1º uso consome uma carga e inicia a recarga.
+  applyCommand(session, 4, { type: 'castVampireAbility', ability: 'revealArea', x: 1, z: 1 });
   assert.ok(session.state.vampire.reveal, 'revelação ativa');
-  assert.equal(session.state.vampire.revealUses, 0, 'consumiu o uso da noite');
+  assert.equal(session.state.vampire.revealCharges, maxCharges - 1);
+  assert.equal(session.state.vampire.revealCooldown, VAMPIRE_ABILITIES.revealArea.cooldown, 'inicia a recarga');
+
+  // 2º uso imediato consome a segunda carga (sem reiniciar a recarga).
   applyCommand(session, 4, { type: 'castVampireAbility', ability: 'revealArea', x: 5, z: 5 });
-  assert.equal(session.state.vampire.reveal!.x, 0, 'não acumula um segundo uso');
-  for (let i = 0; i < 160; i++) step(session, []); // ~10,7s
-  assert.equal(session.state.vampire.reveal, null, 'a revelação termina');
-  // Nova noite restaura exatamente 1 uso.
-  session.state.phase = 'day'; session.state.phaseTime = 0.001;
-  step(session, []);
-  assert.equal(session.state.phase, 'night');
-  assert.equal(session.state.vampire.revealUses, 1);
+  assert.equal(session.state.vampire.reveal!.x, 5, 'segundo uso substitui a área');
+  assert.equal(session.state.vampire.revealCharges, 0);
+  assert.equal(session.state.vampire.revealCooldown, VAMPIRE_ABILITIES.revealArea.cooldown, 'recarga em andamento');
+
+  // Sem cargas: bloqueado.
+  applyCommand(session, 4, { type: 'castVampireAbility', ability: 'revealArea', x: 9, z: 9 });
+  assert.equal(session.state.vampire.reveal!.x, 5, 'bloqueado sem cargas');
+
+  // ~60s: recupera uma carga e a próxima entra em recarga.
+  for (let i = 0; i < 900; i++) step(session, []);
+  assert.equal(session.state.vampire.revealCharges, 1, 'recupera uma carga');
+  assert.ok(session.state.vampire.revealCooldown! > 0, 'próxima carga em recarga');
+
+  // Mais ~60s: segunda carga e recarga zerada.
+  for (let i = 0; i < 900; i++) step(session, []);
+  assert.equal(session.state.vampire.revealCharges, maxCharges);
+  assert.equal(session.state.vampire.revealCooldown, 0, 'recarga zera com o máximo de cargas');
+
+  applyCommand(session, 4, { type: 'castVampireAbility', ability: 'revealArea', x: 7, z: 7 });
+  assert.equal(session.state.vampire.reveal!.x, 7, 'novo uso após recarregar');
 });
 
 test('Forma de Morcego: invulnerável, máx 15s e saída de 1,5s', () => {

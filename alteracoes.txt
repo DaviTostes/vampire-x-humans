@@ -1,0 +1,97 @@
+Alterações para o vampiro:
+
+A habilidade de revelar área deve ter 2 cargas
+cada carga deve ter um tempo de recarga de 60 segundos
+
+Alterar a lógica dos itens do vampiro:
+
+ITENS DE DANO:
+Nível 1
++2 de dano
+100 sangue
+
+Nível 2
++4 de dano
+100 sangue
+
+Nível 3
++8 de dano
+200 sangue
+
+Nível 4
++16 de dano
+400 sangue
+
+Nível 5
++32 de dano
+800 sangue
+
+Nível 6
++64 de dano
+1600 sangue
+
+Nível 7
++128 de dano
+3200 sangue
+
+Nível 8
++256 de dano
+6400 sangue
+
+Nível 9
++256 de dano
+12800 sangue
+
+Nível 10
++256 de dano
+12800 sangue
+
+ITENS DE VIDA:
+Tabela resumida:
+
+Level 1 = +250 vida = 100 sangue
+Level 2 = +500 vida = 100 sangue
+Level 3 = +1.000 vida = 200 sangue
+Level 4 = +2.000 vida = 400 sangue
+Level 5 = +4.000 vida = 800 sangue
+Level 6 = +8.000 vida = 1600 sangue
+Level 7 = +16.000 vida = 3200 sangue
+Level 8 = +32.000 vida = 6400 sangue
+Level 9 = +32.000 vida = 12800 sangue
+Level 10 = +32.000 vida = 12800 sangue
+
+ITENS DE ATACKSPEED
+Nível 1
++10 Attack Speed
+100 sangue
+
+Nível 2
++10 Attack Speed
+100 sangue
+
+Nível 3
++20 Attack Speed
+200 sangue
+
+Nível 4
++40 Attack Speed
+400 sangue
+
+Nível 5
++80 Attack Speed
+800 sangue
+
+Nível 6
++120 Attack Speed
+1600 sangue
+
+Nível 7
++200 Attack Speed
+3200 sangue
+
+
+Alterações para o humano:
+
+reduzir a velocidade com que o humano repara o muro em 1/3
+Inverter as hotkeys, para construção utilizar letras (Q banco, E muro, R torre, T mercado, F taverna)
+para usar habilidades, utilizar numeros (1,2,3,4)

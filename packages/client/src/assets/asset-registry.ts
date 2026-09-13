@@ -55,11 +55,39 @@ interface BuildingAssetDefinition {
   /** Kind da construção (ex.: 'goldMine'). */
   kind: string;
   src: string;
+  /** Nível mínimo (inclusive) em que este modelo é usado. Ausente = sem piso de nível. */
+  minLevel?: number;
+  /** Nível máximo (inclusive) em que este modelo é usado. Ausente = sem teto de nível. */
+  maxLevel?: number;
   /** Altura alvo em unidades de mundo; o modelo é escalado e apoiado em y=0. */
   targetHeight?: number;
   rotationY?: number;
   /** Multiplicador extra aplicado após encaixar o modelo no footprint da construção. */
   scale?: number;
+}
+
+/**
+ * Escolhe o modelo aplicável a um nível: prioriza a faixa exata (maior `minLevel`
+ * que ainda cabe) e só recorre ao modelo-base (sem faixa) quando nenhuma faixa cobre
+ * o nível — ex.: a Torre 4-7 mantém o modelo antigo enquanto não há variação própria.
+ */
+function pickBuildingDefinition(
+  definitions: readonly BuildingAssetDefinition[],
+  level: number,
+): BuildingAssetDefinition | null {
+  let best: BuildingAssetDefinition | null = null;
+  let fallback: BuildingAssetDefinition | null = null;
+  for (const definition of definitions) {
+    const { minLevel, maxLevel } = definition;
+    if (minLevel === undefined && maxLevel === undefined) {
+      fallback ??= definition;
+      continue;
+    }
+    if (minLevel !== undefined && level < minLevel) continue;
+    if (maxLevel !== undefined && level > maxLevel) continue;
+    if (!best || (definition.minLevel ?? -Infinity) > (best.minLevel ?? -Infinity)) best = definition;
+  }
+  return best ?? fallback ?? definitions[0] ?? null;
 }
 
 const VISUAL_ASSETS: readonly VisualAssetDefinition[] = [
@@ -114,17 +142,33 @@ const PROP_ASSETS: readonly PropAssetDefinition[] = [
 
 /** Modelos GLB que substituem o modelo procedural de uma construção. */
 // O encaixe de escala é feito pelo footprint em createBuildingModel.
+// Vários modelos podem ter o mesmo `kind`: as faixas `minLevel`/`maxLevel` definem
+// em que níveis cada um aparece. O modelo sem faixa é o fallback (níveis sem variação).
+// As faixas são carregadas sob demanda (só o modelo do nível 1 entra no preload).
 const BUILDING_ASSETS: readonly BuildingAssetDefinition[] = [
   { kind: 'goldMine', src: 'assets/buildings/gold_mine.glb' },
-  // O modelo do muro é baixo; o multiplicador o traz para o tamanho de um portão.
-  { kind: 'wall', src: 'assets/buildings/wall.glb', scale: 3 },
-  { kind: 'market', src: 'assets/buildings/market.glb' },
   { kind: 'taverna', src: 'assets/buildings/taverna.glb' },
-  { kind: 'bank', src: 'assets/buildings/bank.glb' },
-  { kind: 'tower', src: 'assets/buildings/tower.glb' },
   // Capela gárgula: novo modelo da Cripta (base do Vampiro). O multiplicador
   // deixa a base visualmente maior que o footprint padrão.
   { kind: 'crypt', src: 'assets/buildings/crypt.glb', scale: 1.5 },
+  // Banco: o modelo muda por faixa de nível (1-3, 4-6, 7-8).
+  { kind: 'bank', src: 'assets/buildings/bank.glb' },
+  { kind: 'bank', src: 'assets/buildings/bank_1_2_3.glb', minLevel: 1, maxLevel: 3 },
+  { kind: 'bank', src: 'assets/buildings/bank_4_5_6.glb', minLevel: 4, maxLevel: 6 },
+  { kind: 'bank', src: 'assets/buildings/bank_7_8.glb', minLevel: 7, maxLevel: 8 },
+  // Muro: faixas 1-5, 6-10 e 11. O modelo é baixo; o multiplicador o traz para o
+  // tamanho de um portão (mesma convenção do wall.glb antigo).
+  { kind: 'wall', src: 'assets/buildings/wall.glb', scale: 3 },
+  { kind: 'wall', src: 'assets/buildings/wall_1_2_3_4_5.glb', minLevel: 1, maxLevel: 5, scale: 3 },
+  { kind: 'wall', src: 'assets/buildings/wall_6_7_8_9_10.glb', minLevel: 6, maxLevel: 10, scale: 3 },
+  { kind: 'wall', src: 'assets/buildings/wall_11.glb', minLevel: 11, maxLevel: 11, scale: 3 },
+  // Mercado: nv1 (reaproveitado no nv2) e nv3.
+  { kind: 'market', src: 'assets/buildings/market.glb' },
+  { kind: 'market', src: 'assets/buildings/market_1.glb', minLevel: 1, maxLevel: 2 },
+  { kind: 'market', src: 'assets/buildings/market3.glb', minLevel: 3, maxLevel: 3 },
+  // Torre: nv1-3 com modelo novo; nv4-7 seguem no modelo atual até haver variação.
+  { kind: 'tower', src: 'assets/buildings/tower.glb' },
+  { kind: 'tower', src: 'assets/buildings/torre_1_2_3.glb', minLevel: 1, maxLevel: 3 },
 ];
 
 function publicUrl(path: string): string {
@@ -293,7 +337,10 @@ class AssetRegistry {
   private readonly gltfLoader = new GLTFLoader();
   private readonly loaded = new Map<string, LoadedAsset>();
   private readonly props = new Map<string, LoadedProp>();
+  /** Templates de construção carregados, por `src` (vários níveis por `kind`). */
   private readonly buildingTemplates = new Map<string, THREE.Group>();
+  /** Carregamentos de construção em andamento, por `src`, para deduplicar pedidos. */
+  private readonly buildingLoads = new Map<string, Promise<boolean>>();
   private preloadPromise: Promise<void> | null = null;
   private preloadLoaded = 0;
   private preloadTotal = 0;
@@ -310,10 +357,17 @@ class AssetRegistry {
     // Sequencial de propósito: disparar os ~100 MB em paralelo saturava a
     // rede do VPS e concentrava o parse dos FBX na thread principal (travava
     // a página). Carregando um por vez a interface continua respondendo.
-    const jobs: Array<() => Promise<void>> = [
+    // Das construções só entra o modelo do nível 1; as variações de nível são
+    // grandes (~10-20 MB cada) e carregam sob demanda quando o prédio evolui.
+    const initialBuildings = BUILDING_ASSETS
+      .map((definition) => definition.kind)
+      .filter((kind, index, kinds) => kinds.indexOf(kind) === index)
+      .map((kind) => pickBuildingDefinition(BUILDING_ASSETS.filter((definition) => definition.kind === kind), 1))
+      .filter((definition): definition is BuildingAssetDefinition => definition !== null);
+    const jobs: Array<() => Promise<unknown>> = [
       ...VISUAL_ASSETS.map((definition) => () => this.load(definition)),
       ...PROP_ASSETS.map((definition) => () => this.loadProp(definition)),
-      ...BUILDING_ASSETS.map((definition) => () => this.loadBuilding(definition)),
+      ...initialBuildings.map((definition) => () => this.loadBuilding(definition)),
     ];
     this.preloadLoaded = 0;
     this.preloadTotal = jobs.length;
@@ -342,13 +396,42 @@ class AssetRegistry {
     for (const listener of this.preloadListeners) listener(progress);
   }
 
+  /** `src` do modelo ideal para o nível (mesmo que ainda não tenha sido carregado). */
+  buildingVariantSrc(kind: string, level = 1): string | null {
+    const definitions = BUILDING_ASSETS.filter((definition) => definition.kind === kind);
+    return pickBuildingDefinition(definitions, level)?.src ?? null;
+  }
+
   /**
    * Cópia independente do modelo GLB da construção (materiais/texturas
-   * compartilhados). `null` enquanto não carregado — cai no procedural.
+   * compartilhados). Usa a melhor variação já carregada para o nível; `null`
+   * enquanto nada do tipo estiver pronto — cai no modelo procedural.
    */
-  buildingTemplate(kind: string): THREE.Group | null {
-    const template = this.buildingTemplates.get(kind);
-    return template ? template.clone(true) as THREE.Group : null;
+  buildingTemplate(kind: string, level = 1): { template: THREE.Group; src: string } | null {
+    const definitions = BUILDING_ASSETS.filter((definition) => definition.kind === kind);
+    if (!definitions.length) return null;
+    const ideal = pickBuildingDefinition(definitions, level);
+    const chosen = ideal && this.buildingTemplates.has(ideal.src)
+      ? ideal
+      : pickBuildingDefinition(definitions.filter((definition) => this.buildingTemplates.has(definition.src)), level);
+    if (!chosen) return null;
+    const template = this.buildingTemplates.get(chosen.src);
+    return template ? { template: template.clone(true) as THREE.Group, src: chosen.src } : null;
+  }
+
+  /**
+   * Garante que o modelo ideal do nível esteja carregado (ex.: Banco nv4).
+   * Deduplica pedidos simultâneos; o chamador recria a malha quando a promise resolve.
+   */
+  ensureBuildingVariant(kind: string, level = 1): Promise<boolean> {
+    const definitions = BUILDING_ASSETS.filter((definition) => definition.kind === kind);
+    const target = pickBuildingDefinition(definitions, level);
+    if (!target || this.buildingTemplates.has(target.src)) return Promise.resolve(true);
+    const pending = this.buildingLoads.get(target.src);
+    if (pending) return pending;
+    const promise = this.loadBuilding(target).finally(() => this.buildingLoads.delete(target.src));
+    this.buildingLoads.set(target.src, promise);
+    return promise;
   }
 
   clone(id: string): THREE.Group | null {
@@ -453,17 +536,20 @@ class AssetRegistry {
     }
   }
 
-  private async loadBuilding(definition: BuildingAssetDefinition): Promise<void> {
+  private async loadBuilding(definition: BuildingAssetDefinition): Promise<boolean> {
     try {
       const gltf = await this.gltfLoader.loadAsync(publicUrl(definition.src));
       const template = gltf.scene;
       prepareMeshes(template);
       normalizeProp(template, definition);
       template.userData.buildingScale = definition.scale ?? 1;
-      this.buildingTemplates.set(definition.kind, template);
+      template.userData.buildingSrc = definition.src;
+      this.buildingTemplates.set(definition.src, template);
+      return true;
     } catch (error) {
       // Sem o GLB, createBuildingModel usa o modelo procedural da construção.
       console.warn(`[assets] Falha ao carregar a construção ${definition.kind} (${definition.src}); usando procedural.`, error);
+      return false;
     }
   }
 }
