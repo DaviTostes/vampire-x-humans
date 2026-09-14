@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { applyCommand, bankProduction, canPlace, createSession, step, makeSnapshot, HUMAN_SPAWNS, RECRUIT, START_RESOURCES, SURVIVE_NIGHTS_TO_WIN, TOWER, towerDamage, VAMPIRE, WORLD, type Building, type Session, type Unit, type WorkerRole } from '@vampire/shared';
+import { applyCommand, bankProduction, canPlace, createSession, step, makeSnapshot, HUMAN_SPAWNS, MARKET, RECRUIT, START_RESOURCES, SURVIVE_NIGHTS_TO_WIN, TOWER, towerDamage, VAMPIRE, WORLD, type Building, type Session, type Unit, type WorkerRole } from '@vampire/shared';
 import { createRoom, startRoom } from '../src/rooms.js';
 
 function fixture() {
@@ -310,11 +310,12 @@ test('comprar e vender só funciona no Mercado próprio concluído', () => {
   assert.equal(player.wood, before.wood);
   assert.equal(player.gold, before.gold);
   market.owner = 0; trade(market.id);
-  assert.equal(player.wood, before.wood - 10);
-  assert.equal(player.gold, before.gold + 10);
-  applyCommand(session, 0, { type: 'market', targetId: market.id, trade: 'goldToWood', amount: 10 });
+  assert.equal(player.wood, before.wood - MARKET.wood);
+  assert.equal(player.gold, before.gold + MARKET.gold);
+  // A venda barateou o lote; a compra seguinte usa o preço reduzido.
+  applyCommand(session, 0, { type: 'market', targetId: market.id, trade: 'goldToWood', amount: MARKET.wood });
   assert.equal(player.wood, before.wood);
-  assert.equal(player.gold, before.gold);
+  assert.equal(player.gold, before.gold + MARKET.step);
 });
 
 test('muro leva 2s de trabalho e a atividade de construção é transmitida', () => {
@@ -377,7 +378,8 @@ test('primeira coleta funciona mesmo sem depósito e sem dinheiro', () => {
   const lumber = workerUnit(9001, 'lumberjack');
   session.state.units.push(lumber);
   const node = session.state.nodes.find(n => n.kind === 'wood')!;
-  Object.assign(lumber, { x: node.x + 2, z: node.z });
+  const spot = [[2, 0], [-2, 0], [0, 2], [0, -2]].find(([dx, dz]) => session.navigation.canStand({ kind: 'worker' }, node.x + dx, node.z + dz))!;
+  Object.assign(lumber, { x: node.x + spot[0], z: node.z + spot[1] });
   applyCommand(session, 0, { type: 'gather', ids: [lumber.id], nodeId: node.id });
   advance(session, 20);
   assert.ok(session.state.players[0]!.wood >= 5);
@@ -397,6 +399,7 @@ test('muro na única entrada deixa humano passar, mas vampiro só entra após de
   wall.hp = wall.maxHp = 30; // Muro nível 1
   session.state.buildings.push(wall);
   session.state.phase = 'night';
+  session.state.phaseTime = session.state.nightSeconds;
   Object.assign(worker, { x: door.x + out.x * 5, z: door.z + out.z * 5 });
   Object.assign(vampire, { x: door.x + out.x * 8, z: door.z + out.z * 8 });
   applyCommand(session, 0, { type: 'move', ids: [worker.id], x: compound.x, z: compound.z });
@@ -407,8 +410,8 @@ test('muro na única entrada deixa humano passar, mas vampiro só entra após de
   applyCommand(session, 4, { type: 'attack', ids: [vampire.id], targetId: wall.id });
   advance(session, 45); // ~1,42s por golpe × 5 de dano contra 30 HP
   assert.ok(!session.state.buildings.includes(wall));
-  applyCommand(session, 4, { type: 'move', ids: [vampire.id], x: compound.x, z: compound.z + 3 });
-  advance(session, 6);
+  applyCommand(session, 4, { type: 'move', ids: [vampire.id], x: compound.x, z: compound.z });
+  advance(session, 15);
   assert.ok((vampire.x - door.x) * out.x + (vampire.z - door.z) * out.z < 0);
 });
 

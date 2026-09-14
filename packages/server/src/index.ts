@@ -27,6 +27,7 @@ import {
   purgeRooms,
   type Room,
 } from './rooms.js';
+import { handleBuilder, loadMapOverlay } from './builder.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT ?? 3000);
@@ -156,6 +157,9 @@ function send404(res: http.ServerResponse): void {
 }
 
 async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  // Builder/overlay primeiro (tem rotas POST e arquivos que não vêm do dist).
+  if (await handleBuilder(req, res)) return;
+
   const method = req.method ?? 'GET';
   if (method !== 'GET' && method !== 'HEAD') {
     res.writeHead(405, { Allow: 'GET, HEAD' });
@@ -407,4 +411,5 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 server.listen(PORT, () => {
   console.log(`[vampire] servidor em http://localhost:${PORT}`);
   console.log(`[vampire] ws pronto — crie uma sala pelo cliente`);
+  void loadMapOverlay();
 });

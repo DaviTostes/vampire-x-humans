@@ -85,6 +85,9 @@ export interface PlayerState {
   workerLevels?: Partial<Record<WorkerRole, number>>;
   // Recarga restante (s) das habilidades do Humano.
   abilityCooldowns?: Partial<Record<HumanAbilityId, number>>;
+  // Preço corrente do lote de madeira no Mercado (ouro por `market.wood`),
+  // começa em `market.gold` e sofre inflação a cada troca (FT2).
+  marketPrice?: number;
 }
 
 export interface VampireState {
@@ -172,7 +175,7 @@ export interface Snapshot {
     Pick<Building, 'id' | 'kind' | 'owner' | 'x' | 'z' | 'hp' | 'maxHp' | 'level' | 'progress' | 'done' | 'goldProduced' | 'lastShot' | 'recruitment' | 'fortify'>
   >;
   nodes: ResourceNode[];
-  players: Array<Pick<PlayerState, 'id' | 'wood' | 'gold' | 'alive' | 'workerLevels' | 'abilityCooldowns'>>;
+  players: Array<Pick<PlayerState, 'id' | 'wood' | 'gold' | 'alive' | 'workerLevels' | 'abilityCooldowns' | 'marketPrice'>>;
   blood: number;
   vampireItems: VampireState['items'];
   vampireSkills: VampireState['skills'];

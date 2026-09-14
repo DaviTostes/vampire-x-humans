@@ -1,10 +1,11 @@
-import { DAY_LENGTH, NIGHT_LENGTH, DEFAULT_MAP_ID, START_RESOURCES, VAMPIRE, WORKER, CRYPT, MAX_PLAYERS, VAMPIRE_PLAYER_ID, VAMPIRE_ABILITIES, type MapPresetId } from './constants.js';
+import { DAY_LENGTH, NIGHT_LENGTH, DEFAULT_MAP_ID, START_RESOURCES, VAMPIRE, WORKER, CRYPT, MARKET, MAX_PLAYERS, VAMPIRE_PLAYER_ID, VAMPIRE_ABILITIES, type MapPresetId } from './constants.js';
 import { getMapModel } from './mapgen.js';
 import type { GameState, PlayerState, Unit } from './types.js';
 
 export function createPlayers(names: string[], ids = Array.from({ length: MAX_PLAYERS }, (_, i) => i)): PlayerState[] {
   return ids.map(id => ({ id, name: names[id] ?? (id === VAMPIRE_PLAYER_ID ? 'Vampiro' : `Humano ${id + 1}`),
-    role: id === VAMPIRE_PLAYER_ID ? 'vampire' : 'human', wood: START_RESOURCES.wood, gold: START_RESOURCES.gold, alive: true }));
+    role: id === VAMPIRE_PLAYER_ID ? 'vampire' : 'human', wood: START_RESOURCES.wood, gold: START_RESOURCES.gold, alive: true,
+    marketPrice: id === VAMPIRE_PLAYER_ID ? undefined : MARKET.gold }));
 }
 
 export function createGameState(

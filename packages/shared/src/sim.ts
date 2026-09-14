@@ -27,6 +27,7 @@ import {
   SPEC_ENTITY_LIMITS,
   SPEC_WORKERS,
   SPEC_CRYPT,
+  SPEC,
   SPEC_BLOOD_PER_DAMAGE,
   SPEC_ROUNDING_POLICY,
   HUMAN_ABILITIES,
@@ -307,9 +308,9 @@ export function vampireInBatForm(s: GameState): boolean {
   return vampireStatus(s, 'batForm') > 0 || vampireStatus(s, 'exitingBatForm') > 0;
 }
 
-/** Durante o estado principal de Forma de Morcego o Vampiro é invulnerável (seção 16). */
+/** FT8: a Forma de Morcego não concede mais invulnerabilidade. */
 export function vampireInvulnerable(s: GameState): boolean {
-  return vampireStatus(s, 'batForm') > 0;
+  return VAMPIRE_ABILITIES.batForm.invulnerable === true && vampireStatus(s, 'batForm') > 0;
 }
 
 /** Remove um status imediatamente (ex.: cancelamento manual da Forma de Morcego). */
@@ -510,9 +511,12 @@ export function applyCommand(session: Session, playerId: number, cmd: Command): 
       break;
     }
     case 'attack': {
-      const target = unitById(s, cmd.targetId) ?? buildingById(s, cmd.targetId);
+      const targetUnit = unitById(s, cmd.targetId);
+      const target = targetUnit ?? buildingById(s, cmd.targetId);
       if (!target) return;
       if (target.owner < 0 || (target.owner === VAMPIRE_PLAYER_ID) === (playerId === VAMPIRE_PLAYER_ID)) return;
+      // FT6: humanos não podem mais atacar o Vampiro (defesa é tarefa das torres).
+      if (targetUnit?.kind === 'vampire' && playerId !== VAMPIRE_PLAYER_ID) return;
       for (const uid of cmd.ids) {
         const u = unitById(s, uid);
         if (u && u.owner === playerId) {
@@ -702,14 +706,24 @@ export function applyCommand(session: Session, playerId: number, cmd: Command): 
       if (!Number.isSafeInteger(cmd.amount) || cmd.amount <= 0) return;
       const selling = cmd.trade === 'woodToGold';
       if (!selling && cmd.trade !== 'goldToWood') return;
-      const units = Math.floor(cmd.amount / (selling ? MARKET.wood : MARKET.gold));
-      if (units <= 0) return;
-      if (selling && p.wood >= units * MARKET.wood) {
-        p.wood -= units * MARKET.wood;
-        p.gold += units * MARKET.gold;
-      } else if (!selling && p.gold >= units * MARKET.gold) {
-        p.gold -= units * MARKET.gold;
-        p.wood += units * MARKET.wood;
+      // `amount` é a quantidade de MADEIRA negociada; lotes inteiros de MARKET.wood.
+      const lots = Math.floor(cmd.amount / MARKET.wood);
+      if (lots <= 0) return;
+      const wood = lots * MARKET.wood;
+      // FT2: preço corrente por lote, com inflação (comprar madeira) e deflação
+      // (vender madeira) de MARKET.step por lote.
+      const price = p.marketPrice ?? MARKET.gold;
+      const gold = lots * price;
+      if (selling) {
+        if (p.wood < wood) return;
+        p.wood -= wood;
+        p.gold += gold;
+        p.marketPrice = Math.max(MARKET.step, price - lots * MARKET.step);
+      } else {
+        if (p.gold < gold) return;
+        p.gold -= gold;
+        p.wood += wood;
+        p.marketPrice = price + lots * MARKET.step;
       }
       break;
     }
@@ -739,10 +753,10 @@ function updatePhase(s: GameState, dt: number): void {
 }
 
 function vampireSpeed(s: GameState): number {
-  const base = vampireEffectiveSpeed(s.phase, s.vampire.items);
-  // Forma de Morcego move mais rápido (bônus A CONFIRMAR; 0 quando não definido).
-  const bonus = vampireInBatForm(s) ? (VAMPIRE_ABILITIES.batForm.moveSpeedBonus ?? 0) : 0;
-  return base + bonus;
+  // FT8: na Forma de Morcego o Move Speed vira 600 (unidade da spec), convertido
+  // pela mesma escala dos demais valores de movimento.
+  if (vampireInBatForm(s)) return (VAMPIRE_ABILITIES.batForm.moveSpeed ?? 600) * SPEC.moveSpeedScale;
+  return vampireEffectiveSpeed(s.phase, s.vampire.items);
 }
 
 function vampireOutsideCrypt(s: GameState): boolean {
@@ -998,6 +1012,10 @@ function updateUnits(session: Session, dt: number, index: TickIndex): void {
     if (!canAct && o.t !== 'move') {
       continue; // vampiro preso de dia
     }
+    // FT7: Enredado prende o Vampiro — não anda e não ataca.
+    if (u.kind === 'vampire' && vampireStatus(s, 'entangled') > 0 && (o.t === 'move' || o.t === 'attack')) {
+      continue;
+    }
     switch (o.t) {
       case 'move':
         if (nav.move(u, o.x!, o.z!, u.kind === 'vampire' ? vampireSpeed(s) : workerStats(u).speed, dt)) {
@@ -1201,6 +1219,7 @@ export function makeSnapshot(s: GameState, includeNodes = true): Snapshot {
       gold: Math.floor(p.gold),
       alive: p.alive,
       workerLevels: p.workerLevels ? { ...p.workerLevels } : undefined,
+      marketPrice: p.marketPrice,
       abilityCooldowns: p.abilityCooldowns
         ? Object.fromEntries(Object.entries(p.abilityCooldowns).map(([k, v]) => [k, Math.round(v * 10) / 10]))
         : undefined,

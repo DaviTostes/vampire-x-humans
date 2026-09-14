@@ -55,6 +55,7 @@ import { commandArt, factionCrest } from './hud-icons.js';
 import { resourceIcon } from './resource-icons.js';
 import { createLocaleSwitcher, onLocaleChange, t, tServer } from './i18n.js';
 import { createVolumeControl } from './music.js';
+import { keybinds, openKeybindSettings, BUILDING_HOTKEYS } from './keybinds.js';
 import { VAMPIRE_ITEM_IDS, VAMPIRE_ITEM_INFO, VAMPIRE_SKILLS, VAMPIRE_ABILITIES, vampireAttackSpeed, vampireEffectiveCooldown, vampireEffectiveSpeed, vampireItemBonuses, vampireItemCost, vampireItemBonus, vampireItemMaxLevel, vampireItemNextLevel, vampireShopAccess, vampireSkillMultiplier, repairerRepairRate, type VampireItemId, type VampireSkillId } from '@vampire/shared';
 
 const WORKER_ROLE_SOURCES: Record<WorkerRole, string> = {
@@ -62,10 +63,6 @@ const WORKER_ROLE_SOURCES: Record<WorkerRole, string> = {
 };
 const WORKER_ROLES: WorkerRole[] = ['lumberjack', 'miner', 'repairer'];
 const HUMAN_ABILITY_IDS: HumanAbilityId[] = ['entangle', 'fortify', 'teleport', 'silencer'];
-// Habilidades usam números (1..4); construções usam letras (Q/E/R/T/F).
-const HUMAN_ABILITY_KEYS = ['1', '2', '3', '4'];
-const VAMPIRE_ABILITY_KEYS: Record<string, string> = { revealArea: '1', batForm: '2', teleportHome: '3' };
-const BUILD_HOTKEYS: Partial<Record<BuildKind, string>> = { bank: 'Q', wall: 'E', tower: 'R', market: 'T', taverna: 'F' };
 
 function workerRoleName(role: WorkerRole): string {
   return t(WORKER_ROLE_SOURCES[role]);
@@ -413,13 +410,18 @@ export class Hud {
       this.scene.setBuildingSelection(null);
       if (this.net.latestSnap) this.update(this.net.latestSnap, this.getMyId());
     });
-    this.el.querySelector('.vxh-quit')!.addEventListener('click', () => {
+    this.el.querySelector('.vxh-menu-btn')!.addEventListener('click', () => {
       this.quitModal.hidden = false;
     });
     this.quitModal.addEventListener('click', (e) => {
       const action = (e.target as HTMLElement).closest<HTMLElement>('[data-quit]');
       if (e.target === this.quitModal || action?.dataset.quit === 'cancel') {
         this.quitModal.hidden = true;
+        return;
+      }
+      if (action?.dataset.quit === 'settings') {
+        this.quitModal.hidden = true;
+        openKeybindSettings();
         return;
       }
       if (action?.dataset.quit === 'confirm') location.reload();
@@ -433,7 +435,7 @@ export class Hud {
       const b = (e.target as HTMLElement).closest<HTMLButtonElement>('button');
       if (!b || b.disabled) return;
       if (b.dataset.build) this.controls.enterBuild(b.dataset.build as BuildKind);
-      if (b.dataset.market) this.net.command({ type: 'market', targetId: Number(b.dataset.marketTarget), trade: b.dataset.market as 'woodToGold' | 'goldToWood', amount: b.dataset.market === 'woodToGold' ? MARKET.wood : MARKET.gold });
+      if (b.dataset.market) this.net.command({ type: 'market', targetId: Number(b.dataset.marketTarget), trade: b.dataset.market as 'woodToGold' | 'goldToWood', amount: MARKET.wood });
       if (b.dataset.upgrade) this.net.command({ type: 'upgrade', ids: [], targetId: Number(b.dataset.upgrade) });
       if (b.dataset.recruit) this.net.command({ type: 'recruit', targetId: Number(b.dataset.recruit) });
       if (b.dataset.recruitRole) this.net.command({ type: 'recruit', targetId: Number(b.dataset.recruitTarget), role: b.dataset.recruitRole as WorkerRole });
@@ -492,20 +494,16 @@ export class Hud {
     this.abilityPanel.addEventListener('mouseleave', hideTip);
     this.abilityPanel.addEventListener('click', hideTip);
 
-    // Atalhos de teclado: números 1..4 acionam as habilidades do painel de
-    // habilidades; letras Q/E/R/T/F acionam as construções do painel de comandos.
+    // Atalhos de teclado: a tecla é procurada nos dois painéis (habilidades e
+    // construções), respeitando as teclas configuradas nas Configurações (FT1).
     window.addEventListener('keydown', (e) => {
       if (e.repeat) return;
       if ((e.target as HTMLElement).matches('input, textarea, select')) return;
-      if (/^[1-9]$/.test(e.key)) {
-        const btn = this.abilityPanel.querySelector<HTMLButtonElement>(`button[data-hotkey="${e.key}"]`);
-        if (btn && !btn.disabled) { e.preventDefault(); btn.click(); }
-        return;
-      }
+      if (e.key.length !== 1) return;
       const key = e.key.toUpperCase();
-      if (!/^[A-Z]$/.test(key)) return;
-      const buildBtn = this.cmdPanel.querySelector<HTMLButtonElement>(`button[data-hotkey="${key}"]`);
-      if (buildBtn && !buildBtn.disabled) { e.preventDefault(); buildBtn.click(); }
+      const button = (panel: HTMLElement) => panel.querySelector<HTMLButtonElement>(`button[data-hotkey="${key}"]`);
+      const btn = button(this.abilityPanel) ?? button(this.cmdPanel);
+      if (btn && !btn.disabled) { e.preventDefault(); btn.click(); }
     });
 
     this.minimap.addEventListener('pointerdown', (e) => {
@@ -684,13 +682,19 @@ export class Hud {
     const shortageText = (cost: { wood: number; gold: number }) => (['wood', 'gold'] as const)
       .filter(kind => cost[kind] > (me?.[kind] ?? 0))
       .map(kind => t('Faltam {n} de {name}', { n: cost[kind] - (me?.[kind] ?? 0), name: resourceLabel(kind).name })).join('; ');
+    // FT2: preço corrente por lote, com inflação/deflação a cada troca.
+    const marketPrice = me?.marketPrice ?? MARKET.gold;
     const marketButtons = () => (['woodToGold', 'goldToWood'] as const).map(trade => {
       const selling = trade === 'woodToGold';
-      const spend = selling ? MARKET.wood : MARKET.gold;
-      const receive = selling ? MARKET.gold : MARKET.wood;
-      const afford = me && (selling ? me.wood : me.gold) >= spend;
-      return `<button class="vxh-btn ${afford ? '' : 'vxh-unavailable'}" data-market="${trade}" data-market-target="${building?.id}" title="${afford ? t('Trocar recursos') : shortageText({ wood: selling ? spend : 0, gold: selling ? 0 : spend })}" ${afford ? '' : 'disabled'}>
-        ${selling ? t('Vender') : t('Comprar')} ${resourceIcon('wood')}<small>${resourceCost(selling ? 'wood' : 'gold', spend)} → <span class="vxh-resource-cost">${receive}${selling ? resourceIcon('gold') : resourceIcon('wood')}</span></small></button>`;
+      const spendGold = selling ? 0 : marketPrice;
+      const spendWood = selling ? MARKET.wood : 0;
+      const afford = !!me && me.wood >= spendWood && me.gold >= spendGold;
+      const hotkey = selling ? BUILDING_HOTKEYS.sell : BUILDING_HOTKEYS.buy;
+      const goldCost = `<span class="vxh-resource-cost">${marketPrice}${resourceIcon('gold')}</span>`;
+      const woodCost = resourceCost('wood', MARKET.wood);
+      const tradeText = selling ? `${woodCost} → ${goldCost}` : `${goldCost} → ${woodCost}`;
+      return `<button class="vxh-btn ${afford ? '' : 'vxh-unavailable'}" data-market="${trade}" data-market-target="${building?.id}" data-hotkey="${hotkey}" title="${afford ? t('Trocar recursos') : shortageText({ wood: spendWood, gold: spendGold })}" ${afford ? '' : 'disabled'}>
+        ${selling ? t('Vender') : t('Comprar')} ${resourceIcon('wood')}<small>${tradeText}</small><span class="vxh-hotkey">${hotkey}</span></button>`;
     }).join('');
     let html = '';
     if (this.controls.inspectedUnit != null) {
@@ -766,8 +770,8 @@ export class Hud {
         const cost = normalizeCost(wallUpgradeCost(building.level));
         const max = building.level >= WALL_MAX_LEVEL;
         const afford = !!me && me.wood >= cost.wood && me.gold >= cost.gold;
-        const upgradeBtn = `<button class="vxh-btn ${!max && !afford ? 'vxh-unavailable' : ''}" title="${!max && !afford ? shortageText(cost) : t('Aumenta a vida máxima para {hp} HP', { hp: max ? building.maxHp : wallMaxHp(building.level + 1) })}" data-upgrade="${building.id}" ${!max && afford ? '' : 'disabled'}>
-          ${max ? t('Nível máximo') : t('Melhorar para nível {n}', { n: building.level + 1 })}<small>${!max ? costMarkup(cost) : ''}</small>${!max ? `<small>${t('{a} → {b} HP', { a: building.maxHp, b: wallMaxHp(building.level + 1) })}</small>` : ''}</button>`;
+        const upgradeBtn = `<button class="vxh-btn ${!max && !afford ? 'vxh-unavailable' : ''}" title="${!max && !afford ? shortageText(cost) : t('Aumenta a vida máxima para {hp} HP', { hp: max ? building.maxHp : wallMaxHp(building.level + 1) })}" data-upgrade="${building.id}" data-hotkey="${BUILDING_HOTKEYS.upgrade}" ${!max && afford ? '' : 'disabled'}>
+          ${max ? t('Nível máximo') : t('Melhorar para nível {n}', { n: building.level + 1 })}<small>${!max ? costMarkup(cost) : ''}</small>${!max ? `<small>${t('{a} → {b} HP', { a: building.maxHp, b: wallMaxHp(building.level + 1) })}</small>` : ''}<span class="vxh-hotkey">${BUILDING_HOTKEYS.upgrade}</span></button>`;
         const damaged = building.hp < building.maxHp;
         const hasWorker = snap.units.some(u => u.owner === myId && u.kind === 'worker' && u.workerRole !== 'lumberjack' && u.workerRole !== 'miner');
         // A ordem de reparo pode ser dada com o muro cheio: a unidade fica de
@@ -780,21 +784,21 @@ export class Hud {
         const upgradeCost = normalizeCost(marketUpgradeCost(building.level));
         const max = building.level >= MARKET_MAX_LEVEL;
         const afford = !!me && me.wood >= upgradeCost.wood && me.gold >= upgradeCost.gold;
-        const upgradeBtn = max ? '' : `<button class="vxh-btn ${!afford ? 'vxh-unavailable' : ''}" title="${afford ? t('Aumenta o nível do Mercado') : shortageText(upgradeCost)}" data-upgrade="${building.id}" ${afford ? '' : 'disabled'}>
-          ${t('Melhorar para nível {n}', { n: building.level + 1 })}<small>${costMarkup(upgradeCost)}</small></button>`;
+        const upgradeBtn = max ? '' : `<button class="vxh-btn ${!afford ? 'vxh-unavailable' : ''}" title="${afford ? t('Aumenta o nível do Mercado') : shortageText(upgradeCost)}" data-upgrade="${building.id}" data-hotkey="${BUILDING_HOTKEYS.upgrade}" ${afford ? '' : 'disabled'}>
+          ${t('Melhorar para nível {n}', { n: building.level + 1 })}<small>${costMarkup(upgradeCost)}</small><span class="vxh-hotkey">${BUILDING_HOTKEYS.upgrade}</span></button>`;
         html = upgradeBtn + marketButtons();
       } else if (building.owner === myId && building.kind === 'tower' && building.done) {
         const cost = normalizeCost(towerUpgradeCost(building.level));
         const max = building.level >= TOWER_MAX_LEVEL;
         const afford = !!me && me.wood >= cost.wood && me.gold >= cost.gold;
-        html = `<button class="vxh-btn ${!max && !afford ? 'vxh-unavailable' : ''}" title="${!max && !afford ? shortageText(cost) : t('Aumenta o dano para {dmg}', { dmg: max ? building.level : towerDamage(building.level + 1) })}" data-upgrade="${building.id}" ${!max && afford ? '' : 'disabled'}>
-          ${max ? t('Nível máximo') : t('Melhorar para nível {n}', { n: building.level + 1 })}<small>${!max ? costMarkup(cost) : ''}</small>${!max ? `<small>${t('{a} → {b} dano', { a: towerDamage(building.level), b: towerDamage(building.level + 1) })}</small>` : ''}</button>`;
+        html = `<button class="vxh-btn ${!max && !afford ? 'vxh-unavailable' : ''}" title="${!max && !afford ? shortageText(cost) : t('Aumenta o dano para {dmg}', { dmg: max ? building.level : towerDamage(building.level + 1) })}" data-upgrade="${building.id}" data-hotkey="${BUILDING_HOTKEYS.upgrade}" ${!max && afford ? '' : 'disabled'}>
+          ${max ? t('Nível máximo') : t('Melhorar para nível {n}', { n: building.level + 1 })}<small>${!max ? costMarkup(cost) : ''}</small>${!max ? `<small>${t('{a} → {b} dano', { a: towerDamage(building.level), b: towerDamage(building.level + 1) })}</small>` : ''}<span class="vxh-hotkey">${BUILDING_HOTKEYS.upgrade}</span></button>`;
       }
       else html = '';
       // O Humano pode demolir as construções que ele mesmo criou (a Cripta é
       // neutra e não pertence a ninguém). O servidor revalida a posse.
       if (!isVamp && building.owner === myId) {
-        html += `<button class="vxh-btn vxh-danger" data-demolish="${building.id}" title="${t('Destrói esta construção (sem reembolso)')}">${t('🧨 Demolir')}</button>`;
+        html += `<button class="vxh-btn vxh-danger" data-demolish="${building.id}" data-hotkey="${BUILDING_HOTKEYS.demolish}" title="${t('Destrói esta construção (sem reembolso)')}">${t('🧨 Demolir')}<span class="vxh-hotkey">${BUILDING_HOTKEYS.demolish}</span></button>`;
       }
     } else if (isVamp) {
       // Itens e skills só se compram/melhoram na Cripta (painel da construção).
@@ -808,7 +812,7 @@ export class Hud {
       }
       for (const kind of kinds) {
         const c = BUILD_COSTS[kind];
-        const hotkey = BUILD_HOTKEYS[kind];
+        const hotkey = keybinds.build[kind];
         const limit = (SPEC_ENTITY_LIMITS as Record<string, number | undefined>)[kind];
         const owned = limit !== undefined ? snap.buildings.filter(b => b.owner === myId && b.kind === kind).length : 0;
         const atLimit = limit !== undefined && owned >= limit;
@@ -866,21 +870,21 @@ export class Hud {
         : snap.phase !== 'night' ? t('Disponível apenas à noite')
           : revealCd > 0 ? t('Recarga · {s}s', { s: Math.ceil(revealCd) }) : t('Revela uma área do mapa por 10s')} · ${revealChargesLabel}`;
       const revealPct = revealCd > 0 ? Math.min(100, (revealCd / VAMPIRE_ABILITIES.revealArea.cooldown) * 100) : 0;
-      html += `<button class="vxh-btn ${this.controls.vampireAbilityMode === 'revealArea' ? 'active' : ''}" data-vampire-ability="revealArea" data-hotkey="${VAMPIRE_ABILITY_KEYS.revealArea}" data-tip-title="${t('Revelar Área')}" data-tip-body="${revealState}" ${revealDisabled ? 'disabled' : ''}>
-        ${commandArt('revealArea')}<span class="vxh-hotkey">${VAMPIRE_ABILITY_KEYS.revealArea}</span>${revealPct > 0 ? `<span class="vxh-cd" style="height:${revealPct.toFixed(0)}%"></span>` : ''}</button>`;
+      html += `<button class="vxh-btn ${this.controls.vampireAbilityMode === 'revealArea' ? 'active' : ''}" data-vampire-ability="revealArea" data-hotkey="${keybinds.vampire.revealArea}" data-tip-title="${t('Revelar Área')}" data-tip-body="${revealState}" ${revealDisabled ? 'disabled' : ''}>
+        ${commandArt('revealArea')}<span class="vxh-hotkey">${keybinds.vampire.revealArea}</span>${revealPct > 0 ? `<span class="vxh-cd" style="height:${revealPct.toFixed(0)}%"></span>` : ''}</button>`;
       const bat = st.batForm ?? 0;
       const exiting = st.exitingBatForm ?? 0;
-      const batState = bat > 0 ? t('Ativa · {s}s', { s: Math.ceil(bat) }) : exiting > 0 ? t('Saindo da forma') : t('Invulnerável e mais rápido por até 15s');
-      html += `<button class="vxh-btn ${bat > 0 ? 'active' : ''}" data-vampire-ability="batForm" data-hotkey="${VAMPIRE_ABILITY_KEYS.batForm}" data-tip-title="${t('Forma de Morcego')}" data-tip-body="${batState}" ${bat > 0 || exiting > 0 ? 'disabled' : ''}>
-        ${commandArt('batForm')}<span class="vxh-hotkey">${VAMPIRE_ABILITY_KEYS.batForm}</span></button>`;
+      const batState = bat > 0 ? t('Ativa · {s}s', { s: Math.ceil(bat) }) : exiting > 0 ? t('Saindo da forma') : t('Move Speed 600 por até 15s');
+      html += `<button class="vxh-btn ${bat > 0 ? 'active' : ''}" data-vampire-ability="batForm" data-hotkey="${keybinds.vampire.batForm}" data-tip-title="${t('Forma de Morcego')}" data-tip-body="${batState}" ${bat > 0 || exiting > 0 ? 'disabled' : ''}>
+        ${commandArt('batForm')}<span class="vxh-hotkey">${keybinds.vampire.batForm}</span></button>`;
       const chan = st.channelingTeleport ?? 0;
       const tpState = chan > 0 ? t('Canalizando · {s}s', { s: Math.ceil(chan * 10) / 10 }) : t('Canaliza 2,8s e retorna à base');
-      html += `<button class="vxh-btn ${chan > 0 ? 'active' : ''}" data-vampire-ability="teleportHome" data-hotkey="${VAMPIRE_ABILITY_KEYS.teleportHome}" data-tip-title="${t('Teleportar para a Base')}" data-tip-body="${tpState}" ${chan > 0 ? 'disabled' : ''}>
-        ${commandArt('teleportHome')}<span class="vxh-hotkey">${VAMPIRE_ABILITY_KEYS.teleportHome}</span></button>`;
+      html += `<button class="vxh-btn ${chan > 0 ? 'active' : ''}" data-vampire-ability="teleportHome" data-hotkey="${keybinds.vampire.teleportHome}" data-tip-title="${t('Teleportar para a Base')}" data-tip-body="${tpState}" ${chan > 0 ? 'disabled' : ''}>
+        ${commandArt('teleportHome')}<span class="vxh-hotkey">${keybinds.vampire.teleportHome}</span></button>`;
       // Habilidade "Golpe Sombrio" removida por enquanto.
     } else {
       const vampireAlive = snap.units.some(u => u.kind === 'vampire');
-      HUMAN_ABILITY_IDS.forEach((id, i) => {
+      HUMAN_ABILITY_IDS.forEach((id) => {
         const ability = HUMAN_ABILITIES[id];
         const cd = me?.abilityCooldowns?.[id] ?? 0;
         const active = this.controls.abilityMode === id;
@@ -889,8 +893,9 @@ export class Hud {
         const state = cd > 0 ? t('Recarga · {s}s', { s: Math.ceil(cd) })
           : needsVampire && !vampireAlive ? t('Vampiro indisponível') : t(ability.description);
         const pct = cd > 0 ? Math.min(100, (cd / ability.cooldown) * 100) : 0;
-        html += `<button class="vxh-btn ${active ? 'active' : ''}" data-human-ability="${id}" data-hotkey="${HUMAN_ABILITY_KEYS[i]}" data-tip-title="${t(ability.name)}" data-tip-body="${state}" ${disabled ? 'disabled' : ''}>
-          ${commandArt(id)}<span class="vxh-hotkey">${HUMAN_ABILITY_KEYS[i]}</span>${pct > 0 ? `<span class="vxh-cd" style="height:${pct.toFixed(0)}%"></span>` : ''}</button>`;
+        const hotkey = keybinds.human[id];
+        html += `<button class="vxh-btn ${active ? 'active' : ''}" data-human-ability="${id}" data-hotkey="${hotkey}" data-tip-title="${t(ability.name)}" data-tip-body="${state}" ${disabled ? 'disabled' : ''}>
+          ${commandArt(id)}<span class="vxh-hotkey">${hotkey}</span>${pct > 0 ? `<span class="vxh-cd" style="height:${pct.toFixed(0)}%"></span>` : ''}</button>`;
       });
     }
     if (html !== this.abilityHtml) {
@@ -1104,6 +1109,7 @@ export class Hud {
         <h2 class="vxh-modal-title" id="vxh-quit-title">${t('Menu')}</h2>
         <div class="vxh-menu-lang"><span>${t('Idioma')}</span><div class="vxh-menu-lang-select"></div></div>
         <div class="vxh-menu-lang"><span>${t('Volume da música')}</span><div class="vxh-menu-volume"></div></div>
+        <div class="vxh-modal-actions" style="margin:4px 0 16px"><button class="vxh-modal-btn" data-quit="settings">⚙ ${t('Configurações de hotkeys')}</button></div>
         <p class="vxh-modal-text">${t('Suas unidades ficarão abandonadas na sala. Deseja realmente voltar ao início?')}</p>
         <div class="vxh-modal-actions">
           <button class="vxh-modal-btn" data-quit="cancel">${t('Cancelar')}</button>

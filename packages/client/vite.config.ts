@@ -16,6 +16,13 @@ export default defineConfig({
         target: 'ws://localhost:3000',
         ws: true,
       },
+      // Overlay do editor de mapa servido pelo backend.
+      '/api': {
+        target: 'http://localhost:3000',
+      },
+      '/builder': {
+        target: 'http://localhost:3000',
+      },
     },
   },
 });

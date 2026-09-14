@@ -19,6 +19,8 @@ import {
   WORLD,
   getMapModel,
   getActiveMapId,
+  getMapOverlay,
+  type OverlayProp,
   type GameMap,
   type MapModel,
   type Snapshot,
@@ -147,8 +149,25 @@ function createPathField(map: GameMap): THREE.DataTexture {
   return texture;
 }
 
+/** Textura de pintura de piso: 0 = automático, 128 = caminho (pedra), 255 = grama. */
+function createPaintTexture(tiles: number, paint?: number[] | null): THREE.DataTexture {
+  const data = new Uint8Array(tiles * tiles);
+  if (paint && paint.length >= tiles * tiles) {
+    for (let i = 0; i < tiles * tiles; i++) {
+      const v = paint[i] ?? 0;
+      data[i] = v === 1 ? 128 : v === 2 ? 255 : 0;
+    }
+  }
+  const texture = new THREE.DataTexture(data, tiles, tiles, THREE.RedFormat);
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.wrapS = texture.wrapT = THREE.ClampToEdgeWrapping;
+  texture.needsUpdate = true;
+  return texture;
+}
+
 /** Material do terreno que mistura grama, pedra e a transição ao longo do caminho. */
-function createGroundMaterial(field: THREE.DataTexture): THREE.MeshStandardMaterial {
+function createGroundMaterial(field: THREE.DataTexture, paint: THREE.DataTexture): THREE.MeshStandardMaterial {
   const grass = loadGroundTexture(GROUND_TILE_URLS.grass, false);
   const stone = loadGroundTexture(GROUND_TILE_URLS.stone, false);
   const edge = loadGroundTexture(GROUND_TILE_URLS.edge, true);
@@ -159,6 +178,7 @@ function createGroundMaterial(field: THREE.DataTexture): THREE.MeshStandardMater
     shader.uniforms.uGroundStone = { value: stone };
     shader.uniforms.uGroundEdge = { value: edge };
     shader.uniforms.uGroundField = { value: field };
+    shader.uniforms.uGroundPaint = { value: paint };
     shader.uniforms.uGroundHalf = { value: WORLD.half };
     shader.uniforms.uGroundSize = { value: WORLD_SIZE };
     shader.uniforms.uGroundPathHalf = { value: GROUND_PATH_HALF };
@@ -181,6 +201,7 @@ function createGroundMaterial(field: THREE.DataTexture): THREE.MeshStandardMater
         uniform sampler2D uGroundStone;
         uniform sampler2D uGroundEdge;
         uniform sampler2D uGroundField;
+        uniform sampler2D uGroundPaint;
         uniform float uGroundHalf;
         uniform float uGroundSize;
         uniform float uGroundPathHalf;
@@ -206,16 +227,23 @@ function createGroundMaterial(field: THREE.DataTexture): THREE.MeshStandardMater
         vec3 groundGrass = texture2D(uGroundGrass, groundUv).rgb;
         vec3 groundStone = texture2D(uGroundStone, groundUv).rgb;
         float groundStoneMask = 1.0 - smoothstep(uGroundPathHalf - 0.7, uGroundPathHalf + 0.7, groundD);
+        // Pintura manual do editor: força caminho (pedra) ou grama por tile.
+        float groundPaint = texture2D(uGroundPaint, clamp((groundWorld + vec2(uGroundHalf)) / uGroundSize, 0.0, 1.0)).r;
+        float groundForcePath = smoothstep(0.3, 0.45, groundPaint) * (1.0 - smoothstep(0.55, 0.7, groundPaint));
+        float groundForceGrass = smoothstep(0.7, 0.85, groundPaint);
+        groundStoneMask = mix(groundStoneMask, 1.0, groundForcePath);
+        groundStoneMask = mix(groundStoneMask, 0.0, groundForceGrass);
         vec3 groundPlain = mix(groundGrass, groundStone, groundStoneMask);
         vec2 groundTangent = vec2(-groundGrad.y, groundGrad.x);
         float groundV = 0.5 + (groundD - uGroundPathHalf) / (2.0 * uGroundEdgeHalf);
         float groundU = dot(groundWorld, groundTangent) / uGroundTileWorld;
         vec3 groundEdge = texture2D(uGroundEdge, vec2(groundU, groundV)).rgb;
         float groundEdgeWeight = 1.0 - smoothstep(0.6, 1.0, abs(2.0 * groundV - 1.0));
+        groundEdgeWeight *= (1.0 - max(groundForcePath, groundForceGrass));
         diffuseColor.rgb = mix(groundPlain, groundEdge, groundEdgeWeight);
       `);
   };
-  material.customProgramCacheKey = () => 'ground-splat-v1';
+  material.customProgramCacheKey = () => 'ground-splat-v2';
   return material;
 }
 
@@ -270,6 +298,9 @@ export class GameScene {
   private hoverEnemyId: number | null = null;
   private hoverRing: THREE.Group | null = null;
   private woodInstances: THREE.InstancedMesh[] = [];
+  /** Decoração gerada, exposta para o editor importar como props editáveis. */
+  readonly decorTreeSpots: Array<{ x: number; z: number; rotY: number; scale: number }> = [];
+  readonly scatterRockSpots: Array<{ x: number; z: number; rotY: number; scale: number }> = [];
   private woodKey = '';
   private hpBars = new Map<number, THREE.Mesh>();
   private selectionRings = new Map<number, THREE.Mesh>();
@@ -284,6 +315,8 @@ export class GameScene {
   private torches: THREE.PointLight[] = [];
   private raycaster = new THREE.Raycaster();
   private terrain!: THREE.Mesh;
+  /** Pintura de piso (grama/caminho) — textura do shader do terreno. */
+  private groundPaintTexture!: THREE.DataTexture;
   private bridgeDecks: THREE.Mesh[] = [];
   private buildingSelection: THREE.LineLoop | null = null;
   // Grade de posicionamento: overlay de tiles (livre/bloqueado) no modo de construção.
@@ -375,6 +408,7 @@ export class GameScene {
     this.scene.add(this.sun.target);
     this.scene.add(new THREE.AmbientLight(0x404060, 0.22));
 
+    this.groundPaintTexture = createPaintTexture(WORLD.tiles, getMapOverlay(this.model.id)?.paint ?? null);
     this.buildTerrain();
     this.buildFixedMap();
     this.buildDecorTrees();
@@ -448,7 +482,7 @@ export class GameScene {
     geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     geo.computeVertexNormals();
 
-    const mat = createGroundMaterial(createPathField(this.map));
+    const mat = createGroundMaterial(createPathField(this.map), this.groundPaintTexture);
     const terrain = new THREE.Mesh(geo, mat);
     terrain.receiveShadow = true;
     this.terrain = terrain;
@@ -577,11 +611,15 @@ export class GameScene {
     // misturam: o maciço procedural é low-poly e sem textura, então usá-lo ao
     // lado do GLB cria blocos escuros destoando das pedras texturizadas.
     const stone = assetRegistry.propInstance('prop:rock:stone-cluster');
+    // Relevo GLB (falésias/mesas/rampas). Cobre visualmente os obstáculos do
+    // anel dos refúgios; as pedras soltas/formações continuam como pilhas.
+    const reliefCovered = this.buildTerrainRelief();
     const stoneMatrices: THREE.Matrix4[] = [];
     const mountainTransforms: THREE.Matrix4[][] = Array.from({ length: 4 }, () => []);
     const rockDummy = new THREE.Object3D();
     const mossTransforms: THREE.Matrix4[] = [];
     for (const [i, wall] of this.map.obstacles.entries()) {
+      if (reliefCovered.has(i)) continue;
       const base = this.heightAt(wall.x, wall.z) - (stone ? 0.4 : 0.5);
       if (stone) {
         rockDummy.rotation.set(0, (i % 4) * Math.PI / 2 + Math.sin(i * 1.7) * 0.4, 0);
@@ -618,10 +656,13 @@ export class GameScene {
     this.unitReveal.apply(moss);
     this.scene.add(moss);
 
-    // Pedras soltas espalhadas pelo chão plano, no mesmo InstancedMesh.
+    // Pedras soltas espalhadas pelo chão plano (InstancedMesh separado, para o
+    // editor poder editar cada uma). Quando o overlay assumiu a decoração
+    // (`decorReplace`), as instâncias vêm dos props salvos.
     if (stone) {
       const scatter = new THREE.Object3D();
       const step = 11, half = WORLD.half - 28;
+      const decorReplace = Boolean(getMapOverlay(this.model.id)?.decorReplace);
       for (let gx = -half; gx <= half; gx += step) {
         for (let gz = -half; gz <= half; gz += step) {
           const h = Math.abs(Math.sin(gx * 12.9898 + gz * 78.233) * 43758.5453) % 1;
@@ -634,6 +675,8 @@ export class GameScene {
           if (Math.hypot(x - this.model.cryptPosition.x, z - this.model.cryptPosition.z) < 15) continue;
           if (this.model.compounds.some(c => Math.abs(x - c.x) < c.width / 2 + 3 && Math.abs(z - c.z) < c.depth / 2 + 3)) continue;
           const s = 0.5 + h * 0.7;
+          this.scatterRockSpots.push({ x, z, rotY: h * Math.PI * 2, scale: s });
+          if (decorReplace) continue;
           scatter.position.set(x, this.heightAt(x, z) - 0.2, z);
           scatter.rotation.set(0, h * Math.PI * 2, 0);
           scatter.scale.set(s, s * (0.85 + h * 0.3), s);
@@ -720,11 +763,261 @@ export class GameScene {
       this.scene.add(decal);
     };
     decalAt(cryptFloorMap(), 0.05, 1, -2, cryptFloorAlphaTexture());
+    this.buildOverlayProps();
+  }
+
+  /**
+   * Props posicionados à mão no builder 3D (overlay do mapa): cliffs calibrados,
+   * árvores e pedras. Aplicado no início da partida, junto do resto da cena.
+   */
+  private buildOverlayProps() {
+    const overlay = getMapOverlay(this.model.id);
+    if (!overlay?.props.length) return;
+    // Árvores/pedras em massa: InstancedMesh por tipo (o overlay pode ter
+    // importado a decoração inteira, então tem de ser barato).
+    const instanced: Partial<Record<'tree' | 'rock', Array<{ prop: OverlayProp; y: number }>>> = {};
+    const singles: OverlayProp[] = [];
+    for (const prop of overlay.props) {
+      if (prop.kind === 'tree' || prop.kind === 'rock') {
+        (instanced[prop.kind] ??= []).push({ prop, y: this.heightAt(prop.x, prop.z) });
+      } else {
+        singles.push(prop);
+      }
+    }
+    for (const kind of ['tree', 'rock'] as const) {
+      const list = instanced[kind];
+      if (!list?.length) continue;
+      const instance = assetRegistry.propInstance(kind === 'tree' ? 'prop:tree:evergreen' : 'prop:rock:stone-cluster');
+      if (!instance) continue;
+      const mesh = new THREE.InstancedMesh(instance.geometry, instance.material.clone(), list.length);
+      const matrix = new THREE.Matrix4();
+      const quaternion = new THREE.Quaternion();
+      const scale = new THREE.Vector3();
+      const position = new THREE.Vector3();
+      const up = new THREE.Vector3(0, 1, 0);
+      list.forEach((entry, i) => {
+        quaternion.setFromAxisAngle(up, entry.prop.rotY);
+        scale.setScalar(entry.prop.scale || 1);
+        position.set(entry.prop.x, entry.y, entry.prop.z);
+        matrix.compose(position, quaternion, scale);
+        mesh.setMatrixAt(i, matrix);
+      });
+      mesh.instanceMatrix.needsUpdate = true;
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      this.unitReveal.apply(mesh);
+      this.scene.add(mesh);
+      this.mapOccluders.push(mesh);
+    }
+    for (const prop of singles) {
+      const holder = new THREE.Group();
+      if (prop.kind.startsWith('cliff:')) {
+        const module = assetRegistry.cliffModule(prop.kind.slice('cliff:'.length) as 'straight' | 'outerCorner' | 'innerCorner' | 'stairs');
+        if (!module) continue;
+        holder.add(module);
+      } else if (prop.kind.startsWith('building:')) {
+        const template = assetRegistry.buildingTemplate(prop.kind.slice('building:'.length), 1);
+        if (!template) continue;
+        holder.add(template.template.clone(true) as THREE.Group);
+      } else {
+        continue;
+      }
+      holder.position.set(prop.x, this.heightAt(prop.x, prop.z), prop.z);
+      holder.rotation.y = prop.rotY;
+      holder.scale.setScalar(prop.scale || 1);
+      holder.updateMatrixWorld(true);
+      holder.traverse((object) => {
+        if (object instanceof THREE.Mesh) {
+          object.castShadow = true;
+          object.receiveShadow = true;
+          this.unitReveal.apply(object);
+          this.mapOccluders.push(object as THREE.Mesh);
+        }
+      });
+      this.scene.add(holder);
+    }
+  }
+
+  /**
+   * Relevo: o platô é a própria malha de altura do terreno. Onde uma célula
+   * alta encosta numa baixa, revestimos a aresta com módulos de cliff derivados
+   * do GLB da crista (retas e cantos por sobreposição). As rampas entram só nos
+   * vãos que ligam o nível baixo ao alto. Pedras e árvores são só decoração.
+   * Retorna os obstáculos que as pilhas de pedra do anel não devem desenhar.
+   */
+  private buildTerrainRelief(): Set<number> {
+    const covered = new Set<number>();
+    const slots = new Map<string, { geometry: THREE.BufferGeometry; material: THREE.Material; size: THREE.Vector3 }>();
+    for (const id of ['terrain:cliff', 'terrain:ascent', 'terrain:moss', 'terrain:mesa']) {
+      const instance = assetRegistry.terrainInstance(id);
+      if (!instance) continue;
+      instance.geometry.computeBoundingBox();
+      const size = instance.geometry.boundingBox?.getSize(new THREE.Vector3()) ?? new THREE.Vector3();
+      if (size.x <= 1e-6 || size.y <= 1e-6 || size.z <= 1e-6) continue;
+      slots.set(id, { ...instance, size });
+    }
+    if (!slots.size) return covered;
+
+    // O contorno do refúgio agora é o degrau do próprio terreno: as pilhas de
+    // pedra do anel (que davam a colisão) só saem quando o terreno é escalonado
+    // (labirinto). No clássico, de encosta suave, o anel continua como está.
+    const stepped = Boolean(this.model.config.maze);
+    if (stepped) {
+      const wallKeys = new Set<string>();
+      for (const walls of this.model.refugeWalls) {
+        for (const w of walls) wallKeys.add(`${w.x.toFixed(3)},${w.z.toFixed(3)}`);
+      }
+      if (wallKeys.size) {
+        for (const [oi, o] of this.map.obstacles.entries()) {
+          if (wallKeys.has(`${o.x.toFixed(3)},${o.z.toFixed(3)}`)) covered.add(oi);
+        }
+      }
+    }
+
+    const batches = new Map<string, { matrices: THREE.Matrix4[]; tints: THREE.Color[] }>();
+    const dummy = new THREE.Object3D();
+    const place = (id: string, x: number, z: number, rotY: number, width: number, height: number, depth: number, tint: THREE.Color, baseY: number) => {
+      const slot = slots.get(id);
+      if (!slot || width <= 0 || height <= 0 || depth <= 0) return;
+      dummy.position.set(x, baseY, z);
+      dummy.rotation.set(0, rotY, 0);
+      dummy.scale.set(width / slot.size.x, height / slot.size.y, depth / slot.size.z);
+      dummy.updateMatrix();
+      let batch = batches.get(id);
+      if (!batch) { batch = { matrices: [], tints: [] }; batches.set(id, batch); }
+      batch.matrices.push(dummy.matrix.clone());
+      batch.tints.push(tint);
+    };
+    const shade = (h: number, g = h) => new THREE.Color().setRGB(0.7 + h * 0.32, 0.72 + g * 0.3, 0.64 + h * 0.3);
+
+    const n = this.map.tiles;
+    const ts = WORLD.tileSize;
+    const half = WORLD.half;
+    const cellH = (cx: number, cz: number): number => {
+      if (cx < 0 || cz < 0 || cx >= n || cz >= n) return 0;
+      const i = cz * n + cx;
+      if (this.map.bridge[i]) return BRIDGE_Y;
+      return this.map.water[i] ? 1 : (this.map.height[i] ?? 0) * 14;
+    };
+    // Queda mínima (unidades de mundo) para a aresta virar degrau/cliff.
+    const EDGE = 2.5;
+
+    // Reveste uma sequência contígua de arestas alto→baixo com módulos de
+    // crista alinhados à aresta e com a face vertical virada para o lado baixo.
+    const placeRun = (
+      horizontal: boolean, boundary: number, runStart: number, runEnd: number,
+      normalSign: number, highY: number, lowY: number,
+    ) => {
+      const len = runEnd - runStart;
+      if (len < ts * 0.75) return;
+      const count = Math.max(1, Math.round(len / 7));
+      const step = len / count;
+      const height = Math.max(1.6, highY - (lowY - 0.6));
+      const depth = THREE.MathUtils.clamp(height * 0.4, 3, 7);
+      const rot = horizontal ? Math.atan2(normalSign, 0) : Math.atan2(0, normalSign);
+      const base = lowY - 0.6;
+      for (let k = 0; k <= count; k++) {
+        const along = runStart + step * k;
+        const x = horizontal ? boundary : along;
+        const z = horizontal ? along : boundary;
+        const hv = decorHash(x * 1.3 + 5, z * 0.9);
+        place('terrain:cliff', x, z, rot + (hv - 0.5) * 0.05, step * 1.5,
+          height * (0.9 + hv * 0.2), depth, shade(hv, decorHash(z, x)), base);
+        // Decoração: boulders (moss/mesa) na base, dissolvendo a falésia no terreno.
+        if (hv > 0.5) {
+          const mx = x + (horizontal ? normalSign : 0) * (depth * 0.7 + 1.2);
+          const mz = z + (horizontal ? 0 : normalSign) * (depth * 0.7 + 1.2);
+          place(hv > 0.82 ? 'terrain:mesa' : 'terrain:moss', mx, mz, hv * Math.PI * 2,
+            2.6 + hv * 2.0, 1.5, 2.4 + hv * 1.8, shade(hv, decorHash(z, x)), lowY - 1.0);
+        }
+      }
+    };
+
+    // Varre as fronteiras entre colunas/linhas de células e agrupa as arestas.
+    const scanBoundary = (horizontal: boolean) => {
+      for (let k = 1; k <= n - 1; k++) {
+        const boundary = k * ts - half;
+        let active = false, runStart = 0, runSign = 0, highY = 0, lowY = 0;
+        for (let l = 0; l < n; l++) {
+          const a = horizontal ? cellH(k - 1, l) : cellH(l, k - 1);
+          const b = horizontal ? cellH(k, l) : cellH(l, k);
+          const worldL = l * ts - half;
+          const d = b - a;
+          const sign = Math.abs(d) > EDGE ? (a > b ? 1 : -1) : 0;
+          if (sign !== 0) {
+            if (!active || sign !== runSign) {
+              if (active) placeRun(horizontal, boundary, runStart, worldL, runSign, highY, lowY);
+              active = true; runStart = worldL; runSign = sign;
+              highY = Math.max(a, b); lowY = Math.min(a, b);
+            }
+          } else if (active) {
+            placeRun(horizontal, boundary, runStart, worldL, runSign, highY, lowY);
+            active = false;
+          }
+        }
+        if (active) placeRun(horizontal, boundary, runStart, n * ts - half, runSign, highY, lowY);
+      }
+    };
+    if (stepped) {
+      scanBoundary(true);
+      scanBoundary(false);
+    }
+
+    // Rampas (cliff_stairs): só onde há degrau e um vão — a porta do refúgio.
+    for (const [ci, compound] of (stepped ? this.model.compounds.entries() : [])) {
+      const ring = this.model.refugeRings[ci];
+      if (!ring || ring.length < 2) continue;
+      const door = this.model.compoundEntrance(compound);
+      let cx = 0, cz = 0;
+      for (let i = 0; i < ring.length - 1; i++) { cx += ring[i]!.x; cz += ring[i]!.z; }
+      const count = Math.max(1, ring.length - 1);
+      cx /= count; cz /= count;
+      let ox = door.x - cx, oz = door.z - cz;
+      const ol = Math.hypot(ox, oz) || 1;
+      ox /= ol; oz /= ol;
+      const highY = this.heightAt(cx, cz);
+      const lowY = this.heightAt(door.x + ox * 10, door.z + oz * 10);
+      if (highY - lowY < 1.5) continue;
+      place('terrain:ascent', door.x + ox * 3, door.z + oz * 3, Math.atan2(ox, oz),
+        compound.entranceWidth * 1.6, Math.max(2, highY + 0.2 - (lowY - 0.4)), 13,
+        shade(0.5, 0.5), lowY - 0.4);
+    }
+
+    for (const [id, batch] of batches) {
+      const slot = slots.get(id);
+      if (!slot || !batch.matrices.length) continue;
+      const mesh = new THREE.InstancedMesh(slot.geometry, slot.material.clone(), batch.matrices.length);
+      batch.matrices.forEach((matrix, i) => mesh.setMatrixAt(i, matrix));
+      batch.tints.forEach((tint, i) => mesh.setColorAt(i, tint));
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      mesh.instanceMatrix.needsUpdate = true;
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+      this.unitReveal.apply(mesh);
+      this.scene.add(mesh);
+      this.mapOccluders.push(mesh);
+    }
+    return covered;
+  }
+
+  /** Malha do terreno, exposta para o editor de mapa fazer raycast. */
+  get terrainMesh(): THREE.Mesh {
+    return this.terrain;
+  }
+
+  /** Atualiza a pintura de piso (editor): 0 = auto, 1 = caminho, 2 = grama. */
+  setGroundPaint(paint: ArrayLike<number> | null): void {
+    const n = this.map.tiles;
+    const data = this.groundPaintTexture.image.data as Uint8Array;
+    for (let i = 0; i < n * n; i++) {
+      const v = paint ? (paint[i] ?? 0) : 0;
+      data[i] = v === 1 ? 128 : v === 2 ? 255 : 0;
+    }
+    this.groundPaintTexture.needsUpdate = true;
   }
 
   /** altura do terreno em coordenadas de mundo */
-  heightAt(x: number, z: number): number {
-    if (this.model.isBridgeAtWorld(x, z)) return BRIDGE_Y;
+  heightAt(x: number, z: number): number {    if (this.model.isBridgeAtWorld(x, z)) return BRIDGE_Y;
     const n = this.map.tiles;
     const gx = THREE.MathUtils.clamp((x + WORLD.half) / WORLD.tileSize, 0, n - 0.0001);
     const gz = THREE.MathUtils.clamp((z + WORLD.half) / WORLD.tileSize, 0, n - 0.0001);
@@ -1243,6 +1536,17 @@ export class GameScene {
       for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) occupied.add(`${cx + dx},${cz + dz}`);
     }
     const obstacles = this.map.obstacles;
+    // Raio de cada arena de refúgio (não plantar árvores dentro).
+    const refugeRadii = this.model.refugeRings.map((ring) => {
+      if (ring.length < 2) return { x: 0, z: 0, r: 0 };
+      let x = 0, z = 0;
+      const n = ring.length - 1;
+      for (let i = 0; i < n; i++) { x += ring[i]!.x; z += ring[i]!.z; }
+      x /= n; z /= n;
+      let r = 0;
+      for (let i = 0; i < n; i++) r = Math.max(r, Math.hypot(ring[i]!.x - x, ring[i]!.z - z));
+      return { x, z, r: r + 3 };
+    }).filter((r) => r.r > 0);
     const step = 2.8;
     const half = WORLD.half - 4;
     const cryptX = this.model.cryptPosition.x, cryptZ = this.model.cryptPosition.z;
@@ -1280,9 +1584,18 @@ export class GameScene {
         }
         if (occupied.has(`${Math.floor(x / cell)},${Math.floor(z / cell)}`)) continue;
         if (obstacles.some(o => Math.abs(x - o.x) < o.width / 2 + 1.6 && Math.abs(z - o.z) < o.depth / 2 + 1.6)) continue;
+        // Árvores ficam fora da arena do refúgio: preserva a leitura do terraço.
+        if (refugeRadii.some((r) => Math.hypot(x - r.x, z - r.z) < r.r)) continue;
         spots.push([x, z, decorHash(x, z), decorHash(z, x)]);
       }
     }
+    // Dados da decoração para o editor importar como props editáveis.
+    const decorReplace = Boolean(getMapOverlay(this.model.id)?.decorReplace);
+    for (const [x, z, h1] of spots) {
+      this.decorTreeSpots.push({ x, z, rotY: h1 * Math.PI * 2, scale: 0.5 + h1 * 0.55 });
+    }
+    // Com o overlay assumindo a decoração, as árvores vêm dos props salvos.
+    if (decorReplace) return;
     if (!spots.length) return;
     const trees = new THREE.InstancedMesh(tree.geometry, tree.material.clone(), spots.length);
     trees.castShadow = true;
@@ -2438,7 +2751,13 @@ export class GameScene {
   /** Prédio (visível) mais próximo do cursor, para seleção tolerante. */
   buildingUnderCursor(nx: number, ny: number): number | undefined {
     const rect = this.renderer.domElement.getBoundingClientRect();
-    return this.buildingAtScreen(nx, ny, rect);
+    const byScreen = this.buildingAtScreen(nx, ny, rect);
+    if (byScreen !== undefined) return byScreen;
+    // FT4: com a unidade ocupando a frente, o raio cai na unidade e o centro do
+    // prédio pode ficar longe em pixels. Usa a pegada no mundo sob o cursor para
+    // ainda encontrar a construção (ex.: selecionar o Muro enquanto é reparado).
+    const ground = this.screenToGround(nx, ny);
+    return ground ? this.buildingAtWorld(ground.x, ground.z) : undefined;
   }
 
   /** Prédio cujo centro projetado está mais perto do cursor, dentro da folga. */

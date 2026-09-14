@@ -331,7 +331,7 @@ test('Revelar Área: 2 cargas com recarga de 60s cada', () => {
   assert.equal(session.state.vampire.reveal!.x, 7, 'novo uso após recarregar');
 });
 
-test('Forma de Morcego: invulnerável, máx 15s e saída de 1,5s', () => {
+test('Forma de Morcego: Move Speed 600 sem invulnerabilidade, máx 15s e saída de 1,5s', () => {
   const { session } = fixture();
   session.state.phase = 'night';
   const vampire = session.state.units.find(u => u.kind === 'vampire')!;
@@ -343,7 +343,8 @@ test('Forma de Morcego: invulnerável, máx 15s e saída de 1,5s', () => {
   vampire.x = 5; vampire.z = 0; tower.attackCd = 0;
   const before = vampire.hp;
   step(session, []);
-  assert.equal(vampire.hp, before, 'invulnerável durante a Forma de Morcego');
+  // FT8: a Forma de Morcego não concede mais invulnerabilidade.
+  assert.ok(vampire.hp < before, 'deve levar dano durante a Forma de Morcego');
   for (let i = 0; i < 15 * 15 + 2; i++) step(session, []);
   assert.equal(vampireStatus(session.state, 'batForm'), 0, 'a forma termina no tempo máximo');
   assert.ok(vampireStatus(session.state, 'exitingBatForm') > 0, 'inicia a animação de saída');
@@ -427,8 +428,8 @@ test('Teleporte aceita destino até 600 e rejeita acima, com cooldown', () => {
   const { session, worker } = fixture();
   applyCommand(session, 0, { type: 'castHumanAbility', ability: 'teleport', x: 700, z: 0 });
   assert.equal(worker.x, -12, 'destino acima de 600 é rejeitado');
-  applyCommand(session, 0, { type: 'castHumanAbility', ability: 'teleport', x: 50, z: 0 });
-  assert.equal(worker.x, 50, 'destino dentro do alcance é aceito');
+  applyCommand(session, 0, { type: 'castHumanAbility', ability: 'teleport', x: 0, z: -20 });
+  assert.equal(worker.x, 0, 'destino dentro do alcance é aceito');
   assert.ok((session.state.players[0]!.abilityCooldowns?.teleport ?? 0) > 0);
 });
 

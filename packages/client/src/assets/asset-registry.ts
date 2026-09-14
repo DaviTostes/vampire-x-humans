@@ -3,6 +3,9 @@ import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { CLIFF_HEIGHT } from '@vampire/shared';
+
+export { CLIFF_HEIGHT };
 
 export type AnimationState = 'idle' | 'walking' | 'working' | 'attack';
 
@@ -36,6 +39,19 @@ interface PropAssetDefinition {
   src: string;
   /** Altura alvo em unidades de mundo; o modelo é escalado e apoiado em y=0. */
   targetHeight?: number;
+  rotationY?: number;
+}
+
+/**
+ * Modelos de relevo (GLB) para compor o terreno (falésias, mesas, rampas).
+ * Diferente dos props, são normalizados por footprint: a maior dimensão
+ * horizontal vira 1 e a base fica em y=0, de modo que o posicionamento define
+ * largura/profundidade/altura por instância.
+ */
+interface TerrainAssetDefinition {
+  id: string;
+  src: string;
+  /** Gira o modelo para alinhar a face vertical à encosta. */
   rotationY?: number;
 }
 
@@ -138,6 +154,87 @@ const VISUAL_ASSETS: readonly VisualAssetDefinition[] = [
 const PROP_ASSETS: readonly PropAssetDefinition[] = [
   { id: 'prop:rock:stone-cluster', src: 'assets/environment/stone_cluster.glb', targetHeight: 2.35 },
   { id: 'prop:tree:evergreen', src: 'assets/environment/emerald_evergreen.glb', targetHeight: 6.1 },
+];
+
+/**
+ * Modelos de relevo usados para compor o terreno: a crista de falésia (`cliff`)
+ * forma as encostas contínuas, `mesa`/`moss` dão massa aos maciços e `ascent` é
+ * a rampa/degraus de acesso. Ver `terrainInstance` e o posicionamento em scene.ts.
+ */
+const TERRAIN_ASSETS: readonly TerrainAssetDefinition[] = [
+  { id: 'terrain:cliff', src: 'assets/environment/terrain/plateau_a.glb' },
+  { id: 'terrain:mesa', src: 'assets/environment/terrain/plateau_b.glb' },
+  { id: 'terrain:moss', src: 'assets/environment/terrain/plateau_moss.glb' },
+  { id: 'terrain:ascent', src: 'assets/environment/terrain/slope_ascent.glb' },
+];
+
+/**
+ * Altura física única do degrau/platô (vem do `game.config.ts` via shared):
+ * todo módulo de cliff tem base em Y=0 e topo visível em Y=CLIFF_HEIGHT — a
+ * mesma altura do terreno elevado.
+ */
+export type CliffRole = 'straight' | 'outerCorner' | 'innerCorner' | 'stairs';
+
+/**
+ * Registro EXPLÍCITO dos módulos de cliff. A função não é inferida do nome do
+ * arquivo Meshy: cada entrada declara qual arquivo é cada papel e traz a
+ * calibração própria (rotationY/scale/offset) — sem normalização automática por
+ * bounding box. `scale`/`offset` foram medidos a partir dos bounds reais dos
+ * GLBs para que a base caia em Y=0 e o topo em Y=CLIFF_HEIGHT; só X/Z (largura e
+ * profundidade) variam, a altura é preservada. `length`/`depth` são a pegada em
+ * unidades de mundo usada no encaixe por aresta.
+ */
+export interface CliffModuleDefinition {
+  role: CliffRole;
+  src: string;
+  rotationY: number;
+  scale: [number, number, number];
+  offset: [number, number, number];
+  length: number;
+  depth: number;
+}
+
+export const CLIFF_MODULES: readonly CliffModuleDefinition[] = [
+  {
+    role: 'straight',
+    src: 'assets/environment/terrain/plateau_a.glb',
+    rotationY: 0,
+    // Escala UNIFORME calibrada pela ALTURA DA SUPERFÍCIE DE TOPO (não pelo
+    // bounding box): o topo visível fica exatamente em CLIFF_HEIGHT e a base em 0.
+    scale: [7.0765, 7.0765, 7.0765],
+    offset: [0.0130, 3.0939, 0.0175],
+    length: 13.36,
+    depth: 6.60,
+  },
+  {
+    role: 'outerCorner',
+    src: 'assets/environment/terrain/plateau_b.glb',
+    rotationY: 0,
+    scale: [6.8375, 6.8375, 6.8375],
+    offset: [-0.0395, 3.1539, 0.0500],
+    length: 12.86,
+    depth: 11.72,
+  },
+  {
+    role: 'innerCorner',
+    src: 'assets/environment/terrain/plateau_moss.glb',
+    rotationY: 0,
+    scale: [6.1659, 6.1659, 6.1659],
+    offset: [0.0153, 3.1575, 0.0104],
+    length: 11.70,
+    depth: 8.75,
+  },
+  {
+    role: 'stairs',
+    src: 'assets/environment/terrain/slope_ascent.glb',
+    rotationY: 0,
+    // Mantém a pegada pequena aprovada em X/Z; o Y é calibrado pelo último
+    // degrau (topo visível) para bater com CLIFF_HEIGHT.
+    scale: [3.4754, 8.1587, 4.2735],
+    offset: [0.0023, 3.1744, 0.0110],
+    length: 4.50,
+    depth: 8.12,
+  },
 ];
 
 /** Modelos GLB que substituem o modelo procedural de uma construção. */
@@ -260,6 +357,26 @@ function normalizeProp(visual: THREE.Group, definition: { targetHeight?: number;
   visual.updateMatrixWorld(true);
 }
 
+/**
+ * Normaliza um modelo de relevo: a maior dimensão horizontal vira 1, a base
+ * apoia em y=0 e o centro em x/z é o centro do chão. Assim cada instância
+ * escolhe largura/profundidade/altura em unidades de mundo e escala por eixo.
+ */
+function normalizeTerrain(visual: THREE.Group, definition: { rotationY?: number }) {
+  visual.updateMatrixWorld(true);
+  const size = new THREE.Box3().setFromObject(visual).getSize(new THREE.Vector3());
+  const footprint = Math.max(size.x, size.z);
+  if (footprint > 1e-6) visual.scale.multiplyScalar(1 / footprint);
+  visual.rotation.y += definition.rotationY ?? 0;
+  visual.updateMatrixWorld(true);
+
+  const bounds = new THREE.Box3().setFromObject(visual);
+  visual.position.x -= (bounds.min.x + bounds.max.x) * 0.5;
+  visual.position.z -= (bounds.min.z + bounds.max.z) * 0.5;
+  visual.position.y -= bounds.min.y;
+  visual.updateMatrixWorld(true);
+}
+
 /** Concatena as malhas de um prop em uma única geometria (espaço local do root). */
 function collectGeometry(root: THREE.Object3D): THREE.BufferGeometry | null {
   root.updateMatrixWorld(true);
@@ -337,6 +454,10 @@ class AssetRegistry {
   private readonly gltfLoader = new GLTFLoader();
   private readonly loaded = new Map<string, LoadedAsset>();
   private readonly props = new Map<string, LoadedProp>();
+  /** Templates de relevo (falésias/mesas/rampas) já normalizados. */
+  private readonly terrains = new Map<string, THREE.Group>();
+  /** Módulos de cliff calibrados, por papel (straight/outerCorner/...). */
+  private readonly cliffs = new Map<CliffRole, THREE.Group>();
   /** Templates de construção carregados, por `src` (vários níveis por `kind`). */
   private readonly buildingTemplates = new Map<string, THREE.Group>();
   /** Carregamentos de construção em andamento, por `src`, para deduplicar pedidos. */
@@ -367,6 +488,7 @@ class AssetRegistry {
     const jobs: Array<() => Promise<unknown>> = [
       ...VISUAL_ASSETS.map((definition) => () => this.load(definition)),
       ...PROP_ASSETS.map((definition) => () => this.loadProp(definition)),
+      ...TERRAIN_ASSETS.map((definition) => () => this.loadTerrain(definition)),
       ...initialBuildings.map((definition) => () => this.loadBuilding(definition)),
     ];
     this.preloadLoaded = 0;
@@ -484,6 +606,68 @@ class AssetRegistry {
     return { geometry, material };
   }
 
+  /**
+   * Geometria e material achatados de um modelo de relevo, prontos para
+   * InstancedMesh. A geometria já vem normalizada (maior lado horizontal = 1,
+   * base em y=0), então o chamador escala por eixo para obter o tamanho desejado.
+   */
+  terrainInstance(id: string): { geometry: THREE.BufferGeometry; material: THREE.Material } | null {
+    const template = this.terrains.get(id);
+    if (!template) return null;
+    const geometry = collectGeometry(template);
+    const material = firstMaterial(template);
+    if (!geometry || !material) {
+      geometry?.dispose();
+      return null;
+    }
+    return { geometry, material };
+  }
+
+  /**
+   * Carrega os módulos de cliff calibrados. Sem normalização por bounding box:
+   * aplica rotationY/scale/offset explícitos do registro. Garante (e confere em
+   * dev) que a base caia em Y=0 e o topo exatamente em Y=CLIFF_HEIGHT.
+   */
+  async loadCliffModules(): Promise<void> {
+    for (const definition of CLIFF_MODULES) {
+      if (this.cliffs.has(definition.role)) continue;
+      try {
+        const gltf = await this.gltfLoader.loadAsync(publicUrl(definition.src));
+        const template = gltf.scene;
+        prepareMeshes(template);
+        template.rotation.set(0, definition.rotationY, 0);
+        template.scale.set(definition.scale[0], definition.scale[1], definition.scale[2]);
+        template.position.set(definition.offset[0], definition.offset[1], definition.offset[2]);
+        template.updateMatrixWorld(true);
+        this.cliffs.set(definition.role, template);
+        if (import.meta.env.DEV) {
+          const box = new THREE.Box3().setFromObject(template);
+          const eps = 0.03;
+          // Base em 0 e topo alcançando CLIFF_HEIGHT (a superfície de topo fica
+          // exatamente em CLIFF_HEIGHT; o bbox pode passar um pouco por causa de
+          // quinas/arestas).
+          if (Math.abs(box.min.y) > eps || box.max.y < CLIFF_HEIGHT - eps * 10) {
+            console.warn(`[cliffs] ${definition.role}: base/topo fora do esperado (min.y=${box.min.y.toFixed(3)}, max.y=${box.max.y.toFixed(3)}; esperado base 0 e topo >= ${CLIFF_HEIGHT}).`);
+          }
+        }
+      } catch (error) {
+        console.warn(`[cliffs] Falha ao carregar o módulo ${definition.role} (${definition.src}).`, error);
+      }
+    }
+  }
+
+  /** Cópia independente do módulo calibrado (base em Y=0, topo em CLIFF_HEIGHT). */
+  cliffModule(role: CliffRole): THREE.Group | null {
+    const template = this.cliffs.get(role);
+    return template ? (template.clone(true) as THREE.Group) : null;
+  }
+
+  /** Cópia independente de um prop estático (árvore/pedra) já normalizado. */
+  propModel(id: string): THREE.Group | null {
+    const source = this.props.get(id);
+    return source ? (source.template.clone(true) as THREE.Group) : null;
+  }
+
   private async loadAnimation(definition: VisualAnimationDefinition): Promise<THREE.AnimationClip | null> {
     const scene = await this.fbxLoader.loadAsync(publicUrl(definition.src));
     const sourceClip = scene.animations[0];
@@ -533,6 +717,19 @@ class AssetRegistry {
     } catch (error) {
       // Sem o prop, createResourceModel e syncWoodNodes caem nos modelos procedurais.
       console.warn(`[assets] Falha ao carregar ${definition.id}; usando modelo procedural.`, error);
+    }
+  }
+
+  private async loadTerrain(definition: TerrainAssetDefinition): Promise<void> {
+    try {
+      const gltf = await this.gltfLoader.loadAsync(publicUrl(definition.src));
+      const template = gltf.scene;
+      prepareMeshes(template);
+      normalizeTerrain(template, definition);
+      this.terrains.set(definition.id, template);
+    } catch (error) {
+      // Sem o relevo, o terreno cai nas pilhas de pedra procedurais.
+      console.warn(`[assets] Falha ao carregar o relevo ${definition.id}; usando pedras procedurais.`, error);
     }
   }
 

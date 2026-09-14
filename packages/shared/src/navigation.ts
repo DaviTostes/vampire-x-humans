@@ -3,6 +3,14 @@ import type { GameMap } from './mapgen.js';
 import type { GameState, Unit } from './types.js';
 
 export const UNIT_RADIUS = INTERACTION.unitRadius;
+
+/**
+ * Raio de ocupação por tipo (FT5): humano 1×1 tile, vampiro 2×2 tiles.
+ * Usado na colisão contínua e na validação de construção.
+ */
+export function unitRadius(kind: string): number {
+  return kind === 'vampire' ? INTERACTION.vampireUnitRadius : UNIT_RADIUS;
+}
 type Point = { x: number; z: number };
 type Goal = Point & { range: number; half: number };
 type Route = { key: string; order: Unit['order']; points: Point[]; retryAt: number; search?: Generator<void, Point[], void> };
@@ -127,15 +135,15 @@ export class Navigation {
       }
     };
     for (const b of this.state.buildings) {
-      const half = BUILDING_SIZE[b.kind] / 2 + UNIT_RADIUS;
+      const half = BUILDING_SIZE[b.kind] / 2;
       add({ x: b.x, z: b.z, halfX: half, halfZ: half, kind: b.kind });
     }
     for (const wall of this.map.obstacles) {
-      add({ x: wall.x, z: wall.z, halfX: wall.width / 2 + UNIT_RADIUS, halfZ: wall.depth / 2 + UNIT_RADIUS });
+      add({ x: wall.x, z: wall.z, halfX: wall.width / 2, halfZ: wall.depth / 2 });
     }
     for (const n of this.state.nodes) {
       if (n.amount <= 0) continue;
-      const radius = (n.kind === 'wood' ? INTERACTION.woodCollisionRadius : INTERACTION.goldCollisionRadius) + UNIT_RADIUS;
+      const radius = n.kind === 'wood' ? INTERACTION.woodCollisionRadius : INTERACTION.goldCollisionRadius;
       add({ x: n.x, z: n.z, halfX: radius, halfZ: radius, radius });
     }
     this.indexed = true;
@@ -187,7 +195,7 @@ export class Navigation {
   }
 
   canStand(u: Pick<Unit, 'kind'>, x: number, z: number): boolean {
-    const r = UNIT_RADIUS;
+    const r = unitRadius(u.kind);
     const half = WORLD.half;
     if (!Number.isFinite(x) || !Number.isFinite(z) || Math.abs(x) + r >= half || Math.abs(z) + r >= half) return false;
     // Água em 9 amostras, sem chamar função nem redividir por tile a cada uma.
@@ -208,10 +216,17 @@ export class Navigation {
     const key = Math.floor((z + half) / BUCKET_SIZE) * BUCKET_COUNT + Math.floor((x + half) / BUCKET_SIZE);
     const bucket = this.colliders[key];
     if (bucket) for (const c of bucket) {
+      // O Vampiro pode entrar na Cripta (sua base); os demais respeitam o bloco.
       if (c.kind === 'crypt' && u.kind === 'vampire') continue;
+      // FT5: o Muro é uma barreira de 1 tile. O Humano/trabalhador continua
+      // atravessando o portão do refúgio (senão ficaria preso ao murar a saída),
+      // mas todo o resto colide normalmente.
       if (c.kind === 'wall' && u.kind === 'worker') continue;
       const dx = x - c.x, dz = z - c.z;
-      if (c.radius !== undefined ? dx * dx + dz * dz < c.radius * c.radius : Math.abs(dx) < c.halfX && Math.abs(dz) < c.halfZ) return false;
+      const hit = c.radius !== undefined
+        ? dx * dx + dz * dz < (c.radius + r) * (c.radius + r)
+        : Math.abs(dx) < c.halfX + r && Math.abs(dz) < c.halfZ + r;
+      if (hit) return false;
     }
     return true;
   }
@@ -430,9 +445,9 @@ export class Navigation {
   separate(units: Unit[]) {
     const count = units.length;
     if (count < 2) return;
-    const sep = INTERACTION.unitSeparation;
-    // Grade de células do tamanho da separação: só vizinhos de 3x3 podem colidir.
-    const cell = sep;
+    // Célula = maior diâmetro (Vampiro). A separação de cada par é a soma dos
+    // raios de ocupação (FT5): humano+humano = 2, vampiro+humano = 3 etc.
+    const cell = INTERACTION.vampireUnitRadius * 2;
     const cols = Math.ceil((WORLD.half * 2) / cell) + 1;
     const colOf = (x: number) => Math.max(0, Math.min(cols - 1, Math.floor((x + WORLD.half) / cell)));
     const rowOf = (z: number) => Math.max(0, Math.min(cols - 1, Math.floor((z + WORLD.half) / cell)));
@@ -462,6 +477,9 @@ export class Navigation {
               const b = units[j]!;
               const ddx = b.x - a.x, ddz = b.z - a.z;
               const d = Math.sqrt(ddx * ddx + ddz * ddz);
+              // Separação proporcional ao tamanho, mas mantendo a folga base de
+              // `unitSeparation` para os humanos (senão unidades ficam presas).
+              const sep = (unitRadius(a.kind) + unitRadius(b.kind)) * (INTERACTION.unitSeparation / (2 * UNIT_RADIUS));
               if (d >= sep) continue;
               const nxv = d > 0.001 ? ddx / d : 1, nzv = d > 0.001 ? ddz / d : 0;
               const push = (sep - d) / 2;

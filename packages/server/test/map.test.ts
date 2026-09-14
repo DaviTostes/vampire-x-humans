@@ -16,14 +16,15 @@ test('encostas têm uma única passagem: muro sela cada refúgio e humanos atrav
 
     // Busca exaustiva de dentro para fora: detecta brechas em qualquer trecho
     // da encosta, mesmo que o A* ainda não tenha tido tempo de encontrá-las.
+    const ccx = Math.round(c.x), ccz = Math.round(c.z);
     const radius = 65, size = radius * 2 + 1;
     const seen = new Uint8Array(size * size);
-    const queue = [{ x: c.x, z: c.z }];
-    const index = (x: number, z: number) => (z - c.z + radius) * size + x - c.x + radius;
-    seen[index(c.x, c.z)] = 1;
+    const queue = [{ x: ccx, z: ccz }];
+    const index = (x: number, z: number) => (z - ccz + radius) * size + x - ccx + radius;
+    seen[index(ccx, ccz)] = 1;
     for (let head = 0; head < queue.length; head++) {
       const p = queue[head]!;
-      assert.ok(Math.abs(p.x - c.x) < radius && Math.abs(p.z - c.z) < radius, `brecha em ${c.name}`);
+      assert.ok(Math.abs(p.x - ccx) < radius && Math.abs(p.z - ccz) < radius, `brecha em ${c.name}`);
       for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
         const x = p.x + dx!, z = p.z + dz!, i = index(x, z);
         if (seen[i]) continue;
@@ -44,7 +45,7 @@ test('encostas têm uma única passagem: muro sela cada refúgio e humanos atrav
 test('ilha, recursos e pontes concordam com colisão e construção', () => {
   const session = createSession([], 1, [0]);
   for (const x of [-WORLD.half + 1, WORLD.half - 1]) for (const z of [-WORLD.half + 1, WORLD.half - 1]) {
-    assert.ok(isWaterAt(session.map, x, z), 'cantos do mundo devem ser mar');
+    assert.ok(!isWaterAt(session.map, x, z), 'labirinto: os cantos do mundo são terra');
   }
   for (const node of session.state.nodes) assert.ok(!isWaterAt(session.map, node.x, node.z), `recurso na água: ${node.id}`);
   for (const unit of session.state.units) assert.ok(session.navigation.canStand(unit, unit.x, unit.z), 'spawn livre');

@@ -73,6 +73,9 @@ export const SPEC_ROUNDING_POLICY = SPEC.roundingPolicy;
 // Unidades de altura de mapa por unidade de mundo.
 export const TERRAIN_MAX_SLOPE = 0.06;
 
+/** Altura física única dos cliffs/platôs (unidades de mundo). */
+export const CLIFF_HEIGHT = GAME_CONFIG.terrain.cliffHeight;
+
 export const BUILD_COSTS = Object.fromEntries(
   Object.entries(GAME_CONFIG.buildings).filter(([, b]) => 'cost' in b).map(([kind, b]) => [kind, 'cost' in b ? b.cost : undefined]),
 ) as Record<BuildKind, { wood: number; gold: number; time: number }>;

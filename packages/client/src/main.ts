@@ -6,33 +6,55 @@ import { Net } from './net.js';
 import { Lobby } from './lobby.js';
 import { assetRegistry } from './assets/asset-registry.js';
 import { LoadingScreen } from './loading.js';
+import { startCliffTest } from './cliff-test.js';
+import { startMapBuilder } from './map-builder.js';
 import { startMatchMusic } from './music.js';
 import { installCursors } from './cursor.js';
 import { preloadResourceIcons } from './resource-icons.js';
 import { setActiveMapId } from '@vampire/shared';
+import { setMapOverlay } from '@vampire/shared';
 
 installCursors();
 preloadResourceIcons();
 
 const app = document.getElementById('app')!;
-const net = new Net();
-const lobby = new Lobby(app, net);
-// Os modelos pesam ~100 MB e o parse dos FBX prende a thread principal. Em vez
-// de baixar tudo no menu (o que travava todo mundo), carregamos os assets no
-// início da partida, atrás de uma tela de loading, em sequência.
-const unsubscribe = net.subscribe(() => {
-  if (!net.started) return;
-  unsubscribe();
-  lobby.destroy();
-  const loading = new LoadingScreen(app);
-  void assetRegistry.preload((progress) => loading.setProgress(progress)).then(() => {
-    // Monta a cena já carregada e só então revela o jogo, para não aparecer um
-    // quadro vazio entre a tela de loading e a partida.
-    startGame(net);
-    return loading.finish();
+
+if (new URLSearchParams(location.search).has('builder')) {
+  // Editor de mapa 3D (rota secreta, com senha via MAP_BUILDER_PASSWORD).
+  void startMapBuilder(app);
+} else if (new URLSearchParams(location.search).has('cliffTest')) {
+  // Área de teste dos módulos de cliff (?cliffTest=1): não sobe sala nem partida.
+  void startCliffTest(app);
+} else {
+  const net = new Net();
+  const lobby = new Lobby(app, net);
+  // Os modelos pesam ~100 MB e o parse dos FBX prende a thread principal. Em vez
+  // de baixar tudo no menu (o que travava todo mundo), carregamos os assets no
+  // início da partida, atrás de uma tela de loading, em sequência.
+  const unsubscribe = net.subscribe(() => {
+    if (!net.started) return;
+    unsubscribe();
+    lobby.destroy();
+    const loading = new LoadingScreen(app);
+    void assetRegistry.preload((progress) => loading.setProgress(progress)).then(async () => {
+      // Overlay do editor de mapa (muros pintados), se houver — precisa ser
+      // aplicado ANTES de montar a cena, para cliente e servidor concordarem.
+      const mapId = net.lobby!.mapId;
+      try {
+        const res = await fetch(`/api/map-overlay?mapId=${encodeURIComponent(mapId)}`);
+        if (res.ok) {
+          const overlay = await res.json();
+          setMapOverlay(mapId, overlay && overlay.version ? overlay : null);
+        }
+      } catch { /* sem overlay: usa o mapa procedural */ }
+      // Monta a cena já carregada e só então revela o jogo, para não aparecer um
+      // quadro vazio entre a tela de loading e a partida.
+      startGame(net);
+      return loading.finish();
+    });
   });
-});
-void net.connect().then(() => { lobby.maybeRejoin(); }).catch(() => lobby.render());
+  void net.connect().then(() => { lobby.maybeRejoin(); }).catch(() => lobby.render());
+}
 
 function startGame(net: Net) {
   // Música de fundo da partida (em loop).

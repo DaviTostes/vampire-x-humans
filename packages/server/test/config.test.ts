@@ -51,7 +51,8 @@ test('Humano e trabalhador usam atributos separados e o treino usa a tabela da f
     assert.equal(peon.hp, 123);
     assert.equal(peon.workerRole, 'lumberjack');
     const wood = session.state.nodes.find(n => n.kind === 'wood')!;
-    Object.assign(peon, { x: wood.x + 2, z: wood.z });
+    const spot = [[2, 0], [-2, 0], [0, 2], [0, -2]].find(([dx, dz]) => session.navigation.canStand({ kind: 'worker' }, wood.x + dx, wood.z + dz))!;
+    Object.assign(peon, { x: wood.x + spot[0], z: wood.z + spot[1] });
     applyCommand(session, 0, { type: 'gather', ids: [peon.id], nodeId: wood.id });
     run(session, 150); // 10 segundos
     const rate = GAME_CONFIG.spec.workers.lumberjack.lumberAmount / lumberLevel1.gatherInterval;
@@ -79,20 +80,21 @@ test('produção do Banco vem da tabela central (gold/s)', () => {
   }
 });
 
-test('o Muro respeita proporções de troca diferentes de 1:1', () => {
+test('Mercado troca lotes com preço dinâmico (inflação/deflação)', () => {
   const market = GAME_CONFIG.market;
-  const before = { ...market };
-  try {
-    market.wood = 30; market.gold = 4;
-    const session = createSession([], 1, [0, 4]);
-    const startGold = session.state.players[0]!.gold;
-    session.state.buildings.push({ ...session.state.buildings[0]!, id: 1001, kind: 'market', owner: 0, x: 10, z: 8 });
-    session.state.players[0]!.wood = 30;
-    applyCommand(session, 0, { type: 'market', targetId: 1001, trade: 'woodToGold', amount: 30 });
-    assert.equal(session.state.players[0]!.wood, 0);
-    assert.equal(session.state.players[0]!.gold, startGold + 4);
-    applyCommand(session, 0, { type: 'market', targetId: 1001, trade: 'goldToWood', amount: 4 });
-    assert.equal(session.state.players[0]!.wood, 30);
-    assert.equal(session.state.players[0]!.gold, startGold);
-  } finally { Object.assign(market, before); }
+  const session = createSession([], 1, [0, 4]);
+  session.state.buildings.push({ ...session.state.buildings[0]!, id: 1001, kind: 'market', owner: 0, x: 10, z: 8 });
+  const player = session.state.players[0]!;
+  player.wood = 10;
+  player.gold = 1000;
+  // Vender 10 madeira paga o preço corrente e barateia o próximo lote.
+  applyCommand(session, 0, { type: 'market', targetId: 1001, trade: 'woodToGold', amount: market.wood });
+  assert.equal(player.wood, 0);
+  assert.equal(player.gold, 1000 + market.gold);
+  assert.equal(player.marketPrice, market.gold - market.step);
+  // Comprar 10 madeira encarece o lote de volta ao preço-base.
+  applyCommand(session, 0, { type: 'market', targetId: 1001, trade: 'goldToWood', amount: market.wood });
+  assert.equal(player.wood, market.wood);
+  assert.equal(player.gold, 1000 + market.step);
+  assert.equal(player.marketPrice, market.gold);
 });

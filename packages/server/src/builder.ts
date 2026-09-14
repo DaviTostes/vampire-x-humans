@@ -1,0 +1,139 @@
+// Editor de mapa (builder) — pintura de grid, servido em URL própria e protegido
+// por senha (`MAP_BUILDER_PASSWORD`). Não aparece no lobby nem no bundle do
+// cliente. O resultado é salvo em `map-overlays/<mapId>.json` e aplicado à
+// próxima partida (servidor e cliente leem o mesmo overlay).
+
+import { promises as fsp } from 'node:fs';
+import path from 'node:path';
+import type http from 'node:http';
+import { WORLD, getMapModel, getMapOverlay, setMapOverlay, normalizeOverlay, type MapOverlay, type MapPresetId } from '@vampire/shared';
+
+const OVERLAY_DIR = path.join(process.cwd(), 'map-overlays');
+const BUILDER_MAP: MapPresetId = 'labyrinth';
+
+function password(): string {
+  return process.env.MAP_BUILDER_PASSWORD ?? '';
+}
+
+function overlayFile(mapId: MapPresetId): string {
+  return path.join(OVERLAY_DIR, `${mapId}.json`);
+}
+
+function authorized(query: URLSearchParams): boolean {
+  const pw = password();
+  if (!pw) return false;
+  const key = query.get('key') ?? '';
+  // Comparação de tamanho fixo simples (ferramenta interna de dev).
+  if (key.length !== pw.length) return false;
+  let diff = 0;
+  for (let i = 0; i < pw.length; i++) diff |= key.charCodeAt(i) ^ pw.charCodeAt(i);
+  return diff === 0;
+}
+
+function sendJson(res: http.ServerResponse, status: number, body: unknown): void {
+  const raw = JSON.stringify(body);
+  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+  res.end(raw);
+}
+
+async function readBody(req: http.IncomingMessage, limit = 4_000_000): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > limit) { reject(new Error('payload grande')); req.destroy(); return; }
+      chunks.push(chunk);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    req.on('error', reject);
+  });
+}
+
+/** Carrega o overlay salvo (se houver) para o mapa do builder. */
+export async function loadMapOverlay(): Promise<void> {
+  try {
+    const raw = await fsp.readFile(overlayFile(BUILDER_MAP), 'utf8');
+    const parsed = JSON.parse(raw) as Partial<MapOverlay>;
+    setMapOverlay(BUILDER_MAP, normalizeOverlay(parsed));
+    console.log('[builder] overlay carregado de', overlayFile(BUILDER_MAP));
+  } catch {
+    // sem overlay salvo: usa o mapa procedural puro
+  }
+}
+
+function buildState() {
+  const model = getMapModel(BUILDER_MAP);
+  const map = model.generateMap();
+  const n = map.tiles;
+  const height = new Uint8Array(n * n);
+  for (let i = 0; i < n * n; i++) height[i] = Math.max(0, Math.min(255, Math.round(((map.height[i] ?? 0) / 0.9) * 255)));
+  const overlay = getMapOverlay(BUILDER_MAP) ?? { version: 1, adds: [], removes: [] };
+  return {
+    mapId: BUILDER_MAP,
+    tiles: n,
+    tileSize: WORLD.tileSize,
+    half: WORLD.half,
+    water: Buffer.from(map.water).toString('base64'),
+    height: Buffer.from(height).toString('base64'),
+    obstacles: map.obstacles.map((o) => [o.x, o.z, o.width, o.depth]),
+    refuges: model.compounds.map((c) => [c.x, c.z, c.width, c.depth]),
+    trails: model.trails.map((t) => t.map((p) => [p.x, p.z])),
+    overlay,
+  };
+}
+
+async function saveOverlay(body: string): Promise<void> {
+  const parsed = JSON.parse(body) as Partial<MapOverlay>;
+  const overlay: MapOverlay = normalizeOverlay(parsed);
+  await fsp.mkdir(OVERLAY_DIR, { recursive: true });
+  await fsp.writeFile(overlayFile(BUILDER_MAP), JSON.stringify(overlay));
+  setMapOverlay(BUILDER_MAP, overlay);
+}
+
+// ---------- páginas ----------
+
+// A página 2D foi substituída pelo builder 3D no cliente (?builder=1).
+// `/builder` continua existindo apenas como atalho/redirect para ele.
+/** Trata as rotas do builder/overlay. Retorna true se a requisição foi tratada. */
+export async function handleBuilder(req: http.IncomingMessage, res: http.ServerResponse): Promise<boolean> {
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  const urlPath = url.pathname;
+
+  // Endpoint PÚBLICO: o cliente busca o overlay antes de montar a cena.
+  if (urlPath === '/api/map-overlay') {
+    const mapId = (url.searchParams.get('mapId') ?? BUILDER_MAP) as MapPresetId;
+    const overlay = getMapOverlay(mapId);
+    // Envia chaves curtas (o cliente usa `adds`/`removes`).
+    sendJson(res, 200, overlay ?? { version: 0, adds: [], removes: [] });
+    return true;
+  }
+
+  if (!urlPath.startsWith('/builder')) return false;
+
+  if (!password()) { sendJson(res, 404, { error: 'builder desativado' }); return true; }
+  if (!authorized(url.searchParams)) { sendJson(res, 401, { error: 'senha inválida' }); return true; }
+
+  if (urlPath === '/builder' && (req.method === 'GET' || req.method === 'HEAD')) {
+    // Atalho para o builder 3D (rota do cliente). A senha continua sendo pedida
+    // ao carregar/salvar os dados.
+    res.writeHead(302, { Location: '/?builder=1', 'Cache-Control': 'no-store' });
+    res.end();
+    return true;
+  }
+  if (urlPath === '/builder/state' && req.method === 'GET') {
+    sendJson(res, 200, buildState());
+    return true;
+  }
+  if (urlPath === '/builder/save' && req.method === 'POST') {
+    try {
+      await saveOverlay(await readBody(req));
+      sendJson(res, 200, { ok: true });
+    } catch (error) {
+      sendJson(res, 400, { error: String((error as Error).message ?? error) });
+    }
+    return true;
+  }
+  sendJson(res, 404, { error: 'rota desconhecida' });
+  return true;
+}

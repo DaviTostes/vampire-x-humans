@@ -2,7 +2,7 @@
 // relevo, colisão, trilhas e recursos já derivados. Servidor e cliente usam o
 // mesmo `mapId` para construir exatamente o mesmo mundo.
 import {
-  WORLD, GAME_CONFIG, MAP_PRESETS, DEFAULT_MAP_ID, MAP_SCALE, INTERACTION, BUILDING_SIZE,
+  WORLD, GAME_CONFIG, MAP_PRESETS, DEFAULT_MAP_ID, MAP_SCALE, INTERACTION, BUILDING_SIZE, CLIFF_HEIGHT,
   type MapPresetConfig, type MapPresetId, type RefugeStyle,
 } from './constants.js';
 
@@ -89,6 +89,14 @@ export interface MapModel {
   resourcePlacements: ResourcePlacement[];
   forestWoodNodes: Array<{ kind: 'wood'; x: number; z: number }>;
   obstacles: MapObstacle[];
+  /**
+   * Polilinha do rochedo que cerca cada refúgio (mesma amostrada pelos
+   * obstáculos de `compoundWalls`). Vazia no labirinto e quando `maze` está ativo.
+   * O cliente usa para alinhar o visual das falésias ao anel de colisão.
+   */
+  refugeRings: Point[][];
+  /** Caixas de colisão da encosta de cada refúgio, na mesma ordem de `compounds`. */
+  refugeWalls: MapObstacle[][];
   compoundEntrance(c: Compound): Point;
   isLandAt(x: number, z: number): boolean;
   isWaterAtWorld(x: number, z: number): boolean;
@@ -191,12 +199,12 @@ function buildMapModel(id: MapPresetId, cfg: MapPresetConfig): MapModel {
   const REFUGE_PAD = S(3.4);     // topo plano estendido sob o rochedo
   const REFUGE_RAMP_LEN = S(26); // transição suave terraço -> campo (clássico)
   const CROWN_STEP = S(2.4);     // espaçamento das amostras do rochedo
-  // Labirinto: platô pequeno, queda curta dentro das paredes do refúgio; só a
-  // porta tem rampa, então os corredores ao redor ficam planos.
-  const MAZE_LIFT = 0.45;
+  // Labirinto: platô elevado exatamente CLIFF_HEIGHT acima do campo; só a porta
+  // tem rampa, então os corredores ao redor ficam planos.
+  const MAZE_LIFT = CLIFF_HEIGHT / 14;
   const MAZE_EDGE = S(1.2);
-  const MAZE_RAMP_LEN = S(9);
-  const MAZE_RAMP_HALF = S(5);
+  const MAZE_RAMP_LEN = S(14);
+  const MAZE_RAMP_HALF = S(6);
 
   interface RefugeShape {
     cx: number; cz: number;
@@ -225,7 +233,7 @@ function buildMapModel(id: MapPresetId, cfg: MapPresetConfig): MapModel {
     const seed = hash01(c.x, c.z);
     // Vão calibrado para (a) a unidade passar antes de fechar e (b) um único
     // Muro (tamanho 3) lacrar por completo — vale em qualquer escala de mapa.
-    const openX = c.wallThickness / 2 + BUILDING_SIZE.wall / 4 + INTERACTION.unitRadius * 2;
+    const openX = c.wallThickness / 2 + BUILDING_SIZE.wall / 4 + INTERACTION.vampireUnitRadius;
     const ring = outline.map(([u, v], i) => {
       const front = i === 0 || i === outline.length - 1;
       if (front) {
@@ -277,7 +285,7 @@ function buildMapModel(id: MapPresetId, cfg: MapPresetConfig): MapModel {
       walls.push({ x, z, width: size, depth, height });
     // Vão da porta em unidades de mundo: os cantos do vão não podem inchar nem
     // tremer, senão o Muro (tamanho 3) deixa de caber e de lacrar a passagem.
-    const openX = c.wallThickness / 2 + BUILDING_SIZE.wall / 4 + INTERACTION.unitRadius * 2;
+    const openX = c.wallThickness / 2 + BUILDING_SIZE.wall / 4 + INTERACTION.vampireUnitRadius;
     for (let i = 0; i < ring.length - 1; i++) {
       const p = ring[i]!, q = ring[i + 1]!;
       const count = Math.max(3, Math.ceil(Math.hypot(q.x - p.x, q.z - p.z) / CROWN_STEP));
@@ -401,6 +409,12 @@ function buildMapModel(id: MapPresetId, cfg: MapPresetConfig): MapModel {
   // Caixas (mundo) das câmaras dos refúgios: mantidas quase sem árvores.
   const chamberBoxes: Array<{ minX: number; maxX: number; minZ: number; maxZ: number }> = [];
 
+  // Encosta de cada refúgio (por índice de `compounds`): as caixas de colisão e
+  // a polilinha que o cliente usa para assentar as falésias GLB. Preenchido no
+  // clássico por `compoundWalls` e no labirinto pelas paredes das câmaras.
+  const REFUGE_WALLS: MapObstacle[][] = compounds.map(() => []);
+  const REFUGE_RINGS: Point[][] = compounds.map(() => []);
+
   // ---- labirinto central ----
   // Um miolo labiríntico no CENTRO do mapa. Os refúgios ficam fora dele, em
   // campo aberto (orgânicos, como no clássico), então o Vampiro alcança cada um
@@ -426,6 +440,8 @@ function buildMapModel(id: MapPresetId, cfg: MapPresetConfig): MapModel {
     interface Room {
       cells: number[]; minI: number; maxI: number; minJ: number; maxJ: number;
       entrance: [number, number, number, number] | null; facing: Compound['facing'];
+      /** Índice do refúgio em `compounds`, para alinhar o visual das falésias. */
+      compoundIndex: number;
     }
     const rooms: Room[] = [];
     const roomCells = new Set<number>();
@@ -435,7 +451,7 @@ function buildMapModel(id: MapPresetId, cfg: MapPresetConfig): MapModel {
       for (let dx = 0; dx < rw; dx++) for (let dy = 0; dy < rd; dy++) out.push(K(i + dx, j + dy));
       return out;
     };
-    for (const c of compounds) {
+    for (const [ci, c] of compounds.entries()) {
       const ai0 = Math.round(c.x / cell);
       const aj0 = Math.round(c.z / cell);
       // Cada refúgio tem uma câmara de tamanho próprio (em células), variando
@@ -462,7 +478,7 @@ function buildMapModel(id: MapPresetId, cfg: MapPresetConfig): MapModel {
       if (!placed) continue;
       rooms.push({
         cells: placed.cells, minI: placed.ai, maxI: placed.ai + rw - 1, minJ: placed.aj, maxJ: placed.aj + rd - 1,
-        entrance: null, facing: c.facing,
+        entrance: null, facing: c.facing, compoundIndex: ci,
       });
     }
 
@@ -574,7 +590,8 @@ function buildMapModel(id: MapPresetId, cfg: MapPresetConfig): MapModel {
 
     // 5) Paredes e trilhas.
     const walls: MapObstacle[] = [];
-    const addWall = (i: number, j: number, di: number, dj: number) => {
+    const addWall = (i: number, j: number, di: number, dj: number): MapObstacle[] => {
+      const created: MapObstacle[] = [];
       const vertical = di !== 0;
       const w = vertical ? wallT : cell;
       const d = vertical ? cell : wallT;
@@ -587,14 +604,17 @@ function buildMapModel(id: MapPresetId, cfg: MapPresetConfig): MapModel {
         const pz = vertical ? z - d / 2 + d * t : z;
         if (Math.hypot(px - cryptPosition.x, pz - cryptPosition.z) < S(m.centerRadius)) continue;
         const jitter = (hash01(Math.round(px * 2), Math.round(pz * 2)) - 0.5) * S(0.7);
-        walls.push({
+        const obstacle: MapObstacle = {
           x: px + (vertical ? jitter : 0),
           z: pz + (vertical ? 0 : jitter),
           width: vertical ? w : cell / chunks + S(1.4),
           depth: vertical ? cell / chunks + S(1.4) : d,
           height: wallH * (0.85 + hash01(Math.round(px), Math.round(pz)) * 0.35),
-        });
+        };
+        walls.push(obstacle);
+        created.push(obstacle);
       }
+      return created;
     };
     // Grade: paredes/trilhas das células visitadas.
     for (const c of visited) {
@@ -610,6 +630,22 @@ function buildMapModel(id: MapPresetId, cfg: MapPresetConfig): MapModel {
     }
     // Câmaras: perímetro fechado (exceto a entrada) + interior aberto.
     for (const room of rooms) {
+      const refugeWalls = REFUGE_WALLS[room.compoundIndex]!;
+      const compound = compounds[room.compoundIndex]!;
+      // No labirinto `compound.x/z` fica meia célula à frente do centro real da
+      // câmara (convenção do gerador). O anel é o retângulo externo das paredes:
+      // a arena tem pegada quadrada e os módulos de pedra alinham nos lados.
+      const centerX = compound.x - cell / 2;
+      const centerZ = compound.z - cell / 2;
+      const halfX = compound.width / 2 + wallT / 2;
+      const halfZ = compound.depth / 2 + wallT / 2;
+      REFUGE_RINGS[room.compoundIndex] = [
+        { x: centerX - halfX, z: centerZ - halfZ },
+        { x: centerX + halfX, z: centerZ - halfZ },
+        { x: centerX + halfX, z: centerZ + halfZ },
+        { x: centerX - halfX, z: centerZ + halfZ },
+        { x: centerX - halfX, z: centerZ - halfZ },
+      ];
       const cellSet = new Set(room.cells);
       for (const cc of room.cells) {
         const i = Ki(cc), j = Kj(cc);
@@ -622,7 +658,7 @@ function buildMapModel(id: MapPresetId, cfg: MapPresetConfig): MapModel {
           }
           const edge = openKey(cc, nk);
           if (entranceEdges.has(edge)) continue;
-          addWall(i, j, di, dj);
+          refugeWalls.push(...addWall(i, j, di, dj));
         }
       }
     }
@@ -632,11 +668,14 @@ function buildMapModel(id: MapPresetId, cfg: MapPresetConfig): MapModel {
       const [i, j, di, dj] = room.entrance;
       trails.push([{ x: i * cell, z: j * cell }, { x: (i + di) * cell, z: (j + dj) * cell }]);
     }
-    // Vão do muro: paredes dos lados, abertura central.
-    const unit = INTERACTION.unitRadius;
+    // Vão do muro: paredes dos lados, abertura central. A abertura é dimensionada
+    // pelo raio do VAMPIRO (2×2), senão ele não atravessa; ainda assim o Muro
+    // (tamanho 3) sela o vão, pois bloqueia |z−centro| < 1.5 + raio.
+    const unit = INTERACTION.vampireUnitRadius;
     const openX = BUILDING_SIZE.wall / 2 + unit + S(0.2);
     for (const room of rooms) {
       if (!room.entrance) continue;
+      const refugeWalls = REFUGE_WALLS[room.compoundIndex]!;
       const [i, j, di, dj] = room.entrance;
       const vertical = di !== 0;
       const door = { x: (i + i + di) / 2 * cell, z: (j + j + dj) / 2 * cell };
@@ -647,13 +686,15 @@ function buildMapModel(id: MapPresetId, cfg: MapPresetConfig): MapModel {
         const center = openX + chunkLen * (s + 0.5);
         for (const sgn of [1, -1]) {
           const off = center * sgn;
-          walls.push({
+          const obstacle: MapObstacle = {
             x: door.x + (vertical ? 0 : off),
             z: door.z + (vertical ? off : 0),
             width: vertical ? wallT : chunkLen,
             depth: vertical ? chunkLen : wallT,
             height: wallH,
-          });
+          };
+          walls.push(obstacle);
+          refugeWalls.push(obstacle);
         }
       }
     }
@@ -723,7 +764,11 @@ function buildMapModel(id: MapPresetId, cfg: MapPresetConfig): MapModel {
   // câmaras já são cercadas pelas paredes da grade).
   if (!cfg.maze) {
     compounds.forEach((c, i) => {
-      NATURAL_BLOCKERS.push(...compoundWalls(c, REFUGE_SHAPES[i]!));
+      const shape = REFUGE_SHAPES[i]!;
+      const walls = compoundWalls(c, shape);
+      REFUGE_WALLS[i] = walls;
+      REFUGE_RINGS[i] = shape.ring.map((p) => ({ x: p.x, z: p.z }));
+      NATURAL_BLOCKERS.push(...walls);
     });
   }
 
@@ -1021,7 +1066,8 @@ function buildMapModel(id: MapPresetId, cfg: MapPresetConfig): MapModel {
     return Math.min(0.72, Math.max(BASE_H * 0.72, h));
   }
 
-  const obstacles: MapObstacle[] = [...NATURAL_BLOCKERS, ...ROCK_OBSTACLES, ...BASE_ROCKS].map(o => ({ ...o }));
+  const baseObstacles: MapObstacle[] = [...NATURAL_BLOCKERS, ...ROCK_OBSTACLES, ...BASE_ROCKS].map(o => ({ ...o }));
+  const obstacles: MapObstacle[] = applyOverlay(id, baseObstacles);
 
   let cachedMap: GameMap | null = null;
 
@@ -1041,7 +1087,8 @@ function buildMapModel(id: MapPresetId, cfg: MapPresetConfig): MapModel {
         height[i] = BASE_H * 0.3;
         water[i] = 1;
       } else {
-        let h = terrainHeight(wx, wz, coast);
+        const ground = terrainHeight(wx, wz, coast);
+        let h = ground;
         const flatten = (cx: number, cz: number, radius: number, lift = 0) => {
           const d = Math.hypot(wx - cx, wz - cz);
           if (d >= radius + FLAT_BLEND) return;
@@ -1049,9 +1096,9 @@ function buildMapModel(id: MapPresetId, cfg: MapPresetConfig): MapModel {
           h = h * t + (BASE_H + lift) * (1 - t);
         };
         if (cfg.maze) {
-          // Cada câmara do labirinto é um pequeno platô. A queda acontece logo
-          // dentro do muro do próprio refúgio, então os corredores ao redor
-          // continuam planos; só a faixa da porta é rampa.
+          // Cada câmara do labirinto é um platô exatamente CLIFF_HEIGHT acima do
+          // campo (`ground`): o degrau tem altura fixa e a rampa só na porta.
+          const plateau = ground + MAZE_LIFT;
           for (const c of compounds) {
             const horizontal = c.facing === 'north' || c.facing === 'south';
             const halfF = (horizontal ? c.depth : c.width) / 2 + REFUGE_PAD;
@@ -1064,16 +1111,22 @@ function buildMapModel(id: MapPresetId, cfg: MapPresetConfig): MapModel {
             const side = dx * tx + dz * tz;
             const outF = Math.max(0, Math.abs(fwd) - halfF);
             const outT = Math.max(0, Math.abs(side) - halfT);
-            if (outF === 0 && outT === 0) { h = BASE_H + MAZE_LIFT; continue; }
+            if (outF === 0 && outT === 0) { h = plateau; continue; }
             const out = Math.hypot(outF, outT);
             const door = compoundEntrance(c);
             const doorSide = (door.x - cx0) * tx + (door.z - cz0) * tz;
+            // Rampa da porta: segue a TRILHA que sai da porta (que é diagonal no
+            // labirinto), com inclinação constante e piso plano na transversal —
+            // assim o corredor inteiro é caminhável (worker e vampiro).
             const dTrail = exactTrailDistance(wx, wz);
-            const inDoorLane = fwd > 0 && Math.abs(side - doorSide) < MAZE_RAMP_HALF && dTrail < MAZE_RAMP_HALF;
-            const trailNear = inDoorLane ? Math.max(0, 1 - dTrail / MAZE_RAMP_HALF) : 0;
-            const blend = MAZE_EDGE + (MAZE_RAMP_LEN - MAZE_EDGE) * smoothstep(Math.min(1, trailNear));
-            const t = smoothstep(Math.min(1, out / blend));
-            h = h * t + (BASE_H + MAZE_LIFT) * (1 - t);
+            if (fwd > 0 && dTrail < MAZE_RAMP_HALF) {
+              const r = Math.min(1, out / MAZE_RAMP_LEN);
+              h = ground + MAZE_LIFT * (1 - r);
+              continue;
+            }
+            // Demais bordas: degrau (encosta íngreme, bloqueia).
+            const t = smoothstep(Math.min(1, out / MAZE_EDGE));
+            h = h * t + plateau * (1 - t);
           }
         } else {
           // Refúgio clássico: terraço gramado elevado sobre o anel de rochas. A
@@ -1092,6 +1145,15 @@ function buildMapModel(id: MapPresetId, cfg: MapPresetConfig): MapModel {
       }
       if (isBridgeAtWorld(wx, wz)) bridge[i] = 1;
     }
+    // Relevo esculpido no editor: substitui a altura procedural (só em terra).
+    const overlay = MAP_OVERLAYS.get(id);
+    if (overlay?.height && overlay.height.length === n * n) {
+      for (let i = 0; i < n * n; i++) {
+        if (water[i] || bridge[i]) continue;
+        const value = overlay.height[i];
+        if (typeof value === 'number' && Number.isFinite(value)) height[i] = Math.max(0, Math.min(1.2, value));
+      }
+    }
     const map: GameMap = { id, seed: cfg.version, tiles: n, height, water, bridge, forest, obstacles: obstacles.map(o => ({ ...o })) };
     cachedMap = map;
     return cloneMap(map);
@@ -1100,6 +1162,8 @@ function buildMapModel(id: MapPresetId, cfg: MapPresetConfig): MapModel {
   return {
     id, config: cfg, compounds, trails, humanSpawns, cryptPosition, vampireSpawnOffset,
     bridges, resourcePlacements, forestWoodNodes, obstacles,
+    refugeRings: REFUGE_RINGS.map((ring) => ring.map((p) => ({ x: p.x, z: p.z }))),
+    refugeWalls: REFUGE_WALLS.map((walls) => walls.map((w) => ({ ...w }))),
     compoundEntrance, isLandAt, isWaterAtWorld, isBridgeAtWorld, distanceToTrails, isForestAt, generateMap,
   };
 }
@@ -1115,6 +1179,99 @@ function cloneMap(map: GameMap): GameMap {
     forest: map.forest.slice(),
     obstacles: map.obstacles.map((o) => ({ ...o })),
   };
+}
+
+// ---- overlay do editor de mapa ----
+// O builder pinta células do grid: `adds` cria muros e `removes` apaga os muros
+// gerados que caem naquela célula. Aplicado por cima do mapa procedural.
+export interface MapOverlay {
+  version: number;
+  /** Índices de tile (z * tiles + x) onde pintar um muro. */
+  adds: number[];
+  /** Índices de tile onde remover muros gerados. */
+  removes: number[];
+  /** Props posicionados à mão no builder 3D. */
+  props: OverlayProp[];
+  /**
+   * Quando true, a decoração procedural (árvores/pedras soltas) NÃO é gerada —
+   * tudo que existia foi importado para `props` no editor e é renderizado por lá.
+   */
+  decorReplace?: boolean;
+  /**
+   * Grade de altura editada (unidades de mapa, `tiles * tiles`). Quando presente,
+   * substitui a altura procedural do terreno (relevo esculpido no editor).
+   */
+  height?: number[];
+  /**
+   * Pintura de piso por tile: 0 = automático, 1 = caminho (pedra), 2 = grama.
+   * `tiles * tiles`.
+   */
+  paint?: number[];
+}
+
+export type OverlayPropKind =
+  | 'cliff:straight' | 'cliff:outerCorner' | 'cliff:innerCorner' | 'cliff:stairs'
+  | 'tree' | 'rock'
+  | 'building:bank' | 'building:taverna' | 'building:wall'
+  | 'building:tower' | 'building:market' | 'building:keep' | 'building:crypt' | 'building:goldMine';
+
+export interface OverlayProp {
+  kind: OverlayPropKind;
+  x: number;
+  z: number;
+  rotY: number;
+  scale: number;
+}
+
+/** Converte o overlay salvo (parcial) para a forma completa. */
+export function normalizeOverlay(value: Partial<MapOverlay> | null | undefined): MapOverlay {
+  return {
+    version: Number(value?.version ?? 1),
+    adds: Array.isArray(value?.adds) ? value.adds.map(Number).filter(Number.isInteger) : [],
+    removes: Array.isArray(value?.removes) ? value.removes.map(Number).filter(Number.isInteger) : [],
+    props: Array.isArray(value?.props)
+      ? value.props
+        .filter((p) => p && typeof p.kind === 'string' && Number.isFinite(p.x) && Number.isFinite(p.z))
+        .map((p) => ({ kind: p.kind as OverlayPropKind, x: Number(p.x), z: Number(p.z), rotY: Number(p.rotY ?? 0), scale: Number(p.scale ?? 1) }))
+      : [],
+    height: Array.isArray(value?.height) && value.height.length ? value.height.map(Number) : undefined,
+    paint: Array.isArray(value?.paint) && value.paint.length ? value.paint.map(Number) : undefined,
+    decorReplace: Boolean(value?.decorReplace),
+  };
+}
+
+const MAP_OVERLAYS = new Map<MapPresetId, MapOverlay>();
+
+export function setMapOverlay(id: MapPresetId, overlay: MapOverlay | null): void {
+  if (overlay) MAP_OVERLAYS.set(id, overlay);
+  else MAP_OVERLAYS.delete(id);
+  // O modelo é cacheado; ao trocar o overlay ele precisa ser reconstruído.
+  MODEL_CACHE.delete(id);
+}
+
+export function getMapOverlay(id: MapPresetId): MapOverlay | null {
+  return MAP_OVERLAYS.get(id) ?? null;
+}
+
+/** Muros pintados no editor, por cima dos gerados (com remoções por célula). */
+function applyOverlay(id: MapPresetId, base: MapObstacle[]): MapObstacle[] {
+  const overlay = MAP_OVERLAYS.get(id);
+  const n = WORLD.tiles, ts = WORLD.tileSize, half = WORLD.half;
+  const removed = overlay ? new Set(overlay.removes) : null;
+  const kept = base
+    .filter((o) => {
+      if (!removed) return true;
+      const tx = Math.floor((o.x + half) / ts), tz = Math.floor((o.z + half) / ts);
+      return !removed.has(tz * n + tx);
+    })
+    .map((o) => ({ ...o }));
+  if (!overlay) return kept;
+  for (const idx of overlay.adds) {
+    if (!Number.isInteger(idx) || idx < 0 || idx >= n * n) continue;
+    const tx = idx % n, tz = Math.floor(idx / n);
+    kept.push({ x: tx * ts - half + ts / 2, z: tz * ts - half + ts / 2, width: ts, depth: ts, height: 4.5 });
+  }
+  return kept;
 }
 
 // ---- registro de modelos ----
@@ -1140,23 +1297,23 @@ export function generateMap(id: MapPresetId = DEFAULT_MAP_ID): GameMap {
   return getMapModel(id).generateMap();
 }
 
-// ---- compatibilidade: helpers do mapa clássico ----
+// ---- compatibilidade: helpers do mapa padrão (labirinto) ----
 // Mantidos para o código/testes que usam o mapa padrão diretamente. Código novo
 // deve preferir `getMapModel(id)` / `activeMapModel()`.
-const CLASSIC = getMapModel('classic');
-export const HUMAN_SPAWNS = CLASSIC.humanSpawns;
-export const CRYPT_POSITION = CLASSIC.cryptPosition;
-export const COMPOUNDS = CLASSIC.compounds;
-export const TRAILS = CLASSIC.trails;
-export const BRIDGES = CLASSIC.bridges;
-export const RESOURCE_PLACEMENTS = CLASSIC.resourcePlacements;
-export const FOREST_WOOD_NODES = CLASSIC.forestWoodNodes;
-export function compoundEntrance(c: Compound): Point { return CLASSIC.compoundEntrance(c); }
-export function isLandAt(x: number, z: number): boolean { return CLASSIC.isLandAt(x, z); }
-export function isWaterAtWorld(x: number, z: number): boolean { return CLASSIC.isWaterAtWorld(x, z); }
-export function isBridgeAtWorld(x: number, z: number): boolean { return CLASSIC.isBridgeAtWorld(x, z); }
-export function distanceToTrails(x: number, z: number): number { return CLASSIC.distanceToTrails(x, z); }
-export function isForestAt(x: number, z: number): boolean { return CLASSIC.isForestAt(x, z); }
+const DEFAULT_MODEL = getMapModel(DEFAULT_MAP_ID);
+export const HUMAN_SPAWNS = DEFAULT_MODEL.humanSpawns;
+export const CRYPT_POSITION = DEFAULT_MODEL.cryptPosition;
+export const COMPOUNDS = DEFAULT_MODEL.compounds;
+export const TRAILS = DEFAULT_MODEL.trails;
+export const BRIDGES = DEFAULT_MODEL.bridges;
+export const RESOURCE_PLACEMENTS = DEFAULT_MODEL.resourcePlacements;
+export const FOREST_WOOD_NODES = DEFAULT_MODEL.forestWoodNodes;
+export function compoundEntrance(c: Compound): Point { return DEFAULT_MODEL.compoundEntrance(c); }
+export function isLandAt(x: number, z: number): boolean { return DEFAULT_MODEL.isLandAt(x, z); }
+export function isWaterAtWorld(x: number, z: number): boolean { return DEFAULT_MODEL.isWaterAtWorld(x, z); }
+export function isBridgeAtWorld(x: number, z: number): boolean { return DEFAULT_MODEL.isBridgeAtWorld(x, z); }
+export function distanceToTrails(x: number, z: number): number { return DEFAULT_MODEL.distanceToTrails(x, z); }
+export function isForestAt(x: number, z: number): boolean { return DEFAULT_MODEL.isForestAt(x, z); }
 
 export function tileToWorld(tx: number): number {
   return (tx - WORLD.tiles / 2) * WORLD.tileSize + WORLD.tileSize / 2;

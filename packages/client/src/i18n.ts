@@ -25,6 +25,17 @@ const EN: Record<string, string> = {
   'Idioma do jogo': 'Game language',
   'Volume da música': 'Music volume',
 
+  // configurações de hotkeys (FT1)
+  'Configurações': 'Settings',
+  'Configurações de hotkeys': 'Keybind settings',
+  'Construções': 'Buildings',
+  'Habilidades do Humano': 'Human abilities',
+  'Habilidades do Vampiro': 'Vampire abilities',
+  'Restaurar padrão': 'Restore defaults',
+  'Fechar': 'Close',
+  'Pressione…': 'Press…',
+  'Move Speed 600 por até 15s': 'Move Speed 600 for up to 15s',
+
   // loading
   'Preparando o Vale da Vigília…': 'Preparing the Vale of the Vigil…',
   'Carregando modelos': 'Loading models',
@@ -318,6 +329,17 @@ const ES: Record<string, string> = {
   'Cancelar': 'Cancelar',
   'Idioma do jogo': 'Idioma del juego',
   'Volume da música': 'Volumen de la música',
+
+  // configurações de hotkeys (FT1)
+  'Configurações': 'Ajustes',
+  'Configurações de hotkeys': 'Ajustes de teclas',
+  'Construções': 'Construcciones',
+  'Habilidades do Humano': 'Habilidades del Humano',
+  'Habilidades do Vampiro': 'Habilidades del Vampiro',
+  'Restaurar padrão': 'Restaurar valores',
+  'Fechar': 'Cerrar',
+  'Pressione…': 'Pulsa…',
+  'Move Speed 600 por até 15s': 'Move Speed 600 hasta 15s',
 
   // loading
   'Preparando o Vale da Vigília…': 'Preparando el Valle de la Vigilia…',

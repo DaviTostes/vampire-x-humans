@@ -1,3 +1,4 @@
 .env
 *.mkv
 *.rar
+map-overlays/

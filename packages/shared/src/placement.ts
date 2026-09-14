@@ -1,6 +1,6 @@
 import { BUILDING_SIZE, WORLD, INTERACTION, TERRAIN_MAX_SLOPE, type BuildKind } from './constants.js';
 import { worldToTile, type GameMap } from './mapgen.js';
-import { UNIT_RADIUS } from './navigation.js';
+import { unitRadius } from './navigation.js';
 import type { Building, ResourceNode, Unit } from './types.js';
 
 /** Altura do terreno (unidades de mapa), interpolação bilinear. */
@@ -29,7 +29,7 @@ function tooSteep(map: GameMap, x: number, z: number): boolean {
 interface PlacementState {
   buildings: ReadonlyArray<Pick<Building, 'kind' | 'x' | 'z'>>;
   nodes: ReadonlyArray<Pick<ResourceNode, 'x' | 'z' | 'amount'>>;
-  units: ReadonlyArray<Pick<Unit, 'x' | 'z'> & Partial<Pick<Unit, 'dead'>>>;
+  units: ReadonlyArray<Pick<Unit, 'x' | 'z' | 'kind'> & Partial<Pick<Unit, 'dead'>>>;
 }
 
 export function canPlaceBuilding(map: GameMap, state: PlacementState, kind: BuildKind, x: number, z: number): boolean {
@@ -55,5 +55,5 @@ export function canPlaceBuilding(map: GameMap, state: PlacementState, kind: Buil
   for (const node of state.nodes) {
     if (node.amount > 0 && Math.abs(node.x - x) < half + INTERACTION.resourceBuildClearance && Math.abs(node.z - z) < half + INTERACTION.resourceBuildClearance) return false;
   }
-  return !state.units.some(u => !u.dead && Math.abs(u.x - x) < half + UNIT_RADIUS && Math.abs(u.z - z) < half + UNIT_RADIUS);
+  return !state.units.some(u => !u.dead && Math.abs(u.x - x) < half + unitRadius(u.kind) && Math.abs(u.z - z) < half + unitRadius(u.kind));
 }
