@@ -211,19 +211,18 @@ const LABYRINTH_MAP: MapPresetConfig = {
   crypt: { x: 0, z: 0 },
   vampireSpawnOffset: { x: 14, z: 12 },
   refugeWalls: { thickness: 5, entranceWidth: 6, height: 6 },
-  // Refúgios com câmaras de tamanhos diferentes (em células da grade). Cada um
-  // tem UMA entrada, onde o Muro fecha a passagem. `roomWidth`/`roomDepth`
-  // valem só neste mapa-labirinto. Tamanho máximo 3×3 células (48), mínimo
-  // 2×2 (32), o mesmo menor de antes; nenhum fica pequeno demais.
+  // Câmaras pequenas (2×2 células, o padrão) escavadas na grade, com UMA entrada
+  // onde o Muro fecha a passagem. `width`/`depth` aqui são só referência; o
+  // buildMaze recalcula a câmara a partir da grade.
   refuges: [
-    { name: 'Portão de Ferro', x: 139, z: 57, width: 44, depth: 40, facing: 'west', style: 'gate', variant: 1, entranceWidth: 6, wallThickness: 5, wallHeight: 6, approach: 18, roomWidth: 3, roomDepth: 3 },
-    { name: 'Muralha Quebrada', x: 57, z: 139, width: 40, depth: 44, facing: 'north', style: 'jagged', variant: 3, entranceWidth: 6, wallThickness: 5, wallHeight: 6, roomWidth: 2, roomDepth: 3 },
-    { name: 'Bosque Serpentino', x: -57, z: 139, width: 44, depth: 44, facing: 'north', style: 'bastion', variant: 0, entranceWidth: 6, wallThickness: 5, wallHeight: 6, approach: 14, roomWidth: 3, roomDepth: 2 },
-    { name: 'Boca do Poço', x: -139, z: 57, width: 40, depth: 46, facing: 'east', style: 'canyon', variant: 2, entranceWidth: 6, wallThickness: 5, wallHeight: 6, roomWidth: 3, roomDepth: 3 },
-    { name: 'Anel da Aurora', x: -139, z: -57, width: 44, depth: 44, facing: 'east', style: 'ring', variant: 1, entranceWidth: 6, wallThickness: 5, wallHeight: 6, roomWidth: 2, roomDepth: 3 },
-    { name: 'Corvos Engaiolados', x: -57, z: -139, width: 40, depth: 44, facing: 'south', style: 'gate', variant: 2, entranceWidth: 6, wallThickness: 5, wallHeight: 6, approach: 16, roomWidth: 3, roomDepth: 2 },
-    { name: 'Cinzas Gêmeas', x: 57, z: -139, width: 44, depth: 40, facing: 'south', style: 'jagged', variant: 0, entranceWidth: 6, wallThickness: 5, wallHeight: 6, roomWidth: 2, roomDepth: 2 },
-    { name: 'Névoa Profunda', x: 139, z: -57, width: 42, depth: 46, facing: 'west', style: 'ring', variant: 3, entranceWidth: 6, wallThickness: 5, wallHeight: 6, roomWidth: 2, roomDepth: 2 },
+    { name: 'Portão de Ferro', x: 139, z: 57, width: 40, depth: 40, facing: 'west' },
+    { name: 'Muralha Quebrada', x: 57, z: 139, width: 40, depth: 40, facing: 'north' },
+    { name: 'Bosque Serpentino', x: -57, z: 139, width: 40, depth: 40, facing: 'north' },
+    { name: 'Boca do Poço', x: -139, z: 57, width: 40, depth: 40, facing: 'east' },
+    { name: 'Anel da Aurora', x: -139, z: -57, width: 40, depth: 40, facing: 'east' },
+    { name: 'Corvos Engaiolados', x: -57, z: -139, width: 40, depth: 40, facing: 'south' },
+    { name: 'Cinzas Gêmeas', x: 57, z: -139, width: 40, depth: 40, facing: 'south' },
+    { name: 'Névoa Profunda', x: 139, z: -57, width: 40, depth: 40, facing: 'west' },
   ] as RefugeConfig[],
   // Terra firme cobrindo todo o mundo quadrado (sem água dentro do labirinto).
   coast: {
@@ -245,17 +244,21 @@ const LABYRINTH_MAP: MapPresetConfig = {
   // O labirinto ocupa o miolo do mundo, deixando uma margem de terreno em
   // volta: assim a câmera consegue trazer os cantos andáveis para a área
   // visível (fora do HUD) sem mostrar o vazio.
+  // Grade densa cobrindo o mapa (como o labirinto cheio), com paredes finas e
+  // baixas e braid alto: os becos viram voltas, então o Vampiro circula sem
+  // ficar preso. Os refúgios são câmaras pequenas (2×2 células) da própria
+  // grade — o mesmo tipo de parede, para se fundirem ao redor.
   maze: {
-    cell: 20,
-    thickness: 6,
-    height: 6,
+    cell: 18,
+    thickness: 4,
+    height: 4.5,
     radius: 150,
-    braid: 0.35,
+    braid: 0.7,
     seed: 1337,
     centerRadius: 40,
     entranceCorridor: 0,
   },
-  // Sem colchão de pedras: câmaras grandes espalhariam pedras até a praça.
+  // Sem colchão de pedras: as câmaras já são cercadas pelas paredes da grade.
   baseRocksScale: 0,
   // Floresta densa cobrindo o mundo (menos as pedras dos refúgios/labirinto).
   resources: {

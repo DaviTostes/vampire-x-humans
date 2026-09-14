@@ -137,6 +137,8 @@ function buildMapModel(id: MapPresetId, cfg: MapPresetConfig): MapModel {
   const RIVERS = cfg.rivers.map((r) => ({
     ...r, width: S(r.width), points: r.points.map((p) => ({ x: S(p.x), z: S(p.z) })),
   }));
+  /** Tamanho da célula do labirinto (0 quando o preset não tem labirinto). */
+  const mazeCell = cfg.maze ? S(cfg.maze.cell) : 0;
 
   function coastDistance(x: number, z: number): number {
     const c = Math.cos(COAST.rotation), s = Math.sin(COAST.rotation);
@@ -180,81 +182,148 @@ function buildMapModel(id: MapPresetId, cfg: MapPresetConfig): MapModel {
     };
   }
 
+  // ---- relevo e contorno orgânico dos refúgios ----
+  // O terraço elevado e o rochedo compartilham a MESMA borda: o anel derivado do
+  // `outline[variant]` ganha ruído de baixa frequência, então a falésia do
+  // terreno e as pedras caem exatamente no mesmo lugar. Isso encaixa o refúgio
+  // no relevo em vez de deixá-lo como um círculo de pedras sobre o gramado.
+  const REFUGE_LIFT = 0.62;      // altura do terraço (unidades de mapa)
+  const REFUGE_PAD = S(3.4);     // topo plano estendido sob o rochedo
+  const REFUGE_RAMP_LEN = S(26); // transição suave terraço -> campo (clássico)
+  const CROWN_STEP = S(2.4);     // espaçamento das amostras do rochedo
+  // Labirinto: platô pequeno, queda curta dentro das paredes do refúgio; só a
+  // porta tem rampa, então os corredores ao redor ficam planos.
+  const MAZE_LIFT = 0.45;
+  const MAZE_EDGE = S(1.2);
+  const MAZE_RAMP_LEN = S(9);
+  const MAZE_RAMP_HALF = S(5);
+
+  interface RefugeShape {
+    cx: number; cz: number;
+    fx: number; fz: number; tx: number; tz: number;
+    halfF: number; halfT: number;
+    /** Distância do centro à porta (sem o `PAD`): onde fica o vão do Muro. */
+    frontF: number;
+    /** Anel fechado em coordenadas de mundo (a frente liga o último ao primeiro). */
+    ring: Point[];
+  }
+
   /**
-   * Encosta em ferradura: a clareira ocupa uma reentrância no maciço. Segmentos
-   * sobrepostos garantem colisão contínua. `ringScale` encolhe o anel (anéis
-   * internos) e `rot` gira o desenho local (espirais).
+   * Borda orgânica do refúgio. `extra` estende o anel para fora — o mesmo valor
+   * usado no terreno, para o topo plano cobrir a base do rochedo.
    */
-  function compoundWalls(c: Compound): MapObstacle[] {
+  function makeRefugeShape(c: Compound, cx: number, cz: number, extra: number): RefugeShape {
     const facing = FACING_ANGLE[c.facing];
     const fx = Math.cos(facing), fz = Math.sin(facing);
     const tx = -fz, tz = fx;
     const horizontal = c.facing === 'north' || c.facing === 'south';
-    const seed = hash01(c.x, c.z);
+    const halfFBase = (horizontal ? c.depth : c.width) / 2;
+    const halfTBase = (horizontal ? c.width : c.depth) / 2;
+    const halfF = halfFBase + extra;
+    const halfT = halfTBase + extra;
     const outline = OUTLINES[((c.variant % OUTLINES.length) + OUTLINES.length) % OUTLINES.length]!;
-    const walls: MapObstacle[] = [];
+    const seed = hash01(c.x, c.z);
     // Vão calibrado para (a) a unidade passar antes de fechar e (b) um único
     // Muro (tamanho 3) lacrar por completo — vale em qualquer escala de mapa.
-    const unit = INTERACTION.unitRadius;
-    const openX = c.wallThickness / 2 + BUILDING_SIZE.wall / 4 + unit * 2;
-
-    const addRing = (ringScale: number, rot: number) => {
-      const rx = (horizontal ? c.width : c.depth) / 2 * ringScale;
-      const rz = (horizontal ? c.depth : c.width) / 2 * ringScale;
-      const cr = Math.cos(rot), sr = Math.sin(rot);
-      const rotate = (px: number, pz: number): [number, number] => [px * cr - pz * sr, px * sr + pz * cr];
-      const points = outline.map(([u, v], i) => {
-        if (i === 0 || i === outline.length - 1) return rotate(Math.sign(u!) * openX, rz);
-        const variation = 1 + Math.sin(i * 2.3 + seed * 10) * 0.12;
-        return rotate(u! * rx * variation, v! * rz * variation);
-      });
-      for (let i = 0; i < points.length - 1; i++) {
-        const a = points[i]!, b = points[i + 1]!;
-        const count = Math.max(2, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / S(3)));
-        for (let j = 0; j <= count; j++) {
-          const t = j / count;
-          const lx = a[0] + (b[0] - a[0]) * t, lz = a[1] + (b[1] - a[1]) * t;
-          const back = Math.max(0, 1 - (lz / rz + 1) / 2);
-          const thickness = c.wallThickness + back * S(9 + seed * 5);
-          const height = c.wallHeight + back * S(12) + Math.sin(i * 1.8 + t + seed * 6) * back * S(3);
-          const tangent = lz > rz * 0.6 ? Math.sign(lx) * Math.max(Math.abs(lx), openX) : lx;
-          walls.push({
-            x: c.x + tx * tangent + fx * lz,
-            z: c.z + tz * tangent + fz * lz,
-            width: thickness, depth: thickness, height,
-          });
-        }
+    const openX = c.wallThickness / 2 + BUILDING_SIZE.wall / 4 + INTERACTION.unitRadius * 2;
+    const ring = outline.map(([u, v], i) => {
+      const front = i === 0 || i === outline.length - 1;
+      if (front) {
+        // O vão fica exatamente sobre a porta (sem o `PAD`), para o Muro
+        // assentar no lugar certo e o caminho entrar pelo centro da abertura.
+        return { x: cx + tx * (Math.sign(u!) * openX) + fx * halfFBase, z: cz + tz * (Math.sign(u!) * openX) + fz * halfFBase };
       }
-    };
+      // Ruído orgânico: sulcos e bojos. Cresce pouco para não invadir corredores.
+      const s = u! * halfT, f = v! * halfF;
+      const ang = Math.atan2(s, f);
+      const swell = Math.sin(ang * 3 + seed * 6.1) * 0.55
+        + Math.sin(ang * 5 - seed * 4.3) * 0.3 + Math.sin(ang * 7 + seed * 2.7) * 0.15;
+      const back = Math.max(0, -f / halfF);
+      const grow = 1 + 0.13 * swell + (cfg.maze ? 0 : 0.12 * back);
+      return { x: cx + tx * s * grow + fx * f * grow, z: cz + tz * s * grow + fz * f * grow };
+    });
+    return { cx, cz, fx, fz, tx, tz, halfF, halfT, frontF: halfFBase, ring };
+  }
 
-    // Uma única muralha por refúgio (nada de anel interno). O desenho vem do
-    // contorno escolhido por `variant` + parâmetros de tamanho/entrada.
-    addRing(1, 0);
 
-    const halfZ = (horizontal ? c.depth : c.width) / 2;
+  /** Distância assinada ao anel do refúgio (negativa dentro). */
+  function refugeDistance(shape: RefugeShape, x: number, z: number): number {
+    const ring = shape.ring;
+    let best = Infinity;
+    for (let i = 0; i < ring.length; i++) {
+      const a = ring[i]!, b = ring[(i + 1) % ring.length]!;
+      const d = distanceToSegment(x, z, a.x, a.z, b.x, b.z);
+      if (d < best) best = d;
+    }
+    let inside = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const a = ring[i]!, b = ring[j]!;
+      if ((a.z > z) !== (b.z > z) && x < (b.x - a.x) * (z - a.z) / (b.z - a.z) + a.x) inside = !inside;
+    }
+    return inside ? -best : best;
+  }
 
-    // Corredor de aproximação: duas paredes paralelas saindo da entrada.
-    if (c.approach > 0) {
-      const steps = Math.max(2, Math.ceil(c.approach / S(3)));
-      for (const side of [-1, 1]) {
-        for (let j = 0; j <= steps; j++) {
-          const lz = halfZ + c.approach * (j / steps);
-          const lx = side * openX;
-          walls.push({
-            x: c.x + tx * lx + fx * lz,
-            z: c.z + tz * lx + fz * lz,
-            width: c.wallThickness, depth: c.wallThickness, height: c.wallHeight,
-          });
+  /**
+   * Rochedo da encosta: pedras amostradas ao longo do anel orgânico, em três
+   * camadas — crista sobre o anel (alta no fundo, baixa na porta), fileira
+   * externa que engrossa o morro, e uma moldura baixa junto à grama. Assim o
+   * refúgio lê como uma falésia contínua, não como uma cerca de pedrinhas.
+   */
+  function compoundWalls(c: Compound, shape: RefugeShape): MapObstacle[] {
+    const ring = shape.ring;
+    const seed = hash01(c.x, c.z);
+    const walls: MapObstacle[] = [];
+    const add = (x: number, z: number, size: number, depth: number, height: number) =>
+      walls.push({ x, z, width: size, depth, height });
+    // Vão da porta em unidades de mundo: os cantos do vão não podem inchar nem
+    // tremer, senão o Muro (tamanho 3) deixa de caber e de lacrar a passagem.
+    const openX = c.wallThickness / 2 + BUILDING_SIZE.wall / 4 + INTERACTION.unitRadius * 2;
+    for (let i = 0; i < ring.length - 1; i++) {
+      const p = ring[i]!, q = ring[i + 1]!;
+      const count = Math.max(3, Math.ceil(Math.hypot(q.x - p.x, q.z - p.z) / CROWN_STEP));
+      for (let j = 0; j <= count; j++) {
+        const t = j / count;
+        const lx = p.x + (q.x - p.x) * t;
+        const lz = p.z + (q.z - p.z) * t;
+        const fwd = (lx - shape.cx) * shape.fx + (lz - shape.cz) * shape.fz;
+        const side = (lx - shape.cx) * shape.tx + (lz - shape.cz) * shape.tz;
+        if (fwd > shape.frontF - S(2.5) && Math.abs(side) < openX + S(0.8)) {
+          add(lx, lz, c.wallThickness, c.wallThickness, c.wallHeight);
+          continue;
         }
+        // Quanto mais para o fundo (longe da porta), mais massa e altura.
+        const back = Math.max(0, Math.min(1, 0.5 - fwd / (2 * shape.halfF)));
+        const r1 = hash01(i * 7 + j, seed * 31);
+        const r2 = hash01(i * 13 + j, seed * 7);
+        const r3 = hash01(i * 17 + j, seed * 11);
+        const nx = lx - shape.cx, nz = lz - shape.cz;
+        const nl = Math.hypot(nx, nz) || 1;
+        const ux = nx / nl, uz = nz / nl;
+        // Crista: pedras grandes e sobrepostas, no topo da falésia.
+        const size = c.wallThickness * (1.05 + back * 0.9) * (0.8 + r1 * 0.6);
+        add(lx + ux * S(0.5), lz + uz * S(0.5), size, size * (0.85 + r3 * 0.4),
+          c.wallHeight * (0.85 + back * 1.6) * (0.8 + r2 * 0.5));
+        // Fileira externa: só no fundo/laterais, engrossa o morro.
+        if (back > 0.22) {
+          const off = S(1.2) + r1 * S(2.4);
+          const os = c.wallThickness * (0.8 + back * 0.8) * (0.8 + r2 * 0.6);
+          add(lx + ux * off, lz + uz * off, os, os * (0.85 + r1 * 0.4),
+            c.wallHeight * (0.6 + back * 1.5) * (0.8 + r3 * 0.6));
+        }
+        // Moldura interna baixa: borda da grama contra o rochedo.
+        const inOff = S(0.8) + r3 * S(1.2);
+        const isize = c.wallThickness * (0.5 + back * 0.35) * (0.7 + r2 * 0.4);
+        add(lx - ux * inOff, lz - uz * inOff, isize, isize * (0.8 + r1 * 0.4),
+          c.wallHeight * (0.45 + back * 0.5));
       }
     }
-
     return walls;
   }
 
   // No labirinto cada refúgio é um beco escavado na própria grade (paredes do
-  // buildMaze); no clássico, cada um tem sua muralha em ferradura.
-  const NATURAL_BLOCKERS: MapObstacle[] = cfg.maze ? [] : compounds.flatMap(compoundWalls);
+  // buildMaze); no clássico, cada um tem seu rochedo amostrado do anel orgânico.
+  // Preenchido depois: o buildMaze reposiciona as câmaras do labirinto.
+  const NATURAL_BLOCKERS: MapObstacle[] = [];
 
   // Anéis de labirinto: coroas de pedra com uma abertura angular.
   const MAZE_RINGS = (cfg.mazeRings ?? []).map((r) => ({
@@ -332,6 +401,10 @@ function buildMapModel(id: MapPresetId, cfg: MapPresetConfig): MapModel {
   // Caixas (mundo) das câmaras dos refúgios: mantidas quase sem árvores.
   const chamberBoxes: Array<{ minX: number; maxX: number; minZ: number; maxZ: number }> = [];
 
+  // ---- labirinto central ----
+  // Um miolo labiríntico no CENTRO do mapa. Os refúgios ficam fora dele, em
+  // campo aberto (orgânicos, como no clássico), então o Vampiro alcança cada um
+  // sem atravessar corredores. O miolo tem quatro entradas nos pontos cardeais.
   function buildMaze(): MapObstacle[] {
     const m = cfg.maze!;
     const cell = S(m.cell);
@@ -461,6 +534,25 @@ function buildMapModel(id: MapPresetId, cfg: MapPresetConfig): MapModel {
       room.facing = e[2] === 1 ? 'east' : e[2] === -1 ? 'west' : e[3] === 1 ? 'south' : 'north';
     }
 
+    // 3b) Vias rápidas: escava um corredor reto do centro (cripta) até a porta de
+    //     cada refúgio. O centro é o hub: o Vampiro vai direto a qualquer base,
+    //     sem atravessar o labirinto inteiro. As vias viram trilhas de pedra.
+    for (const room of rooms) {
+      if (!room.entrance) continue;
+      const [ei, ej, edi, edj] = room.entrance;
+      const ti = ei + edi, tj = ej + edj; // célula de grade fora da câmara
+      let x = 0, y = 0, guard = 0;
+      while ((x !== ti || y !== tj) && guard++ < 512) {
+        const ex = ti - x, ey = tj - y;
+        const nx = Math.abs(ex) >= Math.abs(ey) ? x + Math.sign(ex) : x;
+        const ny = Math.abs(ex) >= Math.abs(ey) ? y : y + Math.sign(ey);
+        if (!inRegion(nx, ny)) break;
+        if (roomCells.has(K(nx, ny))) break; // não atravessa outra câmara
+        open.add(openKey(K(x, y), K(nx, ny)));
+        x = nx; y = ny;
+      }
+    }
+
     // 4) Posiciona os "compounds" (HUD/minimapa/limpeza) sobre as câmaras.
     for (let ri = 0; ri < compounds.length && ri < rooms.length; ri++) {
       const c = compounds[ri]!;
@@ -570,12 +662,20 @@ function buildMapModel(id: MapPresetId, cfg: MapPresetConfig): MapModel {
 
   if (cfg.maze) {
     NATURAL_BLOCKERS.push(...buildMaze());
-  } else {
+  }
+
+  // Contornos orgânicos dos refúgios do mapa clássico. O labirinto usa as
+  // câmaras da própria grade (paredes do buildMaze).
+  const REFUGE_SHAPES = cfg.maze ? [] : compounds.map((c) => makeRefugeShape(c, c.x, c.z, REFUGE_PAD));
+
+  if (!cfg.maze) {
     compounds.forEach((c, i) => {
       const door = compoundEntrance(c);
       const bend = ((i % 3) - 1) * 0.14 * Math.hypot(door.x, door.z);
       const angle = FACING_ANGLE[c.facing];
       trails.push(sampleTrail(door, bend, { x: Math.cos(angle), z: Math.sin(angle) }));
+      // Caminho pavimentado do centro até o portão (atravessa a grama do terraço).
+      trails.push([{ x: c.x, z: c.z }, door]);
     });
   }
 
@@ -619,6 +719,14 @@ function buildMapModel(id: MapPresetId, cfg: MapPresetConfig): MapModel {
   }
   const exactTrailDistance = distanceToTrails;
 
+  // Encosta rochosa orgânica de cada refúgio (só no clássico; no labirinto as
+  // câmaras já são cercadas pelas paredes da grade).
+  if (!cfg.maze) {
+    compounds.forEach((c, i) => {
+      NATURAL_BLOCKERS.push(...compoundWalls(c, REFUGE_SHAPES[i]!));
+    });
+  }
+
   /** A praça central fica sem árvores; as paredes do labirinto têm floresta. */
   function inOpenClearing(x: number, z: number): boolean {
     if (!cfg.maze) return false;
@@ -649,25 +757,66 @@ function buildMapModel(id: MapPresetId, cfg: MapPresetConfig): MapModel {
   });
 
   // ---- pedras em volta das bases ----
-  const baseRocksScale = cfg.baseRocksScale ?? 1.5;
+  // Sopé (talus): blocos soltos logo abaixo da falésia, decrescentes para fora,
+  // que fazem o rochedo "derramar" no campo. A crista (ridge), atrás do
+  // refúgio, funde o anel com um maciço maior: o refúgio parece encaixado num
+  // morro, não sobre uma bolha de pedras.
+  const baseRocksScale = cfg.baseRocksScale ?? 1.2;
   const BASE_ROCKS: MapObstacle[] = baseRocksScale <= 0 ? [] : compounds.flatMap((c, ci) => {
+    const shape = REFUGE_SHAPES[ci];
+    if (!shape) return [];
     const out: MapObstacle[] = [];
-    const entrance = FACING_ANGLE[c.facing];
-    const r = Math.max(c.width, c.depth) / 2;
-    const N = 12;
-    for (let i = 0; i < N; i++) {
-      const ang = i * (Math.PI * 2 / N) + hash01(ci * 5 + i, ci * 11) * 0.5;
-      const diff = Math.abs(((ang - entrance + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
-      if (diff < 0.9) continue; // deixa a entrada livre
-      const rad = r * (baseRocksScale + hash01(i + 3, ci) * 0.4);
-      const x = c.x + Math.cos(ang) * rad;
-      const z = c.z + Math.sin(ang) * rad;
-      const size = 2.5 + hash01(i + 7, ci) * 3;
-      const depth = size * (0.8 + hash01(i + 13, ci) * 0.45);
-      const height = 4 + hash01(i + 11, ci) * 5;
-      if (exactTrailDistance(x, z) < Math.max(size, depth) / 2 + 2) continue;
-      if (blocksMazeGap(x, z, Math.max(size, depth) / 2)) continue;
+    const door = compoundEntrance(c);
+    const doorA = Math.atan2(
+      (door.x - shape.cx) * shape.tx + (door.z - shape.cz) * shape.tz,
+      (door.x - shape.cx) * shape.fx + (door.z - shape.cz) * shape.fz,
+    );
+    const angleAt = (x: number, z: number) => Math.atan2(
+      (x - shape.cx) * shape.tx + (z - shape.cz) * shape.tz,
+      (x - shape.cx) * shape.fx + (z - shape.cz) * shape.fz,
+    );
+    const afterDoor = (a: number) => Math.abs(((a - doorA + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
+    // Blocos próximos à trilha, à praça ou a um vão de anel são descartados:
+    // protege corredores (labirinto) e mantém os caminhos livres.
+    const push = (x: number, z: number, size: number, height: number) => {
+      const depth = size * (0.8 + hash01(Math.round(x), Math.round(z)) * 0.45);
+      if (exactTrailDistance(x, z) < Math.max(size, depth) / 2 + S(1.2)) return;
+      if (blocksMazeGap(x, z, Math.max(size, depth) / 2)) return;
       out.push({ x, z, width: size, depth, height });
+    };
+    const ring = shape.ring;
+    const step = S(4.5);
+    for (let i = 0; i < ring.length - 1; i++) {
+      const p = ring[i]!, q = ring[i + 1]!;
+      const count = Math.max(1, Math.round(Math.hypot(q.x - p.x, q.z - p.z) / step));
+      for (let j = 0; j < count; j++) {
+        const t = (j + 0.5) / count;
+        const px = p.x + (q.x - p.x) * t, pz = p.z + (q.z - p.z) * t;
+        if (afterDoor(angleAt(px, pz)) < 0.7) continue;
+        const nx = px - shape.cx, nz = pz - shape.cz;
+        const nl = Math.hypot(nx, nz) || 1;
+        const off = S(1.6) + hash01(i * 7 + j, ci * 13 + 3) * S(4.2) * baseRocksScale;
+        const x = px + nx / nl * off, z = pz + nz / nl * off;
+        const size = (2.2 + hash01(i * 5 + j, ci * 11 + 7) * 2.6) * (0.8 + baseRocksScale * 0.3);
+        const height = 3.2 + hash01(i * 3 + j, ci * 5 + 9) * 4.2;
+        push(x, z, size, height);
+      }
+    }
+    // Crista atrás do refúgio (só no clássico; no labirinto as paredes da grade
+    // já formam o fundo e pedras extras fechariam corredores).
+    if (!cfg.maze) {
+      const count = 10 + Math.round(hash01(ci * 3 + 1, ci * 5 + 2) * 8);
+      const bx = shape.cx - shape.fx * (shape.halfF + S(3));
+      const bz = shape.cz - shape.fz * (shape.halfF + S(3));
+      for (let i = 0; i < count; i++) {
+        const ts = (hash01(i * 3 + ci, ci * 7 + 1) - 0.5) * 2 * (shape.halfT + S(5));
+        const fd = hash01(i * 5 + ci, ci * 11 + 2) * S(11);
+        const x = bx + shape.tx * ts - shape.fx * fd;
+        const z = bz + shape.tz * ts - shape.fz * fd;
+        const size = 3.6 + hash01(i + ci, ci * 13 + 5) * 4.4;
+        const height = 6 + hash01(i * 2 + ci, ci * 17 + 6) * 6.5;
+        push(x, z, size, height);
+      }
     }
     return out;
   });
@@ -806,8 +955,10 @@ function buildMapModel(id: MapPresetId, cfg: MapPresetConfig): MapModel {
     if (exactTrailDistance(x, z) < trailClear) return false;
     if (inOpenClearing(x, z)) return false;
     if (inMeadow(x, z)) return false;
-    if (nearCompound(x, z, S(5))) return false;
+    if (nearCompound(x, z, S(2.5))) return false;
     if (nearMountain(x, z, S(2))) return false;
+    // Pinheiros podem encostar no sopé, mas não nascer dentro das pedras.
+    if (BASE_ROCKS.some(o => Math.abs(x - o.x) < o.width / 2 + S(0.6) && Math.abs(z - o.z) < o.depth / 2 + S(0.6))) return false;
     if (nearMazeRing(x, z, S(4))) return false;
     if (ROCK_FORMATIONS.some(f => ((x - f.x) / (f.rx * 1.08)) ** 2 + ((z - f.z) / (f.rz * 1.08)) ** 2 < 1)) return false;
     if (withinCryptClearance(x, z)) return false;
@@ -854,16 +1005,6 @@ function buildMapModel(id: MapPresetId, cfg: MapPresetConfig): MapModel {
   const RAMP_HALF = 7;
   const RAMP_FEATHER = 2.5;
   const HILL_LIFT = 0.20;
-  const BASE_RAISE = 0.13;
-  // Platôs dos refúgios no labirinto: topo plano, estendido sob os muros
-  // (`REFUGE_PAD`) para as pedras assentarem em piso reto. A queda fica logo
-  // fora do muro e só a faixa do portão tem rampa; os caminhos laterais ficam
-  // no chão natural.
-  const REFUGE_LIFT = 0.45;
-  const REFUGE_PAD = S(3.4);
-  const REFUGE_EDGE = S(1.2);
-  const REFUGE_RAMP_LEN = S(9);
-  const REFUGE_RAMP_HALF = S(5);
 
   function terrainHeight(x: number, z: number, coast: number): number {
     let h = BASE_H;
@@ -892,7 +1033,6 @@ function buildMapModel(id: MapPresetId, cfg: MapPresetConfig): MapModel {
     const bridge = new Uint8Array(n * n);
     const forest = new Float32Array(n * n);
     const FLAT_BLEND = S(6);
-    const mazeCell = cfg.maze ? S(cfg.maze.cell) : 0;
     for (let z = 0; z < n; z++) for (let x = 0; x < n; x++) {
       const wx = tileToWorld(x), wz = tileToWorld(z), i = z * n + x;
       const coast = coastDistance(wx, wz);
@@ -909,10 +1049,9 @@ function buildMapModel(id: MapPresetId, cfg: MapPresetConfig): MapModel {
           h = h * t + (BASE_H + lift) * (1 - t);
         };
         if (cfg.maze) {
-          // Cada refúgio é um platô plano elevado. As laterais caem quase na
-          // vertical dentro do muro; só a entrada rampa, acompanhando a trilha,
-          // para as unidades subirem sem deformar os caminhos vizinhos.
-          // `c.x`/`c.z` ficam meia célula à frente do centro real da câmara.
+          // Cada câmara do labirinto é um pequeno platô. A queda acontece logo
+          // dentro do muro do próprio refúgio, então os corredores ao redor
+          // continuam planos; só a faixa da porta é rampa.
           for (const c of compounds) {
             const horizontal = c.facing === 'north' || c.facing === 'south';
             const halfF = (horizontal ? c.depth : c.width) / 2 + REFUGE_PAD;
@@ -925,35 +1064,26 @@ function buildMapModel(id: MapPresetId, cfg: MapPresetConfig): MapModel {
             const side = dx * tx + dz * tz;
             const outF = Math.max(0, Math.abs(fwd) - halfF);
             const outT = Math.max(0, Math.abs(side) - halfT);
-            if (outF === 0 && outT === 0) { h = BASE_H + REFUGE_LIFT; continue; }
+            if (outF === 0 && outT === 0) { h = BASE_H + MAZE_LIFT; continue; }
             const out = Math.hypot(outF, outT);
-            // Rampa restrita à faixa do portão: só a trilha que sai da entrada
-            // é suavizada, então os caminhos laterais não sobem.
             const door = compoundEntrance(c);
             const doorSide = (door.x - cx0) * tx + (door.z - cz0) * tz;
             const dTrail = exactTrailDistance(wx, wz);
-            const inDoorLane = fwd > 0 && Math.abs(side - doorSide) < REFUGE_RAMP_HALF && dTrail < REFUGE_RAMP_HALF;
-            const trailNear = inDoorLane ? Math.max(0, 1 - dTrail / REFUGE_RAMP_HALF) : 0;
-            const rampness = smoothstep(Math.min(1, trailNear));
-            const blend = REFUGE_EDGE + (REFUGE_RAMP_LEN - REFUGE_EDGE) * rampness;
+            const inDoorLane = fwd > 0 && Math.abs(side - doorSide) < MAZE_RAMP_HALF && dTrail < MAZE_RAMP_HALF;
+            const trailNear = inDoorLane ? Math.max(0, 1 - dTrail / MAZE_RAMP_HALF) : 0;
+            const blend = MAZE_EDGE + (MAZE_RAMP_LEN - MAZE_EDGE) * smoothstep(Math.min(1, trailNear));
             const t = smoothstep(Math.min(1, out / blend));
-            h = h * t + (BASE_H + REFUGE_LIFT) * (1 - t);
+            h = h * t + (BASE_H + MAZE_LIFT) * (1 - t);
           }
         } else {
-          for (const c of compounds) {
-            const r = Math.max(c.width, c.depth) / 2;
-            flatten(c.x, c.z, r, HILL_LIFT);
-            const a = FACING_ANGLE[c.facing], fx = Math.cos(a), fz = Math.sin(a);
-            const tx = -fz, tz = fx;
-            const dx = wx - c.x, dz = wz - c.z;
-            const d = Math.hypot(dx, dz);
-            const fwd = dx * fx + dz * fz, side = dx * tx + dz * tz;
-            let width = 1.2;
-            if (fwd > 0 && Math.abs(side) < RAMP_HALF && d < r * 1.4 + 14) {
-              const trailNear = 1 - smoothstep((exactTrailDistance(wx, wz) - RAMP_HALF) / RAMP_FEATHER);
-              width += trailNear * 9;
-            }
-            h += BASE_RAISE * smoothstep((r * 1.4 + width - d) / width);
+          // Refúgio clássico: terraço gramado elevado sobre o anel de rochas. A
+          // transição é suave em todo o contorno para nenhuma trilha vizinha
+          // ficar bloqueada; a encosta de pedra é a barreira que sela.
+          for (const shape of REFUGE_SHAPES) {
+            const sd = refugeDistance(shape, wx, wz);
+            if (sd >= REFUGE_RAMP_LEN) continue;
+            const t = smoothstep(Math.min(1, Math.max(0, sd) / REFUGE_RAMP_LEN));
+            h = h * t + (BASE_H + REFUGE_LIFT) * (1 - t);
           }
         }
         for (const b of bridges) flatten(b.x, b.z, Math.max(b.width, b.depth) / 2 + S(6));

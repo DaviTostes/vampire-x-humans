@@ -570,7 +570,9 @@ export class GameScene {
     }
     // As bases humanas são montadas com o aglomerado de pedra (GLB): cada
     // obstáculo da encosta vira uma pilha, com altura limitada para não virar
-    // agulha. Sem o GLB, mantém o maciço procedural.
+    // agulha. Sem o GLB, mantém o maciço procedural. As duas geometrias não se
+    // misturam: o maciço procedural é low-poly e sem textura, então usá-lo ao
+    // lado do GLB cria blocos escuros destoando das pedras texturizadas.
     const stone = assetRegistry.propInstance('prop:rock:stone-cluster');
     const stoneMatrices: THREE.Matrix4[] = [];
     const mountainTransforms: THREE.Matrix4[][] = Array.from({ length: 4 }, () => []);
@@ -589,8 +591,8 @@ export class GameScene {
         rockDummy.position.set(wall.x, base, wall.z);
         rockDummy.updateMatrix(); mountainTransforms[i % 4]!.push(rockDummy.matrix.clone());
       }
-      // Musgo nas saliências, em manchas grandes e irregulares.
-      if (i % 4 === 0) {
+      // Musgo nas pedras grandes, em manchas irregulares.
+      if (wall.height >= 4.5 && i % 2 === 0) {
         rockDummy.position.set(wall.x + wall.width * 0.14, base + wall.height * 0.53, wall.z + wall.depth * 0.21);
         rockDummy.scale.set(wall.width * 0.27, 0.3, wall.depth * 0.2);
         rockDummy.updateMatrix(); mossTransforms.push(rockDummy.matrix.clone());
