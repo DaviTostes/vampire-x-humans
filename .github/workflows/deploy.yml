@@ -8,6 +8,8 @@
 #   SSH_PORT      — porta SSH (opcional; padrão 22)
 #   TUNNEL_TOKEN  — token do túnel do Cloudflare Zero Trust (opcional; só instala
 #                   o cloudflared na primeira vez em que for informado)
+#   MAP_BUILDER_PASSWORD — senha do editor de mapa (/builder); se vazia, o
+#                          builder fica desativado no VPS
 #
 # No painel do Zero Trust (Networks → Tunnels → Public Hostname):
 #   vxh.mediumblue.space → HTTP → localhost:3000
@@ -68,4 +70,4 @@ jobs:
       - name: Instalar e reiniciar serviço
         run: |
           ssh -p "$SSH_PORT" "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
-            "cd $APP_DIR && sudo -n ./deploy/install.sh '${{ secrets.TUNNEL_TOKEN }}'"
+            "cd $APP_DIR && sudo -n ./deploy/install.sh '${{ secrets.TUNNEL_TOKEN }}' '${{ secrets.MAP_BUILDER_PASSWORD }}'"

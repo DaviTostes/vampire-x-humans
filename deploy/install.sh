@@ -1,16 +1,28 @@
 #!/usr/bin/env bash
 # Roda no VPS após cada deploy (chamado pelo workflow do GitHub).
-# Uso: sudo ./deploy/install.sh [TUNNEL_TOKEN]
+# Uso: sudo ./deploy/install.sh [TUNNEL_TOKEN] [MAP_BUILDER_PASSWORD]
 set -euo pipefail
 cd "$(dirname "$0")/.."
 TOKEN="${1:-}"
+BUILDER_PW="${2:-}"
 
 # Dependências do runtime (o build do cliente já vem pronto do CI).
 npm ci --no-audit --no-fund
 
 # Serviço systemd: substitui os placeholders pelo caminho real do app.
+# A senha do builder entra via EnvironmentFile (persistida fora do repo).
 install -m 644 deploy/vampire-x-humans.service /etc/systemd/system/vampire-x-humans.service
 sed -i "s|__APP_DIR__|$(pwd)|g" /etc/systemd/system/vampire-x-humans.service
+if [ -n "$BUILDER_PW" ]; then
+  umask 077
+  printf 'MAP_BUILDER_PASSWORD=%s\n' "$BUILDER_PW" > /etc/vampire-x-humans.env
+  umask 022
+fi
+if [ -f /etc/vampire-x-humans.env ]; then
+  grep -q '^EnvironmentFile=' /etc/systemd/system/vampire-x-humans.service || \
+    sed -i '/^Environment=PORT=3000/a EnvironmentFile=/etc/vampire-x-humans.env' \
+      /etc/systemd/system/vampire-x-humans.service
+fi
 systemctl daemon-reload
 systemctl enable --now vampire-x-humans
 

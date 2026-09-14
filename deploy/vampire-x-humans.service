@@ -8,6 +8,8 @@ WorkingDirectory=__APP_DIR__
 ExecStart=/usr/bin/env node __APP_DIR__/packages/server/dist/index.js
 Environment=NODE_ENV=production
 Environment=PORT=3000
+# EnvironmentFile=/etc/vampire-x-humans.env — injetado pelo deploy/install.sh
+# (contém MAP_BUILDER_PASSWORD; sem ele o builder fica desativado)
 Restart=always
 RestartSec=3
 
