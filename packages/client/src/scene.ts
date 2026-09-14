@@ -32,6 +32,9 @@ import { resourceImage, resourceIconUrl, type ResourceKind } from './resource-ic
 
 const WORLD_SIZE = WORLD.tiles * WORLD.tileSize;
 
+/** Tolerância (px) do clique por proximidade. Menor que o retículo de hover (18). */
+const PICK_PROXIMITY_PX = 10;
+
 /** Hash determinístico para espalhar a decoração sem depender de estado global. */
 function decorHash(x: number, z: number): number {
   const h = Math.sin(x * 127.1 + z * 311.7) * 43758.5453123;
@@ -929,6 +932,7 @@ export class GameScene {
       g.userData.snapX = u.x;
       g.userData.snapZ = u.z;
       g.userData.kind = u.kind;
+      g.userData.owner = u.owner;
       g.userData.hp = u.hp;
       g.userData.maxHp = u.maxHp;
       g.userData.activity = u.activity;
@@ -2172,19 +2176,30 @@ export class GameScene {
     return g.position.clone().add(new THREE.Vector3(0, g.userData.kind === 'vampire' ? 1.8 : 1, 0)).project(this.camera);
   }
 
-  /** Unidade mais próxima do cursor (em pixels), para o indicador de alvo. */
-  unitUnderCursor(nx: number, ny: number, maxPx = 18): number | undefined {
+  /**
+   * Unidade mais próxima do cursor (em pixels). `preferOwner` faz uma unidade
+   * desse dono vencer qualquer outra dentro da tolerância — usado no clique para
+   * o inimigo colado no alvo não roubar a seleção da unidade própria.
+   */
+  unitUnderCursor(nx: number, ny: number, maxPx = 18, preferOwner = -1): number | undefined {
     const rect = this.renderer.domElement.getBoundingClientRect();
     let nearest = maxPx;
     let found: number | undefined;
+    let ownNearest = maxPx;
+    let ownFound: number | undefined;
     for (const [id, g] of this.unitMeshes) {
       if (!g.visible) continue;
       const p = this.unitScreenPosition(id);
       if (!p || p.z < -1 || p.z > 1) continue;
       const d = Math.hypot((p.x - nx) * rect.width / 2, (p.y - ny) * rect.height / 2);
-      if (d < nearest) { nearest = d; found = id; }
+      if (preferOwner >= 0 && g.userData.owner === preferOwner) {
+        if (d < ownNearest) { ownNearest = d; ownFound = id; }
+      } else if (d < nearest) {
+        nearest = d;
+        found = id;
+      }
     }
-    return found;
+    return ownFound ?? found;
   }
 
   /** Retículo vermelho sobre o inimigo sob o cursor (null esconde). */
@@ -2351,18 +2366,15 @@ export class GameScene {
     this.camera.updateMatrixWorld(true);
     this.scene.updateMatrixWorld(true);
     this.raycaster.setFromCamera(new THREE.Vector2(nx, ny), this.camera);
-    // Unidades reveladas têm prioridade sobre copas/telhados que as encobrem.
+    // Raycast preciso: mantém o que está de fato sob o cursor. Unidades reveladas
+    // continuam vencendo copas/telhados que as encobrem.
     const unitHit = this.raycaster.intersectObjects([...this.unitMeshes.values()].filter(g => g.visible), true)[0];
+    let unitPick: { unitId?: number; nodeId?: number; buildingId?: number } | undefined;
     if (unitHit) {
       for (let o: THREE.Object3D | null = unitHit.object; o; o = o.parent) {
-        if (o.userData.pick) return o.userData.pick;
+        if (o.userData.pick) { unitPick = o.userData.pick; break; }
       }
     }
-    // Tolerância em pixels igual à do retículo de alvo (unitUnderCursor): se o
-    // cursor marcou uma unidade, o clique deve acertá-la mesmo que a geometria
-    // esteja escondida por uma copa, tronco ou estrutura.
-    const unitId = this.unitUnderCursor(nx, ny);
-    if (unitId !== undefined) return { unitId };
 
     const rect = this.renderer.domElement.getBoundingClientRect();
     // Entre estruturas e recursos, conserva a ordem de profundidade.
@@ -2394,7 +2406,16 @@ export class GameScene {
     const buildingId = hitPick?.buildingId
       ?? this.buildingAtScreen(nx, ny, rect)
       ?? (groundPoint ? this.buildingAtWorld(groundPoint.x, groundPoint.z) : undefined);
+
+    if (unitPick?.unitId !== undefined) return unitPick;
+    // Construção antes da proximidade de unidade: um Vampiro atacando o prédio
+    // (que fica colado nele) não pode impedir a seleção da edificação, porque o
+    // clique na construção não acerta a geometria do atacante.
     if (buildingId !== undefined) return { buildingId };
+    // Fallback de clique (menor que o hover), para unidades escondidas por copas
+    // quando o raio não acertou nada sólido. Prefere unidades do dono local.
+    const proximityId = this.unitUnderCursor(nx, ny, PICK_PROXIMITY_PX, this.localOwner);
+    if (proximityId !== undefined) return { unitId: proximityId };
     if (woodNodeId !== undefined) return { nodeId: woodNodeId };
     return hitPick ?? {};
   }

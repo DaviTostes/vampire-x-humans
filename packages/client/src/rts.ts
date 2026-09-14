@@ -319,17 +319,22 @@ export class RtsControls {
           this.selectedBuilding = buildingUnder;
         } else if (u && u.owner === myId) {
           this.selected = e.shiftKey ? (this.selected.includes(u.id) ? this.selected.filter(id => id !== u.id) : [...this.selected, u.id]) : [u.id];
-        } else {
-          this.selected = [];
+        } else if (this.selected.length === 0) {
+          // Sem seleção ativa, clicar no inimigo inspeciona. Com seleção, o clique
+          // não pode derrubar o comando no meio da briga (o Vampiro atacando
+          // costumava ocupar a frente e roubar a seleção).
           this.inspectedUnit = u?.id ?? null;
         }
       } else {
-        this.selected = [];
+        const picked = pick.buildingId !== undefined ? snap.buildings.find((bb) => bb.id === pick.buildingId) : undefined;
+        const enemyBuilding = !!picked && picked.owner >= 0 && picked.owner !== myId;
+        // Prédio inimigo também não derruba a seleção atual: mantém o comando
+        // ativo enquanto mostra a informação da construção.
+        if (!enemyBuilding || this.selected.length === 0) this.selected = [];
         this.selectedBuilding = pick.buildingId ?? null;
         // Teste solo: selecionar um prédio de qualquer lado assume o controle dele.
-        if (practice && pick.buildingId !== undefined) {
-          const b = snap.buildings.find((bb) => bb.id === pick.buildingId);
-          if (b) this.setActingId(b.kind === 'crypt' ? VAMPIRE_PLAYER_ID : b.owner >= 0 ? b.owner : myId);
+        if (practice && picked) {
+          this.setActingId(picked.kind === 'crypt' ? VAMPIRE_PLAYER_ID : picked.owner >= 0 ? picked.owner : myId);
         }
       }
     } else {
