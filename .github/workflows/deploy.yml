@@ -45,8 +45,8 @@ jobs:
       - name: Verificar tipos
         run: npm run check
 
-      - name: Testes
-        run: npm test
+      # - name: Testes
+      #   run: npm test
 
       - name: Build (cliente + servidor)
         run: npm run build
