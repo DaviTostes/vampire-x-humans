@@ -102,7 +102,7 @@ export interface MapPresetConfig {
   };
 }
 
-export type MapPresetId = 'labyrinth';
+export type MapPresetId = 'labyrinth' | 'hollows';
 
 // ---- Tipos das mecânicas da especificação "Humano e Vampiro" ----
 // As tabelas abaixo vivem em `GAME_CONFIG.spec`. Elas são a fonte de verdade
@@ -199,12 +199,25 @@ const LABYRINTH_MAP: MapPresetConfig = {
   },
 };
 
+const HOLLOWS_MAP: MapPresetConfig = {
+  ...LABYRINTH_MAP,
+  version: 1,
+  name: 'Refúgios da Mata',
+  description: 'Mapa compacto: seis bases distintas, passagens de pedra e uma clareira central conectada.',
+  maze: undefined,
+  refuges: [], // Authored outlines in packages/shared/src/hollows.ts.
+  humanSpawns: [{x:-12,z:-8},{x:12,z:-8},{x:-12,z:-16},{x:12,z:-16}],
+  crypt: {x:0,z:8}, vampireSpawnOffset: {x:14,z:12},
+};
+
 export const MAP_PRESETS: Record<MapPresetId, MapPresetConfig> = {
   labyrinth: LABYRINTH_MAP,
+  hollows: HOLLOWS_MAP,
 };
 export const DEFAULT_MAP_ID: MapPresetId = 'labyrinth';
 
 export const GAME_CONFIG = {
+  construction: { tileSize: 1.5 },
   match: {
     // Um único dia curto (construção) e uma única noite longa (sobrevivência).
     // Os humanos vencem ao ver o amanhecer depois da noite.
@@ -260,22 +273,22 @@ export const GAME_CONFIG = {
   // Progressões (níveis, custos de upgrade e pré-requisitos) ficam em `spec`.
   buildings: {
     bank: {
-      hp: 500, size: 8,
+      hp: 500, size: 6,
       cost: { wood: 0, gold: 0, time: 5 }, // nível 1 é gratuito (seção 4)
       // Ciclo de produção CONSTANTE (não muda com o nível). Cada ciclo entrega
       // `spec.bankLevels[nível].production` de ouro, que dobra a cada upgrade.
       cycleSeconds: 1,
     },
     taverna: {
-      hp: 500, size: 8,
+      hp: 500, size: 6,
       cost: { wood: 0, gold: 128, time: 5 },
       recruit: { wood: 0, gold: 50, time: 2 },
     },
     wall: {
-      hp: 30, size: 2, cost: { wood: 0, gold: 4, time: 2 },
+      hp: 30, size: 3, cost: { wood: 0, gold: 4, time: 2 },
     },
     tower: {
-      hp: 300, size: 4,
+      hp: 300, size: 3,
       cost: { wood: 0, gold: 4, time: 2 },
       // TODO(A CONFIRMAR): vida, alcance, Attack Speed, projétil e seleção de
       // alvo não definidos; valores atuais preservados.
@@ -285,7 +298,7 @@ export const GAME_CONFIG = {
     // TODO(A CONFIRMAR): a spec não define custos/vida/níveis do Mercado;
     // valores provisórios. Nível 2 é pré-requisito do Banco nível 6.
     market: {
-      hp: 500, size: 8,
+      hp: 500, size: 6,
       cost: { wood: 0, gold: 64, time: 4 },
       maxLevel: 3,
       // Chave = nível ATUAL: 1 é o custo de ir do nível 1 para o 2.
@@ -294,15 +307,15 @@ export const GAME_CONFIG = {
     },
     // Mina de Ouro: construída pelo Minerador e fonte de ouro (seção 10).
     // TODO(A CONFIRMAR): vida e tempo de obra não definidos; valor provisório.
-    goldMine: { hp: 400, size: 8, cost: { wood: 8, gold: 0, time: 3 } },
+    goldMine: { hp: 400, size: 6, cost: { wood: 8, gold: 0, time: 3 } },
     // Estruturas especiais; keep não aparece no painel por padrão.
-    keep: { hp: 1200, size: 8, cost: { wood: 150, gold: 60, time: 12 } },
+    keep: { hp: 1200, size: 6, cost: { wood: 150, gold: 60, time: 12 } },
 
     // ---- Base do Vampiro ----
     // Estrutura neutra e indestrutível. A cripta é a base e vende itens e skills.
     // Ciclo de produção FIXO (como o Banco): só a quantidade por ciclo cresce
     // com os upgrades, o intervalo entre os ticks não muda.
-    crypt: { hp: 4000, size: 8, cycleSeconds: 1 },
+    crypt: { hp: 4000, size: 12, cycleSeconds: 1 },
   },
   buildable: ['bank', 'taverna', 'wall', 'tower', 'goldMine', 'market'] as BuildKind[],
 
@@ -345,9 +358,10 @@ export const GAME_CONFIG = {
     repairRate: 20,
     woodGatherRange: 2.2, goldGatherRange: 3.5,
     formationSpacing: 1.8,
-    // FT5: ocupação no grid. 1 tile = tileSize = 2 unidades.
-    // Humano = 1×1 tile (raio 1); Vampiro = 2×2 tiles (raio 2).
-    unitRadius: 1, vampireUnitRadius: 2, unitSeparation: 1.4,
+    // Footprints use the construction grid, independently of terrain cells.
+    get unitRadius(): number { return GAME_CONFIG.construction.tileSize / 2; },
+    get vampireUnitRadius(): number { return GAME_CONFIG.construction.tileSize; },
+    get unitSeparation(): number { return GAME_CONFIG.construction.tileSize; },
     woodCollisionRadius: 0.35, goldCollisionRadius: 2.2,
     resourceBuildClearance: 2,
     moveArrivalRange: 0.8,
