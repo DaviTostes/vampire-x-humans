@@ -2,3 +2,4 @@
 *.mkv
 *.rar
 map-overlays/
+!/packages/server/map-overlays/

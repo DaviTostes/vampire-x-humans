@@ -1,14 +1,18 @@
 // Editor de mapa (builder) — pintura de grid, servido em URL própria e protegido
 // por senha (`MAP_BUILDER_PASSWORD`). Não aparece no lobby nem no bundle do
-// cliente. O resultado é salvo em `map-overlays/<mapId>.json` e aplicado à
+// cliente. O resultado é salvo em `packages/server/map-overlays/<mapId>.json` e aplicado à
 // próxima partida (servidor e cliente leem o mesmo overlay).
 
 import { promises as fsp } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type http from 'node:http';
 import { MAP_PRESETS, WORLD, getMapModel, getMapOverlay, setMapOverlay, normalizeOverlay, type MapOverlay, type MapPresetId } from '@vampire/shared';
 
-const OVERLAY_DIR = path.join(process.cwd(), 'map-overlays');
+// src/ no desenvolvimento e dist/ no build ficam no mesmo nível. O caminho
+// não depende do cwd, que muda entre npm workspaces e o serviço no VPS.
+const OVERLAY_DIR = fileURLToPath(new URL('../map-overlays/', import.meta.url));
+const LEGACY_OVERLAY_DIR = fileURLToPath(new URL('../../../map-overlays/', import.meta.url));
 const BUILDER_MAP: MapPresetId = 'labyrinth';
 
 function password(): string {
@@ -50,16 +54,22 @@ async function readBody(req: http.IncomingMessage, limit = 4_000_000): Promise<s
   });
 }
 
-/** Carrega o overlay salvo (se houver) para o mapa do builder. */
+/** Carrega os mapas versionados; mantém compatibilidade com saves antigos do VPS. */
 export async function loadMapOverlay(): Promise<void> {
   for (const mapId of Object.keys(MAP_PRESETS) as MapPresetId[]) {
-    try {
-      const raw = await fsp.readFile(overlayFile(mapId), 'utf8');
-      const parsed = JSON.parse(raw) as Partial<MapOverlay>;
-      setMapOverlay(mapId, normalizeOverlay(parsed));
-      console.log('[builder] overlay carregado de', overlayFile(mapId));
-    } catch {
-      // Sem overlay salvo: usa o preset original.
+    for (const directory of [OVERLAY_DIR, LEGACY_OVERLAY_DIR]) {
+      const file = path.join(directory, `${mapId}.json`);
+      try {
+        const raw = await fsp.readFile(file, 'utf8');
+        const parsed = JSON.parse(raw) as Partial<MapOverlay>;
+        setMapOverlay(mapId, normalizeOverlay(parsed));
+        console.log('[builder] overlay carregado de', file);
+        break;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        console.warn('[builder] falha ao carregar overlay de', file, error);
+        break;
+      }
     }
   }
 }

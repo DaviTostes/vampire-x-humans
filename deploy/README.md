@@ -32,6 +32,20 @@ vxh.mediumblue.space → HTTP → localhost:3000
 O WebSocket `/ws` passa pelo mesmo hostname. Depois do primeiro deploy o túnel
 fica registrado no VPS e `TUNNEL_TOKEN` pode ser removido dos secrets.
 
+## Mapas salvos no editor
+
+O editor salva em `packages/server/map-overlays/<mapId>.json`, tanto no
+localhost quanto no VPS. Esses arquivos são versionados: depois de salvar no
+editor local, inclua o JSON no commit e faça push em `master` para publicá-lo.
+O deploy envia o mapa junto com o código e o servidor o carrega ao reiniciar.
+As alterações são aplicadas às próximas partidas.
+
+Arquivos antigos em `map-overlays/` na raiz do VPS só são usados quando não
+existe um JSON correspondente na pasta versionada. O mapa enviado pelo Git
+tem prioridade e substitui o arquivo correspondente no VPS a cada deploy;
+para preservar edições feitas online, copie o JSON do VPS para o repositório
+antes de publicar novamente.
+
 ## Manual (opcional)
 
 Para registrar o túnel sem o workflow, rode no VPS:
