@@ -1,4 +1,6 @@
 import { snapBuildingCoordinate } from './constants.js';
+import { insidePlayableBoundary } from './map-boundary.js';
+import { unitRadius } from './navigation.js';
 // Simulação autoritativa do jogo — roda SOMENTE no servidor.
 // Clientes recebem snapshots e enviam comandos.
 
@@ -486,12 +488,13 @@ export function applyCommand(session: Session, playerId: number, cmd: Command): 
       break;
     }
     case 'move': {
-      if (!Number.isFinite(cmd.x) || !Number.isFinite(cmd.z)) return;
+      if (!insidePlayableBoundary(session.map,cmd.x,cmd.z)) return;
       const units = s.units.filter(u => !u.dead && u.owner === playerId && cmd.ids.includes(u.id));
       const width = Math.ceil(Math.sqrt(units.length));
       for (const [i, u] of units.entries()) {
-          const x = Math.max(-WORLD.half + 1, Math.min(WORLD.half - 1, cmd.x + (i % width - (width - 1) / 2) * INTERACTION.formationSpacing));
-          const z = Math.max(-WORLD.half + 1, Math.min(WORLD.half - 1, cmd.z + (Math.floor(i / width) - (Math.ceil(units.length / width) - 1) / 2) * INTERACTION.formationSpacing));
+          const x = cmd.x + (i % width - (width - 1) / 2) * INTERACTION.formationSpacing;
+          const z = cmd.z + (Math.floor(i / width) - (Math.ceil(units.length / width) - 1) / 2) * INTERACTION.formationSpacing;
+          if (!insidePlayableBoundary(session.map,x,z,unitRadius(u.kind))) continue;
           u.order = { t: 'move', x, z };
           u.gatherNodeId = null;
       }

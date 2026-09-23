@@ -408,8 +408,8 @@ function shutdown(signal: string): void {
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
+await loadMapOverlay();
 server.listen(PORT, () => {
   console.log(`[vampire] servidor em http://localhost:${PORT}`);
   console.log(`[vampire] ws pronto — crie uma sala pelo cliente`);
-  void loadMapOverlay();
 });

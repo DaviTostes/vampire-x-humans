@@ -7,6 +7,7 @@ import { Net, takeRejoinCode } from './net.js';
 import { portrait } from './portraits.js';
 import { createLocaleSwitcher, onLocaleChange, t, tServer } from './i18n.js';
 import './lobby.css';
+import { loadMapCatalog } from './map-catalog.js';
 
 function escapeHtml(value: string) {
   return value.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
@@ -34,8 +35,10 @@ export class Lobby {
   private copyMessage = '';
   private unsubscribe: () => void;
   private unsubscribeLocale: () => void;
+  private refreshMaps = () => { void loadMapCatalog().then(() => this.render()).catch(() => {}); };
 
   constructor(private container: HTMLElement, private net: Net) {
+    window.addEventListener('focus', this.refreshMaps);
     this.el.className = 'lobby-screen';
     container.appendChild(this.el);
     this.unsubscribe = net.subscribe(() => this.render());
@@ -216,5 +219,5 @@ export class Lobby {
     </main>`;
   }
 
-  destroy() { this.unsubscribe(); this.unsubscribeLocale(); this.el.remove(); }
+  destroy() { window.removeEventListener('focus', this.refreshMaps); this.unsubscribe(); this.unsubscribeLocale(); this.el.remove(); }
 }

@@ -1,4 +1,6 @@
 import { buildHollowsMap } from './hollows.js';
+import { normalizeTreeProps, treeObstacles } from './tree-footprint.js';
+import { DEFAULT_MAP_BOUNDARY, type BoundaryPoint } from './map-boundary.js';
 import { snapBuildingCoordinate, type BuildKind } from './constants.js';
 // Geração de mapa: cada preset (`MapPresetConfig`) vira um `MapModel` com todo o
 // relevo, colisão, trilhas e recursos já derivados. Servidor e cliente usam o
@@ -68,9 +70,12 @@ const OUTLINES: ReadonlyArray<ReadonlyArray<readonly [number, number]>> = [
     [-1.12, 0.32], [-0.70, 0.68], [-0.50, 1.0], [-0.12, 0.94]],
 ];
 
-import { withClearedTerrain } from './map-clearance.js';
+import { FLAT_GROUND_HEIGHT, withClearedTerrain } from './map-clearance.js';
 
 export interface GameMap {
+  playableMargin?: number;
+  boundary?: readonly BoundaryPoint[];
+  treeObstacles?: MapObstacle[];
   id: MapPresetId;
   seed: number;
   tiles: number;
@@ -1191,6 +1196,8 @@ function cloneMap(map: GameMap): GameMap {
 // O builder pinta células do grid: `adds` cria muros e `removes` apaga os muros
 // gerados que caem naquela célula. Aplicado por cima do mapa procedural.
 export interface MapOverlay {
+  /** Vertices already occupied by sculpted relief; persisted across editor sessions. */
+  reliefOccupied?: number[];
   /** Grass cells cleared of procedural scenery, resources and collisions. */
   cleared?: number[];
   version: number;
@@ -1235,12 +1242,13 @@ export interface OverlayProp {
 /** Converte o overlay salvo (parcial) para a forma completa. */
 export function normalizeOverlay(value: Partial<MapOverlay> | null | undefined): MapOverlay {
   return {
+    reliefOccupied: Array.isArray(value?.reliefOccupied) ? [...new Set(value.reliefOccupied.filter(i=>Number.isInteger(i) && i>=0 && i<WORLD.tiles*WORLD.tiles))] : undefined,
     version: Number(value?.version ?? 1),
     cleared: Array.isArray(value?.cleared) ? [...new Set(value.cleared.filter(i => Number.isInteger(i) && i >= 0 && i < WORLD.tiles*WORLD.tiles))] : [],
     adds: Array.isArray(value?.adds) ? value.adds.map(Number).filter(Number.isInteger) : [],
     removes: Array.isArray(value?.removes) ? value.removes.map(Number).filter(Number.isInteger) : [],
     props: Array.isArray(value?.props)
-      ? value.props
+      ? normalizeTreeProps(value.props
         .filter((p) => p && typeof p.kind === 'string' && Number.isFinite(p.x) && Number.isFinite(p.z))
         .map((p) => {
           const kind=p.kind.slice('building:'.length) as BuildKind | 'crypt';
@@ -1250,7 +1258,7 @@ export function normalizeOverlay(value: Partial<MapOverlay> | null | undefined):
             z:building ? snapBuildingCoordinate(p.z,kind) : Number(p.z),
             rotY:building ? Math.round(Number(p.rotY ?? 0)/(Math.PI/2))*Math.PI/2 : Number(p.rotY ?? 0),
             scale:building ? 1 : Number(p.scale ?? 1) };
-        })
+        }))
       : [],
     height: Array.isArray(value?.height) && value.height.length ? value.height.map(Number) : undefined,
     paint: Array.isArray(value?.paint) && value.paint.length ? value.paint.map(Number) : undefined,
@@ -1266,7 +1274,7 @@ export function normalizeOverlay(value: Partial<MapOverlay> | null | undefined):
 const MAP_OVERLAYS = new Map<MapPresetId, MapOverlay>();
 
 export function setMapOverlay(id: MapPresetId, overlay: MapOverlay | null): void {
-  if (overlay) MAP_OVERLAYS.set(id, overlay);
+  if (overlay) MAP_OVERLAYS.set(id, normalizeOverlay(overlay));
   else MAP_OVERLAYS.delete(id);
   // O modelo é cacheado; ao trocar o overlay ele precisa ser reconstruído.
   MODEL_CACHE.delete(id);
@@ -1305,9 +1313,35 @@ export function getMapModel(id: MapPresetId = DEFAULT_MAP_ID): MapModel {
   if (cached) return cached;
   const cfg = MAP_PRESETS[id];
   if (!cfg) throw new Error(`Preset de mapa desconhecido: ${id}`);
-  const model = withClearedTerrain(id === 'hollows' ? buildHollowsMap(cfg, getMapOverlay(id)) : buildMapModel(id, cfg), getMapOverlay(id));
+  const baseId = cfg.baseMapId ?? id;
+  const model = withClearedTerrain(baseId === 'flat' ? buildFlatMap(id, cfg) : baseId === 'hollows' ? buildHollowsMap(cfg, getMapOverlay(id)) : buildMapModel(id, cfg), getMapOverlay(id));
+  model.id = id;
+  const generate = model.generateMap;
+  model.generateMap = () => ({ ...generate(), id, boundary: cfg.boundary ?? DEFAULT_MAP_BOUNDARY,
+    playableMargin: cfg.playableMargin ?? GAME_CONFIG.camera.playableMargin,
+    treeObstacles: treeObstacles(getMapOverlay(id)?.props ?? []) });
   MODEL_CACHE.set(id, model);
   return model;
+}
+
+function buildFlatMap(id: MapPresetId, config: MapPresetConfig): MapModel {
+  const overlay = getMapOverlay(id), count = WORLD.tiles * WORLD.tiles;
+  return {
+    id, config, compounds: [], trails: [], bridges: [], resourcePlacements: [], forestWoodNodes: [],
+    obstacles: [], refugeRings: [], refugeWalls: [],
+    humanSpawns: config.humanSpawns.map(p => ({ x: p.x * config.scale, z: p.z * config.scale })),
+    cryptPosition: { x: config.crypt.x * config.scale, z: config.crypt.z * config.scale },
+    vampireSpawnOffset: { x: config.vampireSpawnOffset.x * config.scale, z: config.vampireSpawnOffset.z * config.scale },
+    compoundEntrance: c => ({ x: c.x, z: c.z }), isLandAt: () => true,
+    isWaterAtWorld: () => false, isBridgeAtWorld: () => false, isForestAt: () => false,
+    distanceToTrails: () => Infinity, stairs: overlay?.stairs ?? [],
+    paint: overlay?.paint ?? Array(count).fill(2),
+    generateMap: () => ({ id, seed: config.version, tiles: WORLD.tiles,
+      height: Float32Array.from({ length: count }, (_, i) => {
+        const h = overlay?.height?.[i];
+        return typeof h === 'number' && Number.isFinite(h) ? Math.max(0, Math.min(1.2, h)) : FLAT_GROUND_HEIGHT;
+      }), water: new Uint8Array(count), bridge: new Uint8Array(count), forest: new Float32Array(count), obstacles: [] }),
+  };
 }
 
 /** Id do mapa ativo no cliente (o servidor sempre passa o modelo explicitamente). */

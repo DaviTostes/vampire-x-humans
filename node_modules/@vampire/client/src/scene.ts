@@ -1,5 +1,5 @@
 import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { BUILD_TILE_SIZE, buildingTiles, snapBuildingCoordinate, unitRadius } from '@vampire/shared';
+import { BUILD_TILE_SIZE, buildingTiles, snapBuildingCoordinate, unitRadius, treeFootprint } from '@vampire/shared';
 import { clearedAreaIntersects, terrainHeight, type TerrainStair } from '@vampire/shared';
 // Cena three.js: terreno do mapa por seed, entidades, ciclo dia/noite
 
@@ -706,7 +706,7 @@ export class GameScene {
     // Pedras soltas espalhadas pelo chão plano (InstancedMesh separado, para o
     // editor poder editar cada uma). Quando o overlay assumiu a decoração
     // (`decorReplace`), as instâncias vêm dos props salvos.
-    if (stone) {
+    if (stone && this.model.config.baseMapId !== 'flat') {
       const scatter = new THREE.Object3D();
       const step = 11, half = WORLD.half - 28;
       const decorReplace = Boolean(getMapOverlay(this.model.id)?.decorReplace);
@@ -812,7 +812,7 @@ export class GameScene {
       decal.renderOrder = order;
       this.scene.add(decal);
     };
-    decalAt(cryptFloorMap(), 0.05, 1, -2, cryptFloorAlphaTexture());
+    if (this.model.config.baseMapId !== 'flat') decalAt(cryptFloorMap(), 0.05, 1, -2, cryptFloorAlphaTexture());
     this.buildOverlayProps();
   }
 
@@ -1688,6 +1688,7 @@ export class GameScene {
    * trilhas, bases, pedras, água, cripta e a posição das árvores que dão madeira.
    */
   private buildDecorTrees() {
+    if (this.model.config.baseMapId === 'flat') return;
     const tree = assetRegistry.propInstance('prop:tree:evergreen');
     if (!tree) return;
     // Células (3×3) ocupadas por nós de madeira, para não sobrepor a coleta.
@@ -1975,6 +1976,10 @@ export class GameScene {
     const data = this.buildGridData, texture = this.buildGridTexture;
     if (!data || !texture || !this.editorMode) return false;
     const state = this.editorPlacementState();
+    // Tree coloring represents occupied cells, not the larger area where the
+    // reference building would overlap a tree. Placement still checks both.
+    const terrainMap = { ...this.map, treeObstacles: [] };
+    const treeCells = new Set((this.map.treeObstacles ?? []).flatMap(tree => treeFootprint(tree.x, tree.z).cells));
     const res = this.buildGridRes;
     const output = new Uint8Array(data.length);
     this.buildGridMaterial!.uniforms.uPending!.value = 1;
@@ -1986,7 +1991,8 @@ export class GameScene {
         budgetStart = performance.now();
       }
       const x=(i%res+0.5)*BUILD_TILE_SIZE-this.buildGridHalf, z=(Math.floor(i/res)+0.5)*BUILD_TILE_SIZE-this.buildGridHalf;
-      const free=canPlaceBuilding(this.map,state,kind,snapBuildingCoordinate(x,kind),snapBuildingCoordinate(z,kind)) ? 255 : 0;
+      const occupiedByTree = treeCells.has(`${Math.floor(x/BUILD_TILE_SIZE)},${Math.floor(z/BUILD_TILE_SIZE)}`);
+      const free=!occupiedByTree && canPlaceBuilding(terrainMap,state,kind,snapBuildingCoordinate(x,kind),snapBuildingCoordinate(z,kind)) ? 255 : 0;
       const pixel=i*4;
       output[pixel]=free; output[pixel+1]=free; output[pixel+2]=free; output[pixel+3]=255;
     }

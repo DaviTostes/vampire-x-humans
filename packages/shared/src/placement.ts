@@ -2,6 +2,7 @@ import { terrainHeight as groundHeight } from './terrain.js';
 import { BUILDING_SIZE, WORLD, INTERACTION, TERRAIN_MAX_SLOPE, type BuildKind } from './constants.js';
 import { worldToTile, type GameMap } from './mapgen.js';
 import { unitRadius } from './navigation.js';
+import { insidePlayableBoundary } from './map-boundary.js';
 import type { Building, ResourceNode, Unit } from './types.js';
 
 /** Encosta íngreme demais para assentar construção (o construtor não chegaria). */
@@ -26,7 +27,7 @@ interface PlacementState {
 export function canPlaceBuilding(map: GameMap, state: PlacementState, kind: BuildKind, x: number, z: number): boolean {
   const half = BUILDING_SIZE[kind] / 2;
   if (!Number.isFinite(half) || !Number.isFinite(x) || !Number.isFinite(z) ||
-      Math.abs(x) + half >= WORLD.half || Math.abs(z) + half >= WORLD.half) return false;
+      !insidePlayableBoundary(map,x,z,half)) return false;
   // Encostas íngremes não recebem construção (ninguém chegaria para construir).
   if (tooSteep(map, x, z)) return false;
 
@@ -36,7 +37,7 @@ export function canPlaceBuilding(map: GameMap, state: PlacementState, kind: Buil
       if (tx < 0 || tz < 0 || tx >= map.tiles || tz >= map.tiles || map.water[tz * map.tiles + tx] === 1 || map.bridge[tz * map.tiles + tx] === 1) return false;
     }
   }
-  for (const obstacle of map.obstacles) {
+  for (const obstacle of [...map.obstacles, ...(map.treeObstacles ?? [])]) {
     if (Math.abs(obstacle.x - x) < obstacle.width / 2 + half && Math.abs(obstacle.z - z) < obstacle.depth / 2 + half) return false;
   }
   for (const b of state.buildings) {

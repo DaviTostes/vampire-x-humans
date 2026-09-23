@@ -4,6 +4,26 @@ import type { GameMap } from './mapgen.js';
 export const RELIEF_STEP = Math.max(CLIFF_HEIGHT * 0.6 / 14, TERRAIN_MAX_SLOPE * WORLD.tileSize * 2.1);
 export interface TerrainStair { x: number; z: number; dx: number; dz: number; length: number; width: number; low: number; high: number; compact?: boolean }
 
+/** Extend a sculpted area without ever raising/lowering already reserved vertices. */
+export function extendTerrainRelief(height:Float32Array, occupied:Set<number>, cells:readonly number[], requestedHeight:number, tiles:number) {
+  let connection=cells.find(i=>occupied.has(i));
+  if(connection===undefined) {
+    for(const i of cells) {
+      const x=i%tiles,z=Math.floor(i/tiles);
+      const neighbors=[x>0?i-1:-1,x<tiles-1?i+1:-1,z>0?i-tiles:-1,z<tiles-1?i+tiles:-1];
+      connection=neighbors.find(n=>n>=0 && occupied.has(n));
+      if(connection!==undefined) break;
+    }
+  }
+  const target=connection===undefined ? requestedHeight : height[connection]!;
+  let changed=false;
+  for(const i of cells) {
+    if(occupied.has(i)) continue;
+    height[i]=target; occupied.add(i); changed=true;
+  }
+  return {height:target,changed};
+}
+
 /** Same triangle interpolation as the rendered terrain, in map height units. */
 export function terrainHeight(map: GameMap, x: number, z: number): number {
   const n = map.tiles, ts = WORLD.tileSize;

@@ -70,6 +70,10 @@ export interface MazeRing {
 }
 
 export interface MapPresetConfig {
+  /** Ordered vertices of the playable perimeter shown by the editor. */
+  boundary?: Array<{ x: number; z: number }>;
+  playableMargin?: number;
+  baseMapId?: 'labyrinth' | 'hollows' | 'flat';
   version: number;
   name: string;
   description: string;
@@ -102,7 +106,7 @@ export interface MapPresetConfig {
   };
 }
 
-export type MapPresetId = 'labyrinth' | 'hollows';
+export type MapPresetId = 'labyrinth' | 'hollows' | 'flat' | `custom-${string}`;
 
 // ---- Tipos das mecânicas da especificação "Humano e Vampiro" ----
 // As tabelas abaixo vivem em `GAME_CONFIG.spec`. Elas são a fonte de verdade
@@ -213,6 +217,8 @@ const HOLLOWS_MAP: MapPresetConfig = {
 export const MAP_PRESETS: Record<MapPresetId, MapPresetConfig> = {
   labyrinth: LABYRINTH_MAP,
   hollows: HOLLOWS_MAP,
+  flat: { ...LABYRINTH_MAP, baseMapId: 'flat', name: 'Grama plana',
+    description: 'Terreno vazio e plano para criar um mapa do zero.', maze: undefined, refuges: [] },
 };
 export const DEFAULT_MAP_ID: MapPresetId = 'labyrinth';
 
@@ -338,6 +344,7 @@ export const GAME_CONFIG = {
   market: { wood: 10, gold: 150, step: 5 },
 
   camera: {
+    playableMargin: 80,    // Terreno reservado entre a área jogável e a borda visual.
     distance: 90,
     initialZoom: 0.45,      // Quanto MENOR, mais perto
     minZoom: 0.3, maxZoom: 0.6,

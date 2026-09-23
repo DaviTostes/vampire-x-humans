@@ -2,6 +2,7 @@ import { terrainHeight } from './terrain.js';
 import { BUILDING_SIZE, BUILD_TILE_SIZE, WORLD, INTERACTION, TICK_RATE, TERRAIN_MAX_SLOPE } from './constants.js';
 import type { GameMap } from './mapgen.js';
 import type { GameState, Unit } from './types.js';
+import { insidePlayableBoundary } from './map-boundary.js';
 
 export const UNIT_RADIUS = INTERACTION.unitRadius;
 
@@ -145,7 +146,7 @@ export class Navigation {
       const half = BUILDING_SIZE[b.kind] / 2;
       add({ x: b.x, z: b.z, halfX: half, halfZ: half, kind: b.kind });
     }
-    for (const wall of this.map.obstacles) {
+    for (const wall of [...this.map.obstacles, ...(this.map.treeObstacles ?? [])]) {
       add({ x: wall.x, z: wall.z, halfX: wall.width / 2, halfZ: wall.depth / 2 });
     }
     for (const n of this.state.nodes) {
@@ -196,7 +197,7 @@ export class Navigation {
   canStand(u: Pick<Unit, 'kind'>, x: number, z: number): boolean {
     const r = unitRadius(u.kind);
     const half = WORLD.half;
-    if (!Number.isFinite(x) || !Number.isFinite(z) || Math.abs(x) + r >= half || Math.abs(z) + r >= half) return false;
+    if (!insidePlayableBoundary(this.map,x,z,r)) return false;
     // Água em 9 amostras, sem chamar função nem redividir por tile a cada uma.
     const map = this.map, n = map.tiles, water = map.water, bridge = map.bridge, inv = this.invTile;
     const bx = (x + half) * inv, bz = (z + half) * inv, ro = r * inv;

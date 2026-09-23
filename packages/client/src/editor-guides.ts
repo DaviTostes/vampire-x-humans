@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { BUILDING_SIZE, BUILD_TILE_SIZE, buildingTiles, snapBuildingCoordinate, INTERACTION, MAX_HUMANS, WORLD } from '@vampire/shared';
 import { createBuildingModel } from './models.js';
 import type { GameScene } from './scene.js';
+import { DEFAULT_MAP_BOUNDARY, playableBoundarySegments } from '@vampire/shared';
 
 type Point = { x: number; z: number };
 
@@ -14,6 +15,8 @@ export class EditorGuides {
   private readonly label: THREE.Sprite;
   private readonly spawnLabel: THREE.Sprite;
   private start: Point | null = null;
+  private readonly playableLine = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({color:0xff8038,depthTest:false}));
+  private playableSegments: Array<[Point,Point]> | null = null;
   private end: Point | null = null;
   private rulerKey = '';
 
@@ -31,7 +34,8 @@ export class EditorGuides {
     this.label=this.makeLabel(`CRIPTA · ${buildingTiles('crypt')} × ${buildingTiles('crypt')} tiles`);
     this.spawnLabel=this.makeLabel('NASCIMENTO DO VAMPIRO');
     this.lines.renderOrder=10; this.ruler.renderOrder=11;
-    this.group.add(this.lines,this.crypt,this.label,this.spawnLabel);
+    this.playableLine.renderOrder=10;
+    this.group.add(this.lines,this.playableLine,this.crypt,this.label,this.spawnLabel);
     world.scene.add(this.group,this.ruler);
     this.refresh();
   }
@@ -63,7 +67,8 @@ export class EditorGuides {
       const corners=[{x:x-half,z:z-half},{x:x+half,z:z-half},{x:x+half,z:z+half},{x:x-half,z:z+half}];
       corners.forEach((p,i)=>segment(p,corners[(i+1)%4]!));
     };
-    rect(0,0,WORLD.half-0.02);
+    const boundary = this.world.map.boundary ?? DEFAULT_MAP_BOUNDARY;
+    boundary.forEach((point,i) => segment(point,boundary[(i+1)%boundary.length]!));
     const p=this.world.model.cryptPosition;
     rect(p.x,p.z,BUILDING_SIZE.crypt/2);
     this.crypt.position.set(p.x,this.world.heightAt(p.x,p.z),p.z);
@@ -75,6 +80,10 @@ export class EditorGuides {
       {x:spawn.x+Math.cos((i+1)*Math.PI/16)*radius,z:spawn.z+Math.sin((i+1)*Math.PI/16)*radius});
     this.spawnLabel.position.set(spawn.x,this.world.heightAt(spawn.x,spawn.z)+4,spawn.z);
     this.replaceLines(this.lines,points);
+    points.length=0;
+    this.playableSegments ??= playableBoundarySegments(this.world.map);
+    for(const [a,b] of this.playableSegments) segment(a,b);
+    this.replaceLines(this.playableLine,points);
     this.rulerKey='';
     this.refreshRuler();
   }

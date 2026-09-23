@@ -7,6 +7,8 @@ import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type http from 'node:http';
+import { randomUUID } from 'node:crypto';
+import { rooms } from './rooms.js';
 import { MAP_PRESETS, WORLD, getMapModel, getMapOverlay, setMapOverlay, normalizeOverlay, type MapOverlay, type MapPresetId } from '@vampire/shared';
 
 // src/ no desenvolvimento e dist/ no build ficam no mesmo nível. O caminho
@@ -56,7 +58,19 @@ async function readBody(req: http.IncomingMessage, limit = 4_000_000): Promise<s
 
 /** Carrega os mapas versionados; mantém compatibilidade com saves antigos do VPS. */
 export async function loadMapOverlay(): Promise<void> {
+  await fsp.mkdir(OVERLAY_DIR, { recursive: true });
+  for (const file of await fsp.readdir(OVERLAY_DIR)) {
+    if (!/^custom-[a-f0-9-]+\.json$/.test(file)) continue;
+    try {
+      const saved = JSON.parse(await fsp.readFile(path.join(OVERLAY_DIR, file), 'utf8'));
+      const id = file.slice(0, -5) as MapPresetId;
+      if (!['flat', 'labyrinth', 'hollows'].includes(saved.baseMapId) || typeof saved.name !== 'string') continue;
+      MAP_PRESETS[id] = { ...MAP_PRESETS[saved.baseMapId as MapPresetId]!, baseMapId: saved.baseMapId, name: saved.name };
+      setMapOverlay(id, normalizeOverlay(saved.overlay));
+    } catch (error) { console.warn('[builder] falha ao carregar', file, error); }
+  }
   for (const mapId of Object.keys(MAP_PRESETS) as MapPresetId[]) {
+    if (mapId.startsWith('custom-')) continue;
     for (const directory of [OVERLAY_DIR, LEGACY_OVERLAY_DIR]) {
       const file = path.join(directory, `${mapId}.json`);
       try {
@@ -99,7 +113,11 @@ async function saveOverlay(body: string, mapId:MapPresetId): Promise<void> {
   const parsed = JSON.parse(body) as Partial<MapOverlay>;
   const overlay: MapOverlay = normalizeOverlay(parsed);
   await fsp.mkdir(OVERLAY_DIR, { recursive: true });
-  await fsp.writeFile(overlayFile(mapId), JSON.stringify(overlay));
+  const config = MAP_PRESETS[mapId]!;
+  const data = mapId.startsWith('custom-') ? { name: config.name, baseMapId: config.baseMapId, overlay } : overlay;
+  const temporary = `${overlayFile(mapId)}.tmp`;
+  await fsp.writeFile(temporary, JSON.stringify(data));
+  await fsp.rename(temporary, overlayFile(mapId));
   setMapOverlay(mapId, overlay);
 }
 
@@ -111,6 +129,7 @@ async function saveOverlay(body: string, mapId:MapPresetId): Promise<void> {
 export async function handleBuilder(req: http.IncomingMessage, res: http.ServerResponse): Promise<boolean> {
   const url = new URL(req.url ?? '/', 'http://localhost');
   const urlPath = url.pathname;
+  if (urlPath === '/api/maps') { sendJson(res, 200, MAP_PRESETS); return true; }
   if (urlPath !== '/api/map-overlay' && !urlPath.startsWith('/builder')) return false;
   const requestedMap = url.searchParams.get('mapId') ?? BUILDER_MAP;
   if (!Object.hasOwn(MAP_PRESETS,requestedMap)) { sendJson(res,400,{error:'Mapa invalido'}); return true; }
@@ -129,6 +148,35 @@ export async function handleBuilder(req: http.IncomingMessage, res: http.ServerR
   if (!password()) { sendJson(res, 404, { error: 'builder desativado' }); return true; }
   if (!authorized(url.searchParams)) { sendJson(res, 401, { error: 'senha inválida' }); return true; }
 
+  if (urlPath === '/builder/create' && req.method === 'POST') {
+    let id: MapPresetId | undefined;
+    try {
+      const body = JSON.parse(await readBody(req));
+      const name = typeof body.name === 'string' ? body.name.trim() : '';
+      if (!name || name.length > 60) throw new Error('Informe um nome de até 60 caracteres.');
+      id = `custom-${randomUUID()}`;
+      MAP_PRESETS[id] = { ...MAP_PRESETS[mapId]!, name, baseMapId: MAP_PRESETS[mapId]!.baseMapId ?? mapId as 'labyrinth' | 'hollows' | 'flat' };
+      await saveOverlay(JSON.stringify(body.overlay ?? {}), id);
+      sendJson(res, 201, { mapId: id });
+    } catch (error) {
+      if (id) { delete MAP_PRESETS[id]; setMapOverlay(id, null); }
+      sendJson(res, 400, { error: (error as Error).message });
+    }
+    return true;
+  }
+  if (urlPath === '/builder/delete' && req.method === 'DELETE') {
+    if (!mapId.startsWith('custom-')) { sendJson(res, 400, { error: 'Os modelos padrão não podem ser excluídos.' }); return true; }
+    if ([...rooms.values()].some(room => room.mapId === mapId)) {
+      sendJson(res, 409, { error: 'Este mapa está em uso em uma sala. Troque o mapa ou feche a sala antes de excluir.' }); return true;
+    }
+    try {
+      await fsp.unlink(overlayFile(mapId));
+      delete MAP_PRESETS[mapId]; setMapOverlay(mapId, null);
+      sendJson(res, 200, { ok: true });
+    } catch { sendJson(res, 500, { error: 'Não foi possível excluir o mapa.' }); }
+    return true;
+  }
+
   if (urlPath === '/builder' && (req.method === 'GET' || req.method === 'HEAD')) {
     // Atalho para o builder 3D (rota do cliente). A senha continua sendo pedida
     // ao carregar/salvar os dados.
@@ -141,6 +189,7 @@ export async function handleBuilder(req: http.IncomingMessage, res: http.ServerR
     return true;
   }
   if (urlPath === '/builder/save' && req.method === 'POST') {
+    if (mapId === 'flat') { sendJson(res, 400, { error: 'Salve o modelo como um novo mapa.' }); return true; }
     try {
       await saveOverlay(await readBody(req), mapId);
       sendJson(res, 200, { ok: true });

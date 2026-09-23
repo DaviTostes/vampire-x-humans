@@ -13,6 +13,7 @@ import { installCursors } from './cursor.js';
 import { preloadResourceIcons } from './resource-icons.js';
 import { setActiveMapId } from '@vampire/shared';
 import { setMapOverlay } from '@vampire/shared';
+import { loadMapCatalog } from './map-catalog.js';
 
 installCursors();
 preloadResourceIcons();
@@ -40,6 +41,7 @@ if (new URLSearchParams(location.search).has('builder')) {
       // Overlay do editor de mapa (muros pintados), se houver — precisa ser
       // aplicado ANTES de montar a cena, para cliente e servidor concordarem.
       const mapId = net.lobby!.mapId;
+      await loadMapCatalog();
       try {
         const res = await fetch(`/api/map-overlay?mapId=${encodeURIComponent(mapId)}`);
         if (res.ok) {
@@ -53,7 +55,7 @@ if (new URLSearchParams(location.search).has('builder')) {
       return loading.finish();
     });
   });
-  void net.connect().then(() => { lobby.maybeRejoin(); }).catch(() => lobby.render());
+  void loadMapCatalog().then(() => net.connect()).then(() => { lobby.maybeRejoin(); }).catch(() => lobby.render());
 }
 
 function startGame(net: Net) {

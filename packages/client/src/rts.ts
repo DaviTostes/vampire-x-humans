@@ -1,4 +1,4 @@
-import { snapBuildingCoordinate } from '@vampire/shared';
+import { snapBuildingCoordinate, DEFAULT_MAP_BOUNDARY, insideMapBoundary } from '@vampire/shared';
 // Controles RTS: câmera, seleção, ordens, ghost de construção
 
 import * as THREE from 'three';
@@ -27,6 +27,7 @@ export class RtsControls {
   private keys = new Set<string>();
   private camTarget = new THREE.Vector3(0, 0, 0);
   private zoom: number = RTS_CAMERA.initialZoom;
+  private safeCameraTarget: { x:number; z:number } | null = null;
 
   constructor(
     private scene: GameScene,
@@ -101,9 +102,11 @@ export class RtsControls {
     const farG = h / Math.tan(Math.max(0.02, pitch - vf));
     const D = dist * RTS_CAMERA.depth;
     const hf = Math.atan(Math.tan(vf) * this.scene.camera.aspect);
-    // Limita à área jogável (não ao mundo inteiro): sem isso a câmera anda
-    // muito além das fileiras de pedra e mostra o vazio inacessível.
-    const { minX, minZ, maxX, maxZ } = this.scene.playableBounds();
+    // The camera may see the perspective margin, so constrain its viewport to
+    // the physical contour, not to the inset used for units and buildings.
+    const boundary=this.scene.map.boundary ?? DEFAULT_MAP_BOUNDARY;
+    const minX=Math.min(...boundary.map(p=>p.x)), maxX=Math.max(...boundary.map(p=>p.x));
+    const minZ=Math.min(...boundary.map(p=>p.z)), maxZ=Math.max(...boundary.map(p=>p.z));
     const cap = Math.min(maxX - minX, maxZ - minZ) * 0.5;
     // Margem de segurança pequena: com a folga do recorte, não corta as bordas.
     const marginX = Math.min(cap, farG * Math.tan(hf) * 1.05);
@@ -113,6 +116,32 @@ export class RtsControls {
     const loZ = minZ + marginZback, hiZ = maxZ - marginZfront;
     this.camTarget.x = loX <= hiX ? THREE.MathUtils.clamp(this.camTarget.x, loX, hiX) : (minX + maxX) / 2;
     this.camTarget.z = loZ <= hiZ ? THREE.MathUtils.clamp(this.camTarget.z, loZ, hiZ) : (minZ + maxZ) / 2;
+    const offsetZ=(marginZfront-marginZback)/2, halfZ=(marginZfront+marginZback)/2;
+    const fits=(x:number,z:number)=>insideMapBoundary(this.scene.map,x,z+offsetZ,marginX,halfZ);
+    if(!fits(this.camTarget.x,this.camTarget.z)) {
+      let safe=this.safeCameraTarget;
+      if(!safe || !fits(safe.x,safe.z)) {
+        safe=null;
+        let best=Infinity;
+        for(let z=loZ;z<=hiZ;z+=10) for(let x=loX;x<=hiX;x+=10) {
+          const distance=(x-this.camTarget.x)**2+(z-this.camTarget.z)**2;
+          if(distance<best && fits(x,z)) { safe={x,z}; best=distance; }
+        }
+      }
+      if(safe) {
+        const dx=this.camTarget.x-safe.x,dz=this.camTarget.z-safe.z;
+        let lo=0,hi=1;
+        for(let i=0;i<20;i++) {
+          const t=(lo+hi)/2;
+          if(fits(safe.x+dx*t,safe.z+dz*t)) lo=t; else hi=t;
+        }
+        this.camTarget.x=safe.x+dx*lo; this.camTarget.z=safe.z+dz*lo;
+      } else if(this.zoom>RTS_CAMERA.minZoom) {
+        this.zoom=Math.max(RTS_CAMERA.minZoom,this.zoom*0.9);
+        this.clampTarget(); return;
+      }
+    }
+    if(fits(this.camTarget.x,this.camTarget.z)) this.safeCameraTarget={x:this.camTarget.x,z:this.camTarget.z};
   }
 
   private updateCamera(dt: number) {
