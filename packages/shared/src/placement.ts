@@ -1,21 +1,11 @@
-import { terrainHeight as groundHeight } from './terrain.js';
-import { BUILDING_SIZE, WORLD, INTERACTION, TERRAIN_MAX_SLOPE, type BuildKind } from './constants.js';
+import { gridFootprintFree } from './occupancy-grid.js';
+import { terrainFootprintWalkable } from './terrain.js';
+import { BUILDING_SIZE, INTERACTION, type BuildKind } from './constants.js';
 import { worldToTile, type GameMap } from './mapgen.js';
 import { unitRadius } from './navigation.js';
 import { insidePlayableBoundary } from './map-boundary.js';
+import { rockIntersectsBox } from './rock-collision.js';
 import type { Building, ResourceNode, Unit } from './types.js';
-
-/** Encosta íngreme demais para assentar construção (o construtor não chegaria). */
-function tooSteep(map: GameMap, x: number, z: number): boolean {
-  const step = WORLD.tileSize;
-  const h0 = groundHeight(map, x, z);
-  return Math.max(
-    Math.abs(groundHeight(map, x + step, z) - h0),
-    Math.abs(groundHeight(map, x - step, z) - h0),
-    Math.abs(groundHeight(map, x, z + step) - h0),
-    Math.abs(groundHeight(map, x, z - step) - h0),
-  ) / step > TERRAIN_MAX_SLOPE;
-}
 
 // Aceita tanto o estado autoritativo quanto o snapshot recebido pelo cliente.
 interface PlacementState {
@@ -29,17 +19,18 @@ export function canPlaceBuilding(map: GameMap, state: PlacementState, kind: Buil
   if (!Number.isFinite(half) || !Number.isFinite(x) || !Number.isFinite(z) ||
       !insidePlayableBoundary(map,x,z,half)) return false;
   // Encostas íngremes não recebem construção (ninguém chegaria para construir).
-  if (tooSteep(map, x, z)) return false;
+  if (!gridFootprintFree(map, x, z, half)) return false;
 
   // Verifica toda a área, inclusive água entre os cantos da construção.
-  for (let tx = worldToTile(x - half); tx <= worldToTile(x + half); tx++) {
-    for (let tz = worldToTile(z - half); tz <= worldToTile(z + half); tz++) {
+  for (let tx = worldToTile(x - half + 1e-7); tx <= worldToTile(x + half - 1e-7); tx++) {
+    for (let tz = worldToTile(z - half + 1e-7); tz <= worldToTile(z + half - 1e-7); tz++) {
       if (tx < 0 || tz < 0 || tx >= map.tiles || tz >= map.tiles || map.water[tz * map.tiles + tx] === 1 || map.bridge[tz * map.tiles + tx] === 1) return false;
     }
   }
   for (const obstacle of [...map.obstacles, ...(map.treeObstacles ?? [])]) {
     if (Math.abs(obstacle.x - x) < obstacle.width / 2 + half && Math.abs(obstacle.z - z) < obstacle.depth / 2 + half) return false;
   }
+  if (map.rockObstacles?.some(rock=>rockIntersectsBox(rock,x,z,half))) return false;
   for (const b of state.buildings) {
     const bh = BUILDING_SIZE[b.kind] / 2;
     if (Math.abs(b.x - x) < bh + half && Math.abs(b.z - z) < bh + half) return false;

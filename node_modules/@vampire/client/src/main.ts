@@ -6,7 +6,6 @@ import { Net } from './net.js';
 import { Lobby } from './lobby.js';
 import { assetRegistry } from './assets/asset-registry.js';
 import { LoadingScreen } from './loading.js';
-import { startCliffTest } from './cliff-test.js';
 import { startMapBuilder } from './map-builder.js';
 import { startMatchMusic } from './music.js';
 import { installCursors } from './cursor.js';
@@ -23,9 +22,6 @@ const app = document.getElementById('app')!;
 if (new URLSearchParams(location.search).has('builder')) {
   // Editor de mapa 3D (rota secreta, com senha via MAP_BUILDER_PASSWORD).
   void startMapBuilder(app);
-} else if (new URLSearchParams(location.search).has('cliffTest')) {
-  // Área de teste dos módulos de cliff (?cliffTest=1): não sobe sala nem partida.
-  void startCliffTest(app);
 } else {
   const net = new Net();
   const lobby = new Lobby(app, net);

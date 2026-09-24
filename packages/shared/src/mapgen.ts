@@ -1,5 +1,7 @@
 import { buildHollowsMap } from './hollows.js';
 import { normalizeTreeProps, treeObstacles } from './tree-footprint.js';
+import { rockObstacles, type RockCollider } from './rock-collision.js';
+import { clearRampObstacles } from './terrain.js';
 import { DEFAULT_MAP_BOUNDARY, type BoundaryPoint } from './map-boundary.js';
 import { snapBuildingCoordinate, type BuildKind } from './constants.js';
 // Geração de mapa: cada preset (`MapPresetConfig`) vira um `MapModel` com todo o
@@ -73,6 +75,9 @@ const OUTLINES: ReadonlyArray<ReadonlyArray<readonly [number, number]>> = [
 import { FLAT_GROUND_HEIGHT, withClearedTerrain } from './map-clearance.js';
 
 export interface GameMap {
+  ramps?: import('./terrain.js').TerrainRamp[];
+  rockObstacles?: RockCollider[];
+  propObstacles?: RockCollider[];
   playableMargin?: number;
   boundary?: readonly BoundaryPoint[];
   treeObstacles?: MapObstacle[];
@@ -1226,12 +1231,12 @@ export interface MapOverlay {
 }
 
 export type OverlayPropKind =
-  | 'cliff:straight' | 'cliff:outerCorner' | 'cliff:innerCorner' | 'cliff:stairs'
   | 'tree' | 'rock'
   | 'building:bank' | 'building:taverna' | 'building:wall'
-  | 'building:tower' | 'building:market' | 'building:keep' | 'building:crypt' | 'building:goldMine';
+  | 'building:tower' | 'building:market' | 'building:crypt' | 'building:goldMine';
 
 export interface OverlayProp {
+  footprint?: RockCollider;
   kind: OverlayPropKind;
   x: number;
   z: number;
@@ -1249,11 +1254,12 @@ export function normalizeOverlay(value: Partial<MapOverlay> | null | undefined):
     removes: Array.isArray(value?.removes) ? value.removes.map(Number).filter(Number.isInteger) : [],
     props: Array.isArray(value?.props)
       ? normalizeTreeProps(value.props
-        .filter((p) => p && typeof p.kind === 'string' && Number.isFinite(p.x) && Number.isFinite(p.z))
+        .filter((p) => p && typeof p.kind === 'string' && !p.kind.startsWith('cliff:') && String(p.kind) !== 'building:keep' && Number.isFinite(p.x) && Number.isFinite(p.z))
         .map((p) => {
           const kind=p.kind.slice('building:'.length) as BuildKind | 'crypt';
           const building=p.kind.startsWith('building:') && Object.hasOwn(BUILDING_SIZE,kind);
           return { kind:p.kind as OverlayPropKind,
+            footprint:building ? {x:snapBuildingCoordinate(p.x,kind),z:snapBuildingCoordinate(p.z,kind),width:BUILDING_SIZE[kind],depth:BUILDING_SIZE[kind],rotation:0} : p.footprint && [p.footprint.x,p.footprint.z,p.footprint.width,p.footprint.depth,p.footprint.rotation].every(Number.isFinite) ? p.footprint : undefined,
             x:building ? snapBuildingCoordinate(p.x,kind) : Number(p.x),
             z:building ? snapBuildingCoordinate(p.z,kind) : Number(p.z),
             rotY:building ? Math.round(Number(p.rotY ?? 0)/(Math.PI/2))*Math.PI/2 : Number(p.rotY ?? 0),
@@ -1317,9 +1323,15 @@ export function getMapModel(id: MapPresetId = DEFAULT_MAP_ID): MapModel {
   const model = withClearedTerrain(baseId === 'flat' ? buildFlatMap(id, cfg) : baseId === 'hollows' ? buildHollowsMap(cfg, getMapOverlay(id)) : buildMapModel(id, cfg), getMapOverlay(id));
   model.id = id;
   const generate = model.generateMap;
-  model.generateMap = () => ({ ...generate(), id, boundary: cfg.boundary ?? DEFAULT_MAP_BOUNDARY,
+  model.generateMap = () => {
+    const map = { ...generate(), id, boundary: cfg.boundary ?? DEFAULT_MAP_BOUNDARY,
     playableMargin: cfg.playableMargin ?? GAME_CONFIG.camera.playableMargin,
-    treeObstacles: treeObstacles(getMapOverlay(id)?.props ?? []) });
+    treeObstacles: treeObstacles(getMapOverlay(id)?.props ?? []),
+    propObstacles: (getMapOverlay(id)?.props ?? []).filter(p=>p.kind!=='tree' && p.kind!=='rock' && p.footprint).map(p=>p.footprint!),
+    rockObstacles: rockObstacles(getMapOverlay(id)?.props ?? []) };
+    clearRampObstacles(map,model.stairs ?? getMapOverlay(id)?.stairs ?? []);
+    return map;
+  };
   MODEL_CACHE.set(id, model);
   return model;
 }

@@ -1,12 +1,12 @@
 import { BUILD_TILE_SIZE, WORLD } from './constants.js';
 
-export const TREE_SIZE = 2 * BUILD_TILE_SIZE;
+export const TREE_SIZE = BUILD_TILE_SIZE;
 
-/** Center on a grid intersection: exactly four construction tiles. */
+/** One global cell, independent of visual scale and rotation. */
 export function treeFootprint(x: number, z: number) {
-  const tx = Math.round(x / BUILD_TILE_SIZE), tz = Math.round(z / BUILD_TILE_SIZE);
-  return { x: tx * BUILD_TILE_SIZE, z: tz * BUILD_TILE_SIZE, key: `${tx},${tz}`,
-    cells: [`${tx-1},${tz-1}`, `${tx},${tz-1}`, `${tx-1},${tz}`, `${tx},${tz}`] };
+  const tx=Math.floor((x+WORLD.half)/BUILD_TILE_SIZE),tz=Math.floor((z+WORLD.half)/BUILD_TILE_SIZE);
+  return {x:(tx+0.5)*BUILD_TILE_SIZE-WORLD.half,z:(tz+0.5)*BUILD_TILE_SIZE-WORLD.half,
+    key:`${tx},${tz}`,cells:[`${tx},${tz}`]};
 }
 
 export class TreeOccupancy {

@@ -1,5 +1,6 @@
+import { invalidateOccupancyGrid, gridCellFree } from '@vampire/shared';
 import { BUILDING_SIZE, BUILD_TILE_SIZE, buildingTiles, snapBuildingCoordinate, MAP_PRESETS, type BuildingKind, type BuildKind, type MapPresetId } from '@vampire/shared';
-import { RELIEF_STEP, FLAT_GROUND_HEIGHT, clearGroundCells, withClearedTerrain, clearedAreaIntersects, carveTerrainStair, type TerrainStair } from '@vampire/shared';
+import { RELIEF_STEP, FLAT_GROUND_HEIGHT, clearGroundCells, withClearedTerrain, clearedAreaIntersects, type TerrainRamp } from '@vampire/shared';
 // Editor de mapa 3D (estilo World Editor), acessível por ?builder=1.
 // Reutiliza a cena real do jogo (terreno, luzes) e permite escolher um prop da
 // paleta, colocar no terreno, selecionar, arrastar, girar, escalar e remover.
@@ -17,8 +18,9 @@ import { createBuildingModel } from './models.js';
 import { loadMapCatalog } from './map-catalog.js';
 import { TreeOccupancy, treeFootprint, treeObstacles, TREE_SIZE } from '@vampire/shared';
 import { insideMapBoundary, insidePlayableBoundary, playableMargin } from '@vampire/shared';
-import { extendTerrainRelief } from '@vampire/shared';
-import { brushPolicy, brushAnchor, brushSegment, moduleAnchor, footprintsOverlap, type PropFootprint } from './builder-brush.js';
+import { reliefBrushArea, planReliefRaise, planReliefLower, RAMP_WIDTH_TILES, planTerrainRamp, clearRampObstacles, rampPaint } from '@vampire/shared';
+import { rockObstacles } from '@vampire/shared';
+import { footprintCells, brushPolicy, brushAnchor, brushSegment, footprintsOverlap, type PropFootprint } from './builder-brush.js';
 
 interface Placed { kind: OverlayPropKind; x: number; z: number; rotY: number; scale: number; holder?: THREE.Group; mesh?: 'tree' | 'rock'; index?: number }
 
@@ -32,7 +34,7 @@ const PALETTE: Array<{ group: string; items: Array<{ id: string; label: string }
       { id: 'terrain:raise', label: 'Subir relevo' },
       { id: 'terrain:lower', label: 'Descer relevo' },
       { id: 'terrain:flatten', label: 'Planificar e limpar' },
-      { id: 'terrain:stairs', label: 'Escada' },
+      { id: 'terrain:ramp', label: 'Rampa' },
     ],
   },
   {
@@ -40,14 +42,6 @@ const PALETTE: Array<{ group: string; items: Array<{ id: string; label: string }
     items: [
       { id: 'paint:path', label: 'Caminho (pedra)' },
       { id: 'paint:grass', label: 'Grama' },
-    ],
-  },
-  {
-    group: 'Cliffs',
-    items: [
-      { id: 'cliff:straight', label: 'Reto' },
-      { id: 'cliff:outerCorner', label: 'Canto externo' },
-      { id: 'cliff:innerCorner', label: 'Canto interno' },
     ],
   },
   {
@@ -65,7 +59,6 @@ const PALETTE: Array<{ group: string; items: Array<{ id: string; label: string }
       { id: 'building:wall', label: 'Muro' },
       { id: 'building:tower', label: 'Torre' },
       { id: 'building:market', label: 'Mercado' },
-      { id: 'building:keep', label: 'Fortaleza' },
       { id: 'building:crypt', label: 'Cripta' },
       { id: 'building:goldMine', label: 'Mina' },
     ],
@@ -73,9 +66,6 @@ const PALETTE: Array<{ group: string; items: Array<{ id: string; label: string }
 ];
 
 function makePropModel(kind: OverlayPropKind): THREE.Object3D | null {
-  if (kind.startsWith('cliff:')) {
-    return assetRegistry.cliffModule(kind.slice('cliff:'.length) as 'straight' | 'outerCorner' | 'innerCorner' | 'stairs');
-  }
   if (kind === 'tree') return assetRegistry.propModel('prop:tree:evergreen');
   if (kind === 'rock') return assetRegistry.propModel('prop:rock:stone-cluster');
   if (kind.startsWith('building:')) {
@@ -99,7 +89,6 @@ export async function startMapBuilder(container: HTMLElement) {
   container.innerHTML = '';
   const loading = new LoadingScreen(container);
   await assetRegistry.preload((p) => loading.setProgress(p));
-  await assetRegistry.loadCliffModules();
   await loading.finish();
   console.log('[builder] assets prontos');
 
@@ -160,6 +149,9 @@ export async function startMapBuilder(container: HTMLElement) {
   const syncTreeGrid = () => {
     if (!treeGridDirty) return;
     world.map.treeObstacles = treeObstacles(placed);
+    world.map.rockObstacles = rockObstacles(placed);
+    world.map.propObstacles = placed.filter(p=>p.kind!=='tree' && p.kind!=='rock').map(propFootprint);
+    invalidateOccupancyGrid(world.map);
     treeGridDirty = false;
   };
   const overlapsTree = (kind: BuildingKind, x: number, z: number) => {
@@ -175,25 +167,40 @@ export async function startMapBuilder(container: HTMLElement) {
   let terrainDirty = false;
   let strokeHeight: number | null = null;
   let reliefOccupied = new Set(overlay.reliefOccupied ?? []);
-  let stairs: TerrainStair[] = [...(world.model.stairs ?? overlay.stairs ?? [])];
+  let stairs: TerrainRamp[] = [...(world.model.stairs ?? overlay.stairs ?? [])];
   const n = world.map.tiles;
   const paintGrid = new Uint8Array(n * n);
   const overlayPaint = overlay.paint ?? world.model.paint;
   if (overlayPaint) for (let i = 0; i < n * n && i < overlayPaint.length; i++) paintGrid[i] = overlayPaint[i] ?? 0;
+  if(stairs.length) paintGrid.set(rampPaint(paintGrid,stairs));
 
   const selectionBox = new THREE.Box3Helper(new THREE.Box3(), 0xffd166);
   selectionBox.visible = false;
   world.scene.add(selectionBox);
 
   // Cursor de pincel: mostra exatamente os quadrados que serão afetados.
-  const hover = new THREE.Mesh(
-    new THREE.PlaneGeometry(1, 1),
-    new THREE.MeshBasicMaterial({ color: 0xffd166, wireframe: true, transparent: true, opacity: 0.8, depthTest: false }),
-  );
-  hover.rotation.x = -Math.PI / 2;
-  hover.visible = false;
-  hover.renderOrder = 999;
-  world.scene.add(hover);
+  const hover = new THREE.LineSegments(new THREE.BufferGeometry(),
+    new THREE.LineBasicMaterial({color:0xffd166,transparent:true,opacity:0.9,depthTest:false}));
+  hover.visible=false;hover.renderOrder=999;world.scene.add(hover);
+  const previewCells=(cells:Array<{x:number;z:number}>,valid=true)=>{
+    const vertices:number[]=[],edges=new Set<string>(),ts=WORLD.tileSize;
+    for(const {x,z} of cells) {
+      if(x<0 || z<0 || x>=n-1 || z>=n-1)continue;
+      for(const [ax,az,bx,bz] of [[x,z,x+1,z],[x,z+1,x+1,z+1],[x,z,x,z+1],[x+1,z,x+1,z+1]]) {
+        const key=`${ax},${az}:${bx},${bz}`;if(edges.has(key))continue;edges.add(key);
+        for(const [tx,tz] of [[ax!,az!],[bx!,bz!]]) {
+          const wx=tx!*ts-WORLD.half,wz=tz!*ts-WORLD.half;
+          vertices.push(wx,world.heightAt(wx,wz)+0.13,wz);
+        }
+      }
+    }
+    hover.geometry.dispose();hover.geometry=new THREE.BufferGeometry();
+    hover.geometry.setAttribute('position',new THREE.Float32BufferAttribute(vertices,3));
+    hover.material.color.setHex(valid?0xffd166:0xff5555);hover.visible=vertices.length>0;
+    world.setBuildFootprint(null,null,false);
+  };
+  const previewArea=(x:number,z:number,size:number,valid=true)=>previewCells(
+    Array.from({length:size*size},(_,i)=>({x:x+i%size,z:z+Math.floor(i/size)})),valid);
   const guides = new EditorGuides(world);
   world.setEditorGridVisible(true);
   world.invalidateEditorBuildGrid();
@@ -218,36 +225,29 @@ export async function startMapBuilder(container: HTMLElement) {
   const paintTerrain = (point: THREE.Vector3) => {
     const [tx, tz] = tileAt(point);
     if (tx < 0 || tz < 0 || tx >= n || tz >= n) return;
-    if (strokeHeight === null) {
-      const height = world.map.height[tz*n+tx] ?? 0;
-      strokeHeight = Math.max(0, Math.min(1.2, height + (brush === 'terrain:raise' ? RELIEF_STEP : -RELIEF_STEP)));
+    if(brush==='terrain:raise' || brush==='terrain:lower') {
+      const plan=reliefPlan(tx,tz);
+      if(!plan) return;
+      strokeHeight=plan.height;
+      let changed=false;
+      for(const i of plan.vertices) {
+        if(brush==='terrain:raise' && reliefOccupied.has(i)) continue;
+        if(Math.abs(world.map.height[i]!-plan.height)<1e-6) continue;
+        world.map.height[i]=plan.height;
+        if(brush==='terrain:lower') reliefOccupied.delete(i); else reliefOccupied.add(i);
+        changed=true;
+      }
+      if(changed) { terrainDirty=true; instancesDirty=true; }
+      return;
     }
-    const r = brushSize - 1;
-    const cells:number[]=[];
-    for (let dz = -r; dz <= r + 1; dz++) for (let dx = -r; dx <= r + 1; dx++) {
-      const x = tx + dx, z = tz + dz;
-      if (x < 0 || z < 0 || x >= n || z >= n) continue;
-      if (!insideMapBoundary(world.map,x*WORLD.tileSize-WORLD.half,z*WORLD.tileSize-WORLD.half)) continue;
-      const i = z * n + x;
-      if (world.map.water[i] || world.map.bridge[i]) continue;
-      const wx=x*WORLD.tileSize-WORLD.half,wz=z*WORLD.tileSize-WORLD.half;
-      // Authored stairs and cliff modules remain intact when a path touches them.
-      if(stairs.some(s=>{const f=stairFootprint(s); return Math.abs(wx-f.x)<=f.width/2+WORLD.tileSize && Math.abs(wz-f.z)<=f.depth/2+WORLD.tileSize;})) continue;
-      if(placed.some(p=>p.kind.startsWith('cliff:') && footprintsOverlap({x:wx,z:wz,width:WORLD.tileSize,depth:WORLD.tileSize,rotation:0},propFootprint(p)))) continue;
-      cells.push(i);
-    }
-    cells.sort((a,b)=>Math.hypot(a%n-tx,Math.floor(a/n)-tz)-Math.hypot(b%n-tx,Math.floor(b/n)-tz));
-    const result=extendTerrainRelief(world.map.height,reliefOccupied,cells,strokeHeight,n);
-    strokeHeight=result.height;
-    if (result.changed) { terrainDirty = true; instancesDirty = true; }
   };
 
   // Piso por quadrados: 1 = caminho (pedra), 2 = grama, 0 = automático.
   const paintTiles = (point: THREE.Vector3, value: number) => {
     const [tx, tz] = tileAt(point);
-    const r = brushSize - 1;
-    for (let dz = -r; dz <= r; dz++) for (let dx = -r; dx <= r; dx++) {
-      const x = tx + dx, z = tz + dz;
+    const area=reliefBrushArea(tx,tz,brushSize);
+    for (let dz=0;dz<area.size;dz++) for (let dx=0;dx<area.size;dx++) {
+      const x=area.x+dx,z=area.z+dz;
       if (x < 0 || z < 0 || x >= n || z >= n) continue;
       if (!insideMapBoundary(world.map,(x+0.5)*WORLD.tileSize-WORLD.half,(z+0.5)*WORLD.tileSize-WORLD.half,WORLD.tileSize/2)) continue;
       paintGrid[z * n + x] = value;
@@ -283,15 +283,21 @@ export async function startMapBuilder(container: HTMLElement) {
     footprintCache.set(data,{key,footprint});
     return footprint;
   };
-  const stairFootprint = (s:TerrainStair):PropFootprint => ({x:s.x+s.dx*s.length/2,z:s.z+s.dz*s.length/2,
+  const stairFootprint = (s:TerrainRamp):PropFootprint => ({x:s.x+s.dx*s.length/2,z:s.z+s.dz*s.length/2,
     width:s.dx ? s.length : s.width,depth:s.dz ? s.length : s.width,rotation:0});
-  const placementAnchor = (kind:string,x:number,z:number,scale?:number,rotY?:number) => {
-    if(!kind.startsWith('cliff:')) return brushAnchor(kind,x,z);
-    const footprint=propFootprint({kind:kind as OverlayPropKind,x:0,z:0,
-      scale:scale ?? readBrushSetting(ui.propScaleInput,1,0.2,6),
-      rotY:rotY ?? readBrushSetting(ui.propRotationInput,0,0,360)*Math.PI/180});
-    return moduleAnchor(x,z,footprint);
+  const reliefPlan = (tx:number,tz:number) => {
+    const area=reliefBrushArea(tx,tz,brushSize),ts=WORLD.tileSize;
+    if(!insideMapBoundary(world.map,(area.x+area.size/2)*ts-WORLD.half,
+      (area.z+area.size/2)*ts-WORLD.half,area.size*ts/2)) return null;
+    const canEdit=(i:number)=>{
+      const x=(i%n)*ts-WORLD.half,z=Math.floor(i/n)*ts-WORLD.half;
+      if(stairs.some(s=>{const f=stairFootprint(s);return Math.abs(x-f.x)<=f.width/2+ts && Math.abs(z-f.z)<=f.depth/2+ts;})) return false;
+      return true;
+    };
+    return brush==='terrain:lower' ? planReliefLower(world.map,tx,tz,brushSize,strokeHeight,canEdit) :
+      planReliefRaise(world.map,reliefOccupied,tx,tz,brushSize,strokeHeight,canEdit);
   };
+  const placementAnchor = (kind:string,x:number,z:number,_scale?:number,_rotY?:number) => brushAnchor(kind,x,z);
   const propInsideBoundary = (data: Pick<Placed,'kind'|'x'|'z'|'scale'|'rotY'>): boolean => {
     if (data.kind === 'tree') return insideMapBoundary(world.map,data.x,data.z,TREE_SIZE/2);
     if (data.kind.startsWith('building:')) return insidePlayableBoundary(world.map,data.x,data.z,BUILDING_SIZE[data.kind.slice(9) as BuildingKind]/2);
@@ -311,20 +317,18 @@ export async function startMapBuilder(container: HTMLElement) {
   const validPropPlacement = (data:PropData, ignore?:Placed):boolean => {
     if(!propInsideBoundary(data)) return false;
     const footprint=propFootprint(data);
-    if(data.kind.startsWith('cliff:')) {
-      for(const vertex of reliefOccupied) {
-        if(footprintsOverlap(footprint,{x:(vertex%n)*WORLD.tileSize-WORLD.half,z:Math.floor(vertex/n)*WORLD.tileSize-WORLD.half,
-          width:WORLD.tileSize,depth:WORLD.tileSize,rotation:0})) return false;
-      }
-    }
     if(placed.some(item=>item!==ignore && footprintsOverlap(footprint,propFootprint(item)))) return false;
     if(clearanceDirty) syncClearance();
     if(world.map.obstacles.some(obstacle=>footprintsOverlap(footprint,{...obstacle,rotation:0}))) return false;
-    if(stairs.some(stair=>footprintsOverlap(footprint,stairFootprint(stair)))) return false;
+    const others=placed.filter(p=>p!==ignore);
+    const placementMap={...world.map,treeObstacles:treeObstacles(others),rockObstacles:rockObstacles(others),
+      propObstacles:others.filter(p=>p.kind!=='tree' && p.kind!=='rock').map(propFootprint)};
+    if(!footprintCells(footprint).every(cell=>gridCellFree(placementMap,cell.x,cell.z))) return false;
+    if(!data.kind.startsWith('building:') && stairs.some(stair=>footprintsOverlap(footprint,stairFootprint(stair)))) return false;
     if(data.kind.startsWith('building:')) {
       if(clearanceDirty) syncClearance();
       syncTreeGrid();
-      if(!world.editorCanBuild(data.kind.slice(9) as BuildKind,data.x,data.z)) return false;
+      if(!world.editorCanBuild(data.kind.slice(9) as BuildKind,data.x,data.z,placementMap)) return false;
     }
     return true;
   };
@@ -347,6 +351,7 @@ export async function startMapBuilder(container: HTMLElement) {
       // Em massa (a decoração importada pode ter milhares): renderizado instanciado.
       const item: Placed = { ...data, mesh: data.kind as 'tree' | 'rock', index: placed.length };
       placed.push(item);
+      treesChanged();
       instancesDirty = true;
       return item;
     }
@@ -363,6 +368,7 @@ export async function startMapBuilder(container: HTMLElement) {
     const item: Placed = { ...data, holder };
     holder.userData.placed = item;
     placed.push(item);
+    treesChanged();
     return item;
   };
 
@@ -433,6 +439,7 @@ export async function startMapBuilder(container: HTMLElement) {
   const syncClearance = () => {
     world.model = withClearedTerrain(initialModel, {...overlay, cleared: [...cleared]});
     world.map.obstacles = world.model.obstacles.map(o => ({...o}));
+    clearRampObstacles(world.map,stairs);
     world.map.water.set(initialWater); world.map.bridge.set(initialBridge); world.map.forest.set(initialForest);
     clearGroundCells(world.map, cleared);
     for (let i=0;i<n*n;i++) if (world.map.bridge[i] && !world.model.isBridgeAtWorld((i%n)*WORLD.tileSize-WORLD.half,Math.floor(i/n)*WORLD.tileSize-WORLD.half)) world.map.bridge[i]=0;
@@ -487,9 +494,9 @@ export async function startMapBuilder(container: HTMLElement) {
   };
 
   const flattenTerrain = (point: THREE.Vector3) => {
-    const [tx,tz] = tileAt(point), r = brushSize-1;
+    const [tx,tz] = tileAt(point), area=reliefBrushArea(tx,tz,brushSize);
     const cells = new Set<number>();
-    for (let z=Math.max(0,tz-r);z<=Math.min(n-1,tz+r);z++) for (let x=Math.max(0,tx-r);x<=Math.min(n-1,tx+r);x++) {
+    for (let z=Math.max(0,area.z);z<Math.min(n,area.z+area.size);z++) for (let x=Math.max(0,area.x);x<Math.min(n,area.x+area.size);x++) {
       if (!insideMapBoundary(world.map,(x+0.5)*WORLD.tileSize-WORLD.half,(z+0.5)*WORLD.tileSize-WORLD.half,WORLD.tileSize/2)) continue;
       const i=z*n+x; cells.add(i); cleared.add(i); paintGrid[i]=2;
       for (let dz=0;dz<=1;dz++) for (let dx=0;dx<=1;dx++) if (x+dx<n && z+dz<n) {
@@ -516,6 +523,7 @@ export async function startMapBuilder(container: HTMLElement) {
       if (!clearedAreaIntersects(cells,center.x,center.z,size.x,size.z)) continue;
       if (selected === item) select(null);
       if (item.kind === 'tree') { treeOccupancy.release(item.x, item.z); treesChanged(); }
+      treesChanged();
       if (item.holder) world.scene.remove(item.holder);
       placed.splice(i,1);
     }
@@ -592,6 +600,18 @@ export async function startMapBuilder(container: HTMLElement) {
   let dragging = false;
   let painting = false;
   const strokeTiles = new Set<string>();
+  let previewProp:{key:string;data:PropData}|null=null;
+  const brushProp=(kind:string,x:number,z:number):PropData=>{
+    const anchor=placementAnchor(kind,x,z),policy=brushPolicy(kind);
+    const scale=policy.scale?readBrushSetting(ui.propScaleInput,1,0.2,6):1;
+    const rotation=Math.round(readBrushSetting(ui.propRotationInput,0,0,360)/policy.rotationStep)*policy.rotationStep;
+    const random=policy.randomize && ui.propVariationInput.checked;
+    const key=`${kind}:${anchor.x},${anchor.z}:${scale}:${rotation}:${random}`;
+    if(previewProp?.key===key)return previewProp.data;
+    const data={kind:kind as OverlayPropKind,x:anchor.x,z:anchor.z,
+      scale:scale*(random?0.9+Math.random()*0.2:1),rotY:(random?Math.random()*360:rotation)*Math.PI/180};
+    previewProp={key,data};return data;
+  };
   const applyBrush = (point: THREE.Vector3) => {
     if (!brush) return;
     if (!insideMapBoundary(world.map,point.x,point.z)) return;
@@ -599,34 +619,41 @@ export async function startMapBuilder(container: HTMLElement) {
     if(strokeTiles.has(anchor.key)) return;
     strokeTiles.add(anchor.key);
     if (!policy.surface) {
-      const baseScale = policy.scale ? readBrushSetting(ui.propScaleInput, 1, 0.2, 6) : 1;
-      let baseRotation = readBrushSetting(ui.propRotationInput, 0, 0, 360);
-      baseRotation=Math.round(baseRotation/policy.rotationStep)*policy.rotationStep;
-      const randomize = policy.randomize && ui.propVariationInput.checked;
-      const item = addPlaced({ kind: brush as OverlayPropKind, x: anchor.x, z: anchor.z,
-        rotY: (baseRotation + (randomize ? (Math.random() * 2 - 1) * 15 : 0)) * Math.PI / 180,
-        scale: baseScale * (randomize ? 0.9 + Math.random() * 0.2 : 1) },true);
-      if (item) select(item);
+      addPlaced(brushProp(brush,point.x,point.z),true);
       return;
     }
     if (brush === 'terrain:flatten') {
       flattenTerrain(point); return;
     }
-    if (brush === 'terrain:stairs') {
+    if (brush === 'terrain:ramp') {
       if (clearanceDirty) syncClearance();
-      const previousHeight=world.map.height.slice();
-      const stair = carveTerrainStair(world.map, point.x, point.z, brushSize);
-      if (!stair) { setStatus('Escada: use uma borda baixa e livre (máximo 4 × 4 tiles).'); return; }
+      syncTreeGrid();
+      const plan = planTerrainRamp(world.map,anchor.x,anchor.z);
+      if(!plan) { setStatus('Rampa: selecione uma borda com espaço livre para 4 tiles de largura e uma subida suave.'); return; }
+      const stair=plan.ramp;
       const footprint=stairFootprint(stair);
+      const corridor={...footprint,width:footprint.width+(stair.dx?WORLD.tileSize*4:0),depth:footprint.depth+(stair.dz?WORLD.tileSize*4:0)};
       if(!insideMapBoundary(world.map,footprint.x,footprint.z,footprint.width/2,footprint.depth/2) ||
-        stairs.some(s=>footprintsOverlap(footprint,stairFootprint(s))) ||
-        placed.some(p=>footprintsOverlap(footprint,propFootprint(p)))) {
-        world.map.height.set(previousHeight); return;
+        stairs.some(s=>footprintsOverlap(corridor,stairFootprint(s))) ||
+        placed.some(p=>p.kind!=='rock' && footprintsOverlap(corridor,propFootprint(p)))) {
+        setStatus('Entrada da rampa ocupada. Escolha uma borda livre.'); return;
+      }
+      for(const [i,height] of plan.changes) {world.map.height[i]=height;reliefOccupied.delete(i);}
+      select(null);
+      for(let i=placed.length-1;i>=0;i--) {
+        const p=placed[i]!;
+        if(p.kind==='rock' && footprintsOverlap(corridor,propFootprint(p))) {
+          if(p.holder) world.scene.remove(p.holder);
+          placed.splice(i,1);
+        }
       }
       stairs.push(stair);
+      clearRampObstacles(world.map,stairs);
+      paintGrid.set(rampPaint(paintGrid,stairs));world.setGroundPaint(paintGrid);
+      treesChanged();
       terrainDirty = true;
       instancesDirty = true;
-      setStatus('Escada criada: passagem compacta entre os dois níveis.');
+      setStatus('Rampa de grama criada: abertura de 4 tiles, sem degraus ou pedras na passagem.');
     }
     else if (brush.startsWith('terrain:')) paintTerrain(point);
     else if (brush.startsWith('paint:')) paintTiles(point, brush === 'paint:path' ? 1 : 2);
@@ -635,7 +662,10 @@ export async function startMapBuilder(container: HTMLElement) {
     if(!brush) return;
     for(const point of brushSegment(brush,a,b)) applyBrush(new THREE.Vector3(point.x,0,point.z));
   };
+  let lastHoverEvent:PointerEvent|null=null;
   const updateHover = (event: PointerEvent) => {
+    lastHoverEvent=event;
+    world.setBuildFootprint(null,null,false);
     syncTreeGrid();
     const p = groundPoint(event);
     if (!p || !insideMapBoundary(world.map,p.x,p.z)) {
@@ -646,29 +676,31 @@ export async function startMapBuilder(container: HTMLElement) {
       hover.visible=false; world.setBuildFootprint(null,null,false);
       ui.spatialStatus.textContent=guides.previewMeasurement(p); return;
     }
-    const snapped={x:snapBuildingCoordinate(p.x,referenceKind),z:snapBuildingCoordinate(p.z,referenceKind)};
-    const valid=world.editorCanBuild(referenceKind,snapped.x,snapped.z);
-    world.setBuildFootprint(gridVisible ? snapped : null,referenceKind,valid);
-    const edge=Math.min(WORLD.half-Math.abs(snapped.x),WORLD.half-Math.abs(snapped.z));
-    ui.spatialStatus.textContent=`X ${snapped.x} · Z ${snapped.z} · Borda a ${(edge/BUILD_TILE_SIZE).toFixed(1)} tiles. ${valid ? 'Cabe aqui' : 'Área bloqueada'}: ${buildingTiles(referenceKind)} × ${buildingTiles(referenceKind)} tiles.`;
-    if (!brush) { hover.visible = false; return; }
+    if(brush==='terrain:raise' || brush==='terrain:lower') {
+      const [tx,tz]=tileAt(p),area=reliefBrushArea(tx,tz,brushSize),plan=reliefPlan(tx,tz);
+      previewArea(area.x,area.z,area.size,Boolean(plan));
+      ui.spatialStatus.textContent=`${brush==='terrain:lower' ? 'Descer' : 'Subir'} relevo: ${area.size}×${area.size} (${area.size**2} tiles). ${plan ? 'Todos os tiles ficam no mesmo nível.' : 'Área bloqueada ou alturas incompatíveis: nenhum tile será alterado.'}`;
+      return;
+    }
+    if(brush==='terrain:ramp') {
+      const anchor=brushAnchor(brush,p.x,p.z),plan=planTerrainRamp(world.map,anchor.x,anchor.z);
+      const ramp=plan?.ramp, footprint=ramp ? stairFootprint(ramp) : {x:anchor.x,z:anchor.z,width:RAMP_WIDTH_TILES*WORLD.tileSize,depth:RAMP_WIDTH_TILES*WORLD.tileSize};
+      previewCells(footprintCells({...footprint,rotation:0}),Boolean(plan));
+      ui.spatialStatus.textContent=plan ? 'Rampa gramada: abertura de 4 tiles, orientação automática.' : 'Selecione uma borda com espaço livre para a rampa e seus acessos.';
+      return;
+    }
+    if (!brush) {hover.visible=false;return;}
     if (!brushPolicy(brush).surface) {
-      const anchor=placementAnchor(brush,p.x,p.z), policy=brushPolicy(brush);
-      const footprint=propFootprint({kind:brush as OverlayPropKind,x:anchor.x,z:anchor.z,
-        scale:policy.scale ? Number(ui.propScaleInput.value)||1 : 1,
-        rotY:Math.round((Number(ui.propRotationInput.value)||0)/policy.rotationStep)*policy.rotationStep*Math.PI/180});
-      hover.position.set(footprint.x, world.heightAt(footprint.x, footprint.z) + 0.2, footprint.z);
-      hover.rotation.z=footprint.rotation;
-      hover.scale.set(footprint.width, footprint.depth, 1);
-      hover.visible = true;
+      const footprint=propFootprint(brushProp(brush,p.x,p.z));
+      const cells=footprintCells(footprint);
+      previewCells(cells,cells.every(c=>gridCellFree(world.map,c.x,c.z)));
+      ui.spatialStatus.textContent=`${cells.length} tiles do grid global selecionados.`;
       return;
     }
     const [tx, tz] = tileAt(p);
-    hover.rotation.z=0;
-    const size = (brushSize * 2 - 1) * WORLD.tileSize;
-    hover.position.set((tx + 0.5) * WORLD.tileSize - WORLD.half, world.heightAt(p.x, p.z) + 0.2, (tz + 0.5) * WORLD.tileSize - WORLD.half);
-    hover.scale.set(size, size, 1);
-    hover.visible = true;
+    const area=reliefBrushArea(tx,tz,brushSize);
+    previewArea(area.x,area.z,area.size);
+
   };
   dom.addEventListener('pointerdown', (event) => {
     if (event.button !== 0) return;
@@ -737,6 +769,7 @@ export async function startMapBuilder(container: HTMLElement) {
     }
     if (!propInsideBoundary({...selected,x:point.x,z:point.z})) return;
     selected.x = point.x; selected.z = point.z;
+    treesChanged();
     if (selected.holder) {
       selected.holder.position.set(point.x, world.heightAt(point.x, point.z), point.z);
       selected.holder.updateMatrixWorld(true);
@@ -746,7 +779,7 @@ export async function startMapBuilder(container: HTMLElement) {
       highlight(selected);
     }
   });
-  dom.addEventListener('pointerleave', () => { hover.visible = false; world.setBuildFootprint(null,null,false); });
+  dom.addEventListener('pointerleave', () => { lastHoverEvent=null; hover.visible = false; world.setBuildFootprint(null,null,false); });
   const endGesture = () => { dragging = false; painting = false; dragPoint=null; strokeHeight = null; strokeTiles.clear(); finishEdit(); };
   window.addEventListener('pointerup', endGesture);
   window.addEventListener('pointercancel', endGesture);
@@ -756,6 +789,7 @@ export async function startMapBuilder(container: HTMLElement) {
     if (!selected) return;
     beginEdit();
     if (selected.kind === 'tree') { treeOccupancy.release(selected.x, selected.z); treesChanged(); }
+    treesChanged();
     if (selected.holder) world.scene.remove(selected.holder);
     placed.splice(placed.indexOf(selected), 1);
     instancesDirty = true;
@@ -769,6 +803,7 @@ export async function startMapBuilder(container: HTMLElement) {
     if (!validPropPlacement({...selected,rotY},selected)) return;
     beginEdit();
     selected.rotY = rotY;
+    treesChanged();
     if (selected.holder) {
       selected.holder.rotation.y = selected.rotY;
       selected.holder.updateMatrixWorld(true);
@@ -783,6 +818,7 @@ export async function startMapBuilder(container: HTMLElement) {
     if (!validPropPlacement({...selected,scale},selected)) return;
     beginEdit();
     selected.scale = scale;
+    treesChanged();
     if (selected.holder) {
       selected.holder.scale.setScalar(selected.scale);
       selected.holder.updateMatrixWorld(true);
@@ -822,6 +858,8 @@ export async function startMapBuilder(container: HTMLElement) {
     pathPoint = null;
     if (measuring) setMeasuring(false);
     brush = kind;
+    world.setEditorTerrainGrid(kind==='terrain:raise' || kind==='terrain:lower');
+    select(null);
     const settings=brushSettings.get(kind ?? '') ?? {scale:'1',rotation:'0',random:true};
     const policy=brushPolicy(kind ?? 'paint:');
     ui.propScaleInput.value=policy.scale ? settings.scale : '1';
@@ -831,12 +869,14 @@ export async function startMapBuilder(container: HTMLElement) {
     ui.propRotationInput.disabled=!kind || !policy.rotation;
     ui.propRotationInput.step=String(policy.rotationStep);
     ui.propVariationInput.disabled=!kind || !policy.randomize;
-    ui.brushInput.disabled=!kind || !policy.surface;
-    ui.brushNote.textContent=policy.surface ? 'Pisos e relevo usam células do terreno e o tamanho do pincel. Escadas só são criadas em bordas válidas, sem sobreposição.' :
+    ui.brushInput.disabled=!kind || !policy.surface || kind==='terrain:ramp';
+    ui.brushInput.title=(kind==='terrain:raise' || kind==='terrain:lower') ? 'Lado do pincel em tiles: 1 = 1×1, 2 = 2×2, 3 = 3×3…' : 'Tamanho do pincel da categoria';
+    ui.brushNote.textContent=kind==='terrain:ramp' ? 'Largura fixa de 4 tiles. Clique na borda; orientação automática e comprimento conforme a altura.' : (kind==='terrain:raise' || kind==='terrain:lower') ? 'Tamanho N = N×N tiles. O preview mostra cada célula. Clique, arraste ou ligue pontos para criar um nível uniforme.' : policy.surface ? 'Pisos e relevo usam células do terreno e o tamanho do pincel.' :
       policy.building ? 'Construções: tamanho fixo, encaixe no grid e rotação em passos de 90°. Sem variação automática.' :
-      kind?.startsWith('cliff:') ? 'Cliffs: encaixe pelas dimensões reais do módulo, escala e rotação manuais. Sem variação automática para preservar o encaixe.' :
-      `Variação: escala ±10% e rotação ±15° da base. ${kind==='tree' ? 'Árvores ocupam sempre 2×2 tiles.' : 'Pedras reservam a área do modelo, considerando escala e rotação.'}`;
-    for (const button of ui.paletteButtons) button.classList.toggle('active', button.dataset.kind === kind);
+      `Variação: escala ±10% e rotação de 0° a 360°. ${kind==='tree' ? 'Árvores ocupam sempre 1×1 tile.' : 'Pedras reservam a área do modelo, considerando escala e rotação.'}`;
+    for (const button of ui.paletteButtons) {
+      const active=button.dataset.kind===kind;button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));
+    }
     ui.root.classList.toggle('placing', kind !== null);
   }
   for (const button of ui.paletteButtons) {
@@ -909,7 +949,12 @@ export async function startMapBuilder(container: HTMLElement) {
     } catch (error) { setStatus(error instanceof Error ? error.message : 'Falha ao excluir o mapa.'); ui.deleteMapBtn.disabled = false; }
   });
   ui.reloadBtn.addEventListener('click', () => location.reload());
-  ui.brushInput.addEventListener('change', () => { brushSize = Math.max(1, Math.min(8, Math.floor(Number(ui.brushInput.value) || 1))); ui.brushInput.value = String(brushSize); });
+  ui.brushInput.addEventListener('change', () => {
+    endGesture(); pathPoint=null;
+    brushSize = Math.max(1, Math.min(8, Math.floor(Number(ui.brushInput.value) || 1))); ui.brushInput.value = String(brushSize);
+    if(lastHoverEvent) updateHover(lastHoverEvent);
+    invalidate();
+  });
   statusEl = ui.status;
   ui.gridStatus.title = `Margem externa de ${playableMargin(world.map)} unidades reservada para a câmera. A borda amarela é física; a linha laranja é o limite jogável. Árvores e decoração podem compor a margem.`;
   setStatus(`${placed.length} props carregados`);
@@ -929,7 +974,7 @@ export async function startMapBuilder(container: HTMLElement) {
       removes: overlay.removes,
       cleared: [...cleared],
       decorReplace: true,
-      props: placed.map((p) => ({ kind: p.kind, x: round(p.x), z: round(p.z), rotY: round(p.rotY, 4), scale: round(p.scale, 3) })),
+      props: placed.map((p) => ({ kind: p.kind, x: round(p.x), z: round(p.z), rotY: round(p.rotY, 4), scale: round(p.scale, 3), footprint: propFootprint(p) })),
       // Relevo esculpido no editor (unidades de mapa, grid completo).
       height: Array.from(world.map.height).map((v) => Math.round(v * 1000) / 1000),
       // Pintura de piso (0 auto / 1 caminho / 2 grama).
@@ -1058,6 +1103,14 @@ function buildUi(): BuilderUi {
     #vxh-builder .palette h4 { margin:8px 0 6px; color:#ffd166; font-size:12px; text-transform:uppercase; letter-spacing:.5px; }
     #vxh-builder .palette button { display:block; width:100%; text-align:left; margin:2px 0; padding:6px 8px; background:#1b2735; color:#dbe4ef; border:1px solid #33465c; border-radius:4px; cursor:pointer; }
     #vxh-builder .palette button.active { border-color:#ffd166; background:#3a3320; }
+    #vxh-builder .terrain-tools { top:12px; left:50%; transform:translateX(-50%); display:flex; gap:4px; padding:6px; z-index:5; max-width:calc(100vw - 24px); }
+    #vxh-builder .terrain-tools button { position:relative; display:grid; place-items:center; width:34px; height:34px; padding:6px; color:#c9d8e8; background:#172435; border:1px solid transparent; border-radius:5px; cursor:pointer; }
+    #vxh-builder .terrain-tools button:hover, #vxh-builder .terrain-tools button:focus-visible { background:#28394e; outline:1px solid #9cb7d4; }
+    #vxh-builder .terrain-tools button.active { color:#ffd166; background:#3a3320; border-color:#ffd166; }
+    #vxh-builder .terrain-tools svg { width:21px; height:21px; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; }
+    #vxh-builder .terrain-tools button::after { content:attr(aria-label); position:absolute; top:42px; left:50%; transform:translateX(-50%); padding:5px 8px; white-space:nowrap; color:#e3edf7; background:#0b1424; border:1px solid #33465c; border-radius:4px; pointer-events:none; visibility:hidden; }
+    #vxh-builder .terrain-tools button:hover::after, #vxh-builder .terrain-tools button:focus-visible::after { visibility:visible; }
+    @media(max-width:1000px) { #vxh-builder .palette, #vxh-builder .hint { top:68px; } }
     #vxh-builder .bar { bottom:12px; left:50%; transform:translateX(-50%); display:flex; gap:8px; align-items:center; padding:8px 10px; }
     #vxh-builder .bar button { padding:6px 10px; background:#26313e; color:#e4d5b6; border:1px solid #55606b; border-radius:4px; cursor:pointer; }
     #vxh-builder .bar button.primary { background:#2e5d3a; border-color:#4f8a5e; color:#eaffea; }
@@ -1138,23 +1191,42 @@ function buildUi(): BuilderUi {
   brushControls.appendChild(selectToolBtn);
   palette.appendChild(brushControls);
   const paletteButtons: HTMLButtonElement[] = [];
+  const terrainTools=document.createElement('div');terrainTools.className='panel terrain-tools';
+  terrainTools.setAttribute('role','toolbar');terrainTools.setAttribute('aria-label','Terreno e natureza');
+  const icons:Record<string,string>={
+    'terrain:raise':'<path d="M3 20h18M5 17V11h14v6M12 13V3m-4 4 4-4 4 4"/>',
+    'terrain:lower':'<path d="M3 20h18M5 17V11h14v6M12 3v10m-4-4 4 4 4-4"/>',
+    'terrain:flatten':'<path d="M3 17h18M6 6v7m-3-3 3 3 3-3m9-4v7m-3-3 3 3 3-3"/>',
+    'terrain:ramp':'<path d="M3 19h18V5L3 19Z"/>',
+    'paint:path':'<path d="M3 3h18v18H3zM3 9h18M3 15h18M9 3v6m6 0v6m-6 0v6"/>',
+    'paint:grass':'<path d="M3 20h18M8 20 5 9l7 11m0 0V4m0 16 7-12-3 12"/>',
+    tree:'<path d="m12 2-6 8h3l-5 7h16l-5-7h3L12 2Zm0 15v5"/>',
+    rock:'<path d="m3 16 3-9 8-3 7 8-3 8H7l-4-4Zm3-9 7 5 8 0m-8 0-6 8"/>',
+  };
   for (const group of PALETTE) {
+    const compact=group.items.every(item=>Boolean(icons[item.id]));
     const title = document.createElement('h4');
     title.textContent = group.group;
-    palette.appendChild(title);
+    if(!compact) palette.appendChild(title);
     for (const item of group.items) {
       const button = document.createElement('button');
       button.textContent = item.label;
       button.dataset.kind = item.id;
-      palette.appendChild(button);
+      button.setAttribute('aria-pressed','false');
+      if(compact) {
+        button.innerHTML=`<svg viewBox="0 0 24 24" aria-hidden="true">${icons[item.id]}</svg>`;
+        button.title=item.label;button.setAttribute('aria-label',item.label);
+        terrainTools.appendChild(button);
+      } else palette.appendChild(button);
       paletteButtons.push(button);
     }
   }
   root.appendChild(palette);
+  root.appendChild(terrainTools);
 
   const hint = document.createElement('div');
   hint.className = 'panel hint';
-  hint.innerHTML = 'Subir/Descer cria um patamar por traço.<br>Planificar: clique e arraste para limpar e deixar grama.<br>Escada: clique numa borda baixa; máximo 4 × 4 tiles.<br>Clique num prop para selecionar e <b>arrastar</b>.<br><b>Ctrl+Z</b> desfaz (até 30 ações).<br><b>R</b> gira, <b>[</b>/<b>]</b> escala, <b>Delete</b> remove.<br>Botão direito gira a câmera; meio move; roda dá zoom.';
+  hint.innerHTML = 'Subir/Descer cria um patamar por traço.<br>Planificar: clique e arraste para limpar e deixar grama.<br>Rampa: clique numa borda; largura fixa de 4 tiles.<br>Clique num prop para selecionar e <b>arrastar</b>.<br><b>Ctrl+Z</b> desfaz (até 30 ações).<br><b>R</b> gira, <b>[</b>/<b>]</b> escala, <b>Delete</b> remove.<br>Botão direito gira a câmera; meio move; roda dá zoom.';
   root.appendChild(hint);
   const guideControls=document.createElement('div'); guideControls.className='guide-controls';
   const checkbox=(text:string) => {
@@ -1165,7 +1237,7 @@ function buildUi(): BuilderUi {
   const guidesInput=checkbox(' Cripta, nascimento e borda');
   const referenceLabel=document.createElement('label'); referenceLabel.textContent='Testar espaço para:';
   const referenceSelect=document.createElement('select'); referenceSelect.setAttribute('aria-label','Construção de referência');
-  for (const [kind,label] of [['wall','Muro'],['tower','Torre'],['bank','Banco'],['keep','Fortaleza']] as const) {
+  for (const [kind,label] of [['wall','Muro'],['tower','Torre'],['bank','Banco']] as const) {
     const option=document.createElement('option'); option.value=kind; option.textContent=`${label} (${buildingTiles(kind)} × ${buildingTiles(kind)})`; referenceSelect.appendChild(option);
   }
   referenceLabel.appendChild(referenceSelect); guideControls.appendChild(referenceLabel);
@@ -1176,7 +1248,7 @@ function buildUi(): BuilderUi {
   const cryptBtn=guideButton('Ver cripta');
   const overviewBtn=guideButton('Ver mapa inteiro');
   const scaleNote=document.createElement('div');
-  scaleNote.textContent=`1 tile de construção = ${BUILD_TILE_SIZE} unidade. Linhas fortes a cada 5 tiles. O pincel de terreno usa células de ${WORLD.tileSize} unidades. Mapa: ${(WORLD.half*2/BUILD_TILE_SIZE).toFixed(1)} tiles por lado.`;
+  scaleNote.textContent=`Grid global: ${WORLD.tileSize} unidades por tile. Mesmo tamanho e alinhamento em todas as ferramentas. Vermelho = tile inteiro bloqueado.`;
   guideControls.appendChild(scaleNote);
   const gridStatus=document.createElement('div'); gridStatus.textContent='Calculando áreas de construção…'; guideControls.appendChild(gridStatus);
   const spatialStatus=document.createElement('div'); spatialStatus.className='spatial-status'; spatialStatus.setAttribute('role','status');

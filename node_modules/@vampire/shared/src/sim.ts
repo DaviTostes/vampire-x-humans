@@ -19,7 +19,6 @@ import {
   TAVERNA,
   BANK,
   RECRUIT,
-  KEEP,
   PEON,
   workerStats,
   GAME_CONFIG,
@@ -124,7 +123,13 @@ export function createSession(
 ): Session {
   const state = createGameState(names, seed, playerIds, daySeconds, nightSeconds, mapId);
   const map = generateMap(mapId); // determinístico — mesmo resultado do client
-  return { state, map, commandSeq: {}, navigation: new Navigation(state, map) };
+  const navigation=new Navigation(state,map);
+  const placed:Unit[]=[];
+  for(const unit of state.units) {
+    if(!navigation.placeSpawn(unit,placed)) throw new Error('O mapa não possui espaço livre para o nascimento das unidades.');
+    placed.push(unit);
+  }
+  return { state, map, commandSeq: {}, navigation };
 }
 
 // ---------- helpers ----------
@@ -488,13 +493,12 @@ export function applyCommand(session: Session, playerId: number, cmd: Command): 
       break;
     }
     case 'move': {
-      if (!insidePlayableBoundary(session.map,cmd.x,cmd.z)) return;
+      if (!Number.isFinite(cmd.x) || !Number.isFinite(cmd.z)) return;
       const units = s.units.filter(u => !u.dead && u.owner === playerId && cmd.ids.includes(u.id));
       const width = Math.ceil(Math.sqrt(units.length));
       for (const [i, u] of units.entries()) {
           const x = cmd.x + (i % width - (width - 1) / 2) * INTERACTION.formationSpacing;
           const z = cmd.z + (Math.floor(i / width) - (Math.ceil(units.length / width) - 1) / 2) * INTERACTION.formationSpacing;
-          if (!insidePlayableBoundary(session.map,x,z,unitRadius(u.kind))) continue;
           u.order = { t: 'move', x, z };
           u.gatherNodeId = null;
       }
@@ -510,6 +514,10 @@ export function applyCommand(session: Session, playerId: number, cmd: Command): 
         if (u && u.owner === playerId && u.kind === 'worker' && canGatherRole(u.workerRole, resource)) {
           u.order = { t: 'gather', targetId: cmd.nodeId };
           u.gatherNodeId = cmd.nodeId;
+        } else if(u && u.owner===playerId && !u.dead) {
+          const target=node??mine!;
+          u.order={t:'move',x:target.x,z:target.z};
+          u.gatherNodeId=null;
         }
       }
       break;
@@ -553,7 +561,6 @@ export function applyCommand(session: Session, playerId: number, cmd: Command): 
         taverna: TAVERNA.hp,
         wall: WALL.hp,
         tower: TOWER.hp,
-        keep: KEEP.hp,
         goldMine: GAME_CONFIG.buildings.goldMine.hp,
         market: GAME_CONFIG.buildings.market.hp,
       };
@@ -589,6 +596,9 @@ export function applyCommand(session: Session, playerId: number, cmd: Command): 
         if (!u.dead && u.owner === playerId && u.kind === 'worker' && cmd.ids.includes(u.id) && canBuildKind(u, site.kind)) {
           u.order = { t: 'build', targetId: site.id };
           u.gatherNodeId = null;
+        } else if(!u.dead && u.owner===playerId && cmd.ids.includes(u.id)) {
+          u.order={t:'move',x:site.x,z:site.z};
+          u.gatherNodeId=null;
         }
       }
       break;

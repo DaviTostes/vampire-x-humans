@@ -37,7 +37,6 @@ export const TOWER = GAME_CONFIG.buildings.tower;
 export const WALL = GAME_CONFIG.buildings.wall;
 export const BANK = GAME_CONFIG.buildings.bank;
 export const TAVERNA = GAME_CONFIG.buildings.taverna;
-export const KEEP = GAME_CONFIG.buildings.keep;
 export const CRYPT = GAME_CONFIG.buildings.crypt;
 export const VAMPIRE_SKILLS = GAME_CONFIG.vampireSkills;
 export const RECRUIT = TAVERNA.recruit;
@@ -82,12 +81,14 @@ export const BUILD_COSTS = Object.fromEntries(
 export const BUILDING_SIZE = Object.fromEntries(
   Object.entries(GAME_CONFIG.buildings).map(([kind, b]) => [kind, b.size]),
 ) as Record<BuildKind | 'crypt', number>;
-/** Construction cells are independent of the saved terrain height grid. */
-export const BUILD_TILE_SIZE = GAME_CONFIG.construction.tileSize;
-export function buildingTiles(kind: BuildKind | 'crypt'): number { return BUILDING_SIZE[kind] / BUILD_TILE_SIZE; }
+/** All footprints use the global terrain grid. */
+export const BUILD_TILE_SIZE = WORLD.tileSize;
+export function unitTiles(kind:string):number { return kind==='vampire'?2:1; }
+export function unitFootprintSize(kind:string):number { return unitTiles(kind)*WORLD.tileSize; }
+export function buildingTiles(kind: BuildKind | 'crypt'): number { return Math.ceil(BUILDING_SIZE[kind] / BUILD_TILE_SIZE); }
 export function snapBuildingCoordinate(value: number, kind: BuildKind | 'crypt'): number {
-  const offset = buildingTiles(kind) % 2 === 0 ? 0 : BUILD_TILE_SIZE / 2;
-  return Math.round((value-offset)/BUILD_TILE_SIZE)*BUILD_TILE_SIZE+offset;
+  const cell=Math.floor((value+WORLD.half)/BUILD_TILE_SIZE);
+  return (cell+(buildingTiles(kind)%2===0?0:0.5))*BUILD_TILE_SIZE-WORLD.half;
 }
 // Níveis máximos e progressões vêm das tabelas da spec.
 export const BUILD_MAX_LEVEL = GAME_CONFIG.spec.bankMaxLevel;

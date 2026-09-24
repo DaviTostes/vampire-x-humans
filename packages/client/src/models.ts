@@ -1,3 +1,4 @@
+import { fitBuildingVisual } from './building-visual.js';
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { BUILDING_SIZE, activeMapModel, type BuildingKind } from '@vampire/shared';
@@ -358,20 +359,7 @@ export function createBuildingModel(kind: BuildingKind, owner: number, done: boo
   const externalAsset = assetRegistry.buildingTemplate(kind, level);
   if (externalAsset) {
     const external = externalAsset.template;
-    // Encaixa a maior extensão horizontal no footprint da construção.
-    external.updateMatrixWorld(true);
-    const raw = new THREE.Box3().setFromObject(external).getSize(new THREE.Vector3());
-    const horizontal = Math.max(raw.x, raw.z);
-    if (horizontal > 1e-6) external.scale.multiplyScalar(BUILDING_SIZE[kind] / horizontal);
-    if (kind === 'crypt') {
-      external.scale.x *= 1.8;
-      external.scale.z *= 1.2;
-    }
-    // Multiplicador específico do asset (ex.: o portão do muro é baixo e estreito).
-    const extraScale = external.userData.buildingScale as number | undefined;
-    if (extraScale && extraScale !== 1) external.scale.y *= extraScale;
-    external.updateMatrixWorld(true);
-    external.position.y -= new THREE.Box3().setFromObject(external).min.y;
+    fitBuildingVisual(external,kind,level);
     g.add(external);
     g.userData.modelSrc = externalAsset.src;
     if (!done) g.traverse(o => { if (o instanceof THREE.Mesh) o.castShadow = false; });
@@ -380,8 +368,6 @@ export function createBuildingModel(kind: BuildingKind, owner: number, done: boo
     g.userData.healthBarHeight = Number.isFinite(bounds.max.y) ? bounds.max.y + 0.5 : 5;
     return g;
   }
-  const size = BUILDING_SIZE[kind];
-  const baseSize = kind === 'crypt' ? 8 : kind === 'wall' ? 2 : kind === 'tower' ? 3 : kind === 'keep' ? 7 : 6;
   const team = PLAYER_COLORS[owner % PLAYER_COLORS.length] ?? PLAYER_COLORS[0]!;
   if (kind === 'wall') {
     // Porteira de paliçada: mantém a abertura baixa por onde passam os Humanos.
@@ -442,7 +428,7 @@ export function createBuildingModel(kind: BuildingKind, owner: number, done: boo
     box(sign, 0.29, 0.3, 0.05, P.gold, -0.05, -0.55, 0.085);
     mesh(sign, new THREE.TorusGeometry(0.09, 0.025, 5, 10), P.gold, 0.15, -0.54, 0.1);
     banner(g, team, 0.55, 0.95, 1.87, 2.5, 1.68);
-  } else if (kind === 'bank' || kind === 'keep') {
+  } else if (kind === 'bank') {
     const w = kind === 'bank' ? 5.65 : 6.65;
     masonry(g, w, 3.35, w);
     timberHall(g, w - 0.2, 1.35, w - 0.2, 0, 0);
@@ -592,11 +578,9 @@ export function createBuildingModel(kind: BuildingKind, owner: number, done: boo
     lantern(g, -1.35, 1.5, 2.15);
   }
   if (!done) g.traverse(o => { if (o instanceof THREE.Mesh) { o.material = material('#96836b'); o.castShadow = false; } });
-  g.scale.set(size / baseSize, 1, size / baseSize);
-  g.updateMatrixWorld(true);
-  const footprint = new THREE.Box3().setFromObject(g).getSize(new THREE.Vector3());
-  const fit = size / Math.max(footprint.x,footprint.z,0.001);
-  g.scale.x *= fit; g.scale.z *= fit;
+  const visual=new THREE.Group();
+  visual.add(...g.children);g.add(visual);
+  fitBuildingVisual(visual,kind,level);
   g.updateMatrixWorld(true);
   g.userData.healthBarHeight = new THREE.Box3().setFromObject(g).max.y + 0.5;
   bake(g); return g;

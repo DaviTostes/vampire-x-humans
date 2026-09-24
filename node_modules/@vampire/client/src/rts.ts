@@ -1,11 +1,10 @@
-import { snapBuildingCoordinate, DEFAULT_MAP_BOUNDARY, insideMapBoundary } from '@vampire/shared';
+import { snapBuildingCoordinate } from '@vampire/shared';
 // Controles RTS: câmera, seleção, ordens, ghost de construção
 
-import * as THREE from 'three';
 import { BUILDING_SIZE, BUILD_COSTS, BUILDABLE, VAMPIRE_PLAYER_ID, SPEC_ENTITY_LIMITS, HUMAN_ABILITIES, VAMPIRE_ABILITIES, canBuildKind, canPlaceBuilding, type BuildKind, type HumanAbilityId, type Snapshot, type VampireAbilityId } from '@vampire/shared';
 import type { GameScene } from './scene.js';
 import type { Net } from './net.js';
-import { RTS_CAMERA } from './camera.js';
+import { CameraController } from './camera-controller.js';
 
 // Atalhos: construção em letras (Q/E/R/T/F) e habilidades em números (1..4),
 // ambos tratados pela HUD, que clica nos botões dos painéis correspondentes.
@@ -17,17 +16,13 @@ export class RtsControls {
   buildMode: BuildKind | null = null;
   abilityMode: HumanAbilityId | null = null;
   vampireAbilityMode: VampireAbilityId | null = null;
-  private ghost: THREE.Mesh | null = null;
   private buildPointer: { clientX: number; clientY: number } | null = null;
   private pointer: { clientX: number; clientY: number } | null = null;
   private buildTarget: { x: number; z: number } | null = null;
   private buildValid = false;
   private dragStart: { x: number; y: number } | null = null;
   private dragBox: HTMLDivElement;
-  private keys = new Set<string>();
-  private camTarget = new THREE.Vector3(0, 0, 0);
-  private zoom: number = RTS_CAMERA.initialZoom;
-  private safeCameraTarget: { x:number; z:number } | null = null;
+  private readonly cameraControl: CameraController;
 
   constructor(
     private scene: GameScene,
@@ -38,6 +33,7 @@ export class RtsControls {
     private onSelectionChanged: () => void,
     private setActingId: (owner: number) => void = () => {},
   ) {
+    this.cameraControl=new CameraController(scene);
     // caixa de seleção
     this.dragBox = document.createElement('div');
     this.dragBox.style.cssText = `
@@ -49,25 +45,16 @@ export class RtsControls {
     window.addEventListener('keydown', (e) => {
       if ((e.target as HTMLElement).matches('input, textarea, select')) return;
       const key = e.key.toLowerCase();
-      this.keys.add(key);
+      if(this.cameraControl.isBlocked()) return;
       if (key === 'escape') { this.cancelBuild(); this.cancelAbility(); this.cancelVampireAbility(); return; }
       if (e.repeat) return;
       // Espaço: foca e seleciona o personagem principal.
       if (e.code === 'Space') { e.preventDefault(); this.focusHero(); return; }
     });
-    window.addEventListener('keyup', (e) => this.keys.delete(e.key.toLowerCase()));
     window.addEventListener('blur', () => {
-      this.keys.clear();
       this.dragStart = null;
       this.dragBox.style.display = 'none';
     });
-    this.scene.renderer.domElement.addEventListener('wheel', (e) => {
-      e.preventDefault();
-      this.zoom = THREE.MathUtils.clamp(
-        this.zoom + e.deltaY * RTS_CAMERA.wheelSensitivity, RTS_CAMERA.minZoom, RTS_CAMERA.maxZoom,
-      );
-    }, { passive: false });
-
     const dom = this.scene.renderer.domElement;
     dom.addEventListener('pointerdown', (e) => this.onDown(e));
     dom.addEventListener('pointermove', (e) => this.onMove(e));
@@ -86,105 +73,7 @@ export class RtsControls {
     dom.addEventListener('contextmenu', (e) => e.preventDefault());
   }
 
-  // ---------- câmera ----------
-
-  /**
-   * Limita o alvo da câmera à parte do mapa que ainda aparece na tela.
-   * Calcula a pegada visível no chão (por eixo) a partir do FOV/zoom, para a
-   * câmera chegar o mais perto possível da borda SEM mostrar o vazio.
-   */
-  private clampTarget() {
-    const dist = RTS_CAMERA.distance * this.zoom;
-    const vf = THREE.MathUtils.degToRad(RTS_CAMERA.fov) / 2;
-    const pitch = Math.atan(RTS_CAMERA.elevation / RTS_CAMERA.depth);
-    const h = dist * RTS_CAMERA.elevation;
-    const near = h / Math.tan(pitch + vf);
-    const farG = h / Math.tan(Math.max(0.02, pitch - vf));
-    const D = dist * RTS_CAMERA.depth;
-    const hf = Math.atan(Math.tan(vf) * this.scene.camera.aspect);
-    // The camera may see the perspective margin, so constrain its viewport to
-    // the physical contour, not to the inset used for units and buildings.
-    const boundary=this.scene.map.boundary ?? DEFAULT_MAP_BOUNDARY;
-    const minX=Math.min(...boundary.map(p=>p.x)), maxX=Math.max(...boundary.map(p=>p.x));
-    const minZ=Math.min(...boundary.map(p=>p.z)), maxZ=Math.max(...boundary.map(p=>p.z));
-    const cap = Math.min(maxX - minX, maxZ - minZ) * 0.5;
-    // Margem de segurança pequena: com a folga do recorte, não corta as bordas.
-    const marginX = Math.min(cap, farG * Math.tan(hf) * 1.05);
-    const marginZback = Math.min(cap, farG - D); // lado oposto à câmera (topo)
-    const marginZfront = Math.min(cap, Math.max(0, D - near)); // lado da câmera (base)
-    const loX = minX + marginX, hiX = maxX - marginX;
-    const loZ = minZ + marginZback, hiZ = maxZ - marginZfront;
-    this.camTarget.x = loX <= hiX ? THREE.MathUtils.clamp(this.camTarget.x, loX, hiX) : (minX + maxX) / 2;
-    this.camTarget.z = loZ <= hiZ ? THREE.MathUtils.clamp(this.camTarget.z, loZ, hiZ) : (minZ + maxZ) / 2;
-    const offsetZ=(marginZfront-marginZback)/2, halfZ=(marginZfront+marginZback)/2;
-    const fits=(x:number,z:number)=>insideMapBoundary(this.scene.map,x,z+offsetZ,marginX,halfZ);
-    if(!fits(this.camTarget.x,this.camTarget.z)) {
-      let safe=this.safeCameraTarget;
-      if(!safe || !fits(safe.x,safe.z)) {
-        safe=null;
-        let best=Infinity;
-        for(let z=loZ;z<=hiZ;z+=10) for(let x=loX;x<=hiX;x+=10) {
-          const distance=(x-this.camTarget.x)**2+(z-this.camTarget.z)**2;
-          if(distance<best && fits(x,z)) { safe={x,z}; best=distance; }
-        }
-      }
-      if(safe) {
-        const dx=this.camTarget.x-safe.x,dz=this.camTarget.z-safe.z;
-        let lo=0,hi=1;
-        for(let i=0;i<20;i++) {
-          const t=(lo+hi)/2;
-          if(fits(safe.x+dx*t,safe.z+dz*t)) lo=t; else hi=t;
-        }
-        this.camTarget.x=safe.x+dx*lo; this.camTarget.z=safe.z+dz*lo;
-      } else if(this.zoom>RTS_CAMERA.minZoom) {
-        this.zoom=Math.max(RTS_CAMERA.minZoom,this.zoom*0.9);
-        this.clampTarget(); return;
-      }
-    }
-    if(fits(this.camTarget.x,this.camTarget.z)) this.safeCameraTarget={x:this.camTarget.x,z:this.camTarget.z};
-  }
-
-  private updateCamera(dt: number) {
-    const speed = RTS_CAMERA.panSpeed * dt * this.zoom;
-    const k = this.keys;
-    if (k.has('w') || k.has('arrowup')) this.camTarget.z -= speed;
-    if (k.has('s') || k.has('arrowdown')) this.camTarget.z += speed;
-    if (k.has('a') || k.has('arrowleft')) this.camTarget.x -= speed;
-    if (k.has('d') || k.has('arrowright')) this.camTarget.x += speed;
-    this.clampTarget();
-    const dist = RTS_CAMERA.distance * this.zoom;
-
-    // A altura do alvo é suavizada: os platôs dos refúgios têm degraus, e
-    // seguir o terreno direto fazia a câmera pular ao cruzar a borda.
-    const groundY = this.scene.heightAt(this.camTarget.x, this.camTarget.z);
-    this.camTarget.y += (groundY - this.camTarget.y) * Math.min(1, dt * RTS_CAMERA.heightSmoothing);
-    const cam = this.scene.camera;
-    const desired = new THREE.Vector3(
-      this.camTarget.x,
-      this.camTarget.y + dist * RTS_CAMERA.elevation,
-      this.camTarget.z + dist * RTS_CAMERA.depth,
-    );
-    cam.position.lerp(desired, Math.min(1, dt * RTS_CAMERA.smoothing));
-    cam.lookAt(this.camTarget);
-    // A sombra acompanha o alvo da câmera para manter a resolução concentrada.
-    this.scene.setShadowFocus(this.camTarget.x, this.camTarget.z);
-  }
-
-  focusOn(x: number, z: number) {
-    this.camTarget.set(x, this.scene.heightAt(x, z), z);
-    this.clampTarget();
-    this.camTarget.y = this.scene.heightAt(this.camTarget.x, this.camTarget.z);
-    // Encaixa a câmera na hora: sem "wobble" de girar o alvo antes da posição
-    // alcançar (o que dava a sensação de shake ao clicar no minimapa).
-    const dist = RTS_CAMERA.distance * this.zoom;
-    const cam = this.scene.camera;
-    cam.position.set(
-      this.camTarget.x,
-      this.camTarget.y + dist * RTS_CAMERA.elevation,
-      this.camTarget.z + dist * RTS_CAMERA.depth,
-    );
-    cam.lookAt(this.camTarget);
-  }
+  focusOn(x:number,z:number) { this.cameraControl.focusOn(x,z); }
 
   /** Seleciona e centraliza o personagem principal (tecla Espaço). */
   focusHero() {
@@ -236,7 +125,7 @@ export class RtsControls {
 
   private onMove(e: PointerEvent) {
     this.pointer = { clientX: e.clientX, clientY: e.clientY };
-    if (this.buildMode && this.ghost) {
+    if (this.buildMode) {
       this.buildPointer = this.pointer;
       this.updateBuildPreview();
     }
@@ -399,7 +288,7 @@ export class RtsControls {
     if (this.selected.length === 0) return;
     const snap = this.getSnap();
     if (!snap) return;
-    const pick = this.scene.pickAt(n.x, n.y);
+    const pick = this.scene.pickAt(n.x, n.y, false);
 
     if (pick.nodeId !== undefined) {
       if (this.getMyId() !== VAMPIRE_PLAYER_ID) {
@@ -442,16 +331,8 @@ export class RtsControls {
           return;
         }
       }
-      // Aproximação pela borda do prédio, em vez de ordenar entrada no centro.
       if (b) {
-        const unit = snap.units.find(u => this.selected.includes(u.id));
-        if (unit) {
-          const h = BUILDING_SIZE[b.kind] / 2 + 2;
-          const dx = unit.x - b.x, dz = unit.z - b.z;
-          const x = Math.abs(dx) > Math.abs(dz) ? b.x + Math.sign(dx || 1) * h : b.x;
-          const z = Math.abs(dx) > Math.abs(dz) ? b.z : b.z + Math.sign(dz || 1) * h;
-          this.net.command({ type: 'move', ids: this.selected, x, z });
-        }
+        this.net.command({type:'move',ids:this.selected,x:b.x,z:b.z});
         return;
       }
     }
@@ -469,18 +350,6 @@ export class RtsControls {
     this.cancelBuild();
     this.buildMode = kind;
     this.scene.setBuildGridVisible(true, kind);
-    const size = BUILDING_SIZE[kind];
-    const geo =
-      kind === 'tower'
-        ? new THREE.CylinderGeometry(size / 2.4, size / 2, 6, 8)
-        : new THREE.BoxGeometry(size, 3, size);
-    this.ghost = new THREE.Mesh(
-      geo,
-      new THREE.MeshBasicMaterial({ color: 0x6ad66a, transparent: true, opacity: 0.45, depthWrite: false, depthTest: false }),
-    );
-    this.ghost.visible = false;
-    this.ghost.renderOrder = 11;
-    this.scene.scene.add(this.ghost);
     // Mostra a prévia imediatamente, na posição atual do cursor (ou no centro).
     const rect = this.scene.renderer.domElement.getBoundingClientRect();
     this.buildPointer = this.pointer ?? { clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 };
@@ -489,14 +358,13 @@ export class RtsControls {
   }
 
   private updateBuildPreview() {
-    if (!this.buildMode || !this.ghost) return;
+    if (!this.buildMode) return;
     const snap = this.getSnap();
     const pointer = this.buildPointer && this.ndc(this.buildPointer);
     const hit = pointer && this.scene.screenToGround(pointer.x, pointer.y);
     this.buildValid = false;
     this.buildTarget = null;
     if (!hit || !snap) {
-      this.ghost.visible = false;
       this.scene.setTowerRange('placement', null);
       this.scene.setBuildFootprint(null, null, false);
       return;
@@ -513,20 +381,11 @@ export class RtsControls {
     this.buildValid = !!me && !snap.result && hasBuilder && !atLimit && me.wood >= cost.wood && me.gold >= cost.gold &&
       canPlaceBuilding(this.scene.map, snap, this.buildMode, x, z);
     const color = this.buildValid ? 0x6ad66a : 0xff4b4b;
-    (this.ghost.material as THREE.MeshBasicMaterial).color.setHex(color);
-    this.ghost.visible = true;
-    this.ghost.position.set(x, this.scene.heightAt(x, z) + (this.buildMode === 'tower' ? 3 : 1.5), z);
     this.scene.setTowerRange('placement', this.buildMode === 'tower' ? this.buildTarget : null, color);
     this.scene.setBuildFootprint(this.buildTarget, this.buildMode, this.buildValid);
   }
 
   cancelBuild() {
-    if (this.ghost) {
-      this.scene.scene.remove(this.ghost);
-      this.ghost.geometry.dispose();
-      (this.ghost.material as THREE.Material).dispose();
-      this.ghost = null;
-    }
     this.buildMode = null;
     this.buildPointer = null;
     this.buildTarget = null;
@@ -650,7 +509,7 @@ export class RtsControls {
         this.onSelectionChanged();
       }
     }
-    this.updateCamera(dt);
+    this.cameraControl.update(dt);
     this.updateBuildPreview();
   }
 }

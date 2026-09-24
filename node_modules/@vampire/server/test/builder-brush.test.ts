@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { WORLD, BUILD_TILE_SIZE, BUILDING_SIZE, snapBuildingCoordinate, TreeOccupancy } from '@vampire/shared';
-import { brushPolicy, brushAnchor, brushSegment, moduleAnchor, footprintsOverlap, type PropFootprint } from '../../client/src/builder-brush.js';
+import { brushPolicy, brushAnchor, brushSegment, footprintCells, footprintsOverlap, type PropFootprint } from '../../client/src/builder-brush.js';
 
-test('categories preserve their own grids and supported transforms', () => {
-  for(const kind of ['paint:grass','paint:path','terrain:raise','terrain:lower','terrain:flatten','terrain:stairs']) {
+test('categories share the global grid and supported transforms', () => {
+  for(const kind of ['paint:grass','paint:path','terrain:raise','terrain:lower','terrain:flatten','terrain:ramp']) {
     const policy=brushPolicy(kind);
     assert.equal(policy.surface,true); assert.equal(policy.randomize,false);
     assert.equal(policy.scale,false); assert.equal(policy.rotation,false);
@@ -13,7 +13,7 @@ test('categories preserve their own grids and supported transforms', () => {
   }
   for(const kind of ['wall','bank','tower'] as const) {
     const policy=brushPolicy(`building:${kind}`), point=brushAnchor(`building:${kind}`,2.1,4.9);
-    assert.equal(point.x,snapBuildingCoordinate(2.1,kind));
+    assert.equal(point.x,snapBuildingCoordinate(3,kind));
     assert.equal(policy.scale,false); assert.equal(policy.randomize,false); assert.equal(policy.rotationStep,90);
   }
   assert.ok(brushPolicy('rock').randomize);
@@ -32,23 +32,23 @@ test('point and fast drag segments cover every floor tile without duplicate stam
   assert.equal(stationary.length,1);
 });
 
-test('repeated connected tree segments retain individual 2x2 reservations', () => {
+test('repeated connected tree segments retain individual 1x1 reservations', () => {
   const grid=new TreeOccupancy(); let count=0;
   for(const [a,b] of [[{x:0,z:0},{x:12,z:0}],[{x:12,z:0},{x:12,z:12}],[{x:12,z:12},{x:12,z:0}]] as const) {
     for(const p of brushSegment('tree',a,b)) if(grid.reserve(p.x,p.z)) count++;
   }
-  assert.equal(count,9);
+  assert.equal(count,13);
 });
 
-test('native cliff modules touch edge to edge at their calibrated dimensions and rotation', () => {
-  for(const rotation of [0,Math.PI/4,Math.PI/2]) {
-    const template={x:0,z:0,width:13.36,depth:6.6,rotation};
-    const a=moduleAnchor(0,0,template);
-    const b=moduleAnchor(13.36*Math.cos(rotation),-13.36*Math.sin(rotation),template);
-    assert.ok(Math.abs(Math.hypot(a.x-b.x,a.z-b.z)-13.36)<1e-8);
-    assert.equal(footprintsOverlap({...template,...a},{...template,...b}),false);
-    assert.ok(footprintsOverlap({...template,...a},{...template,x:b.x*0.9,z:b.z*0.9}));
+test('all tools keep the same anchor throughout a cell and previews use whole cells',()=>{
+  for(const kind of ['tree','rock','cliff:straight','cliff:outerCorner','paint:grass','terrain:raise','terrain:ramp','building:wall']) {
+    const expected=brushAnchor(kind,0.01,0.01);
+    for(const x of [0.01,0.9,1.99])for(const z of [0.01,0.9,1.99])assert.deepEqual(brushAnchor(kind,x,z),expected);
   }
+  const c=WORLD.half/WORLD.tileSize;
+  assert.deepEqual(footprintCells({x:1,z:1,width:2,depth:2,rotation:0}),[{x:c,z:c}]);
+  const rotated=footprintCells({x:1,z:1,width:3,depth:1,rotation:Math.PI/4});
+  assert.ok(rotated.length>1);assert.ok(rotated.every(p=>Number.isInteger(p.x)&&Number.isInteger(p.z)));
 });
 
 test('rock and building footprints reject overlap without applying tree dimensions', () => {

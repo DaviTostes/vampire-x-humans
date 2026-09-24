@@ -1,6 +1,7 @@
+import { gridCellFree, invalidateOccupancyGrid, markGridOccupants } from '@vampire/shared';
 import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { BUILD_TILE_SIZE, buildingTiles, snapBuildingCoordinate, unitRadius, treeFootprint } from '@vampire/shared';
-import { clearedAreaIntersects, terrainHeight, type TerrainStair } from '@vampire/shared';
+import { BUILD_TILE_SIZE, snapBuildingCoordinate, unitRadius } from '@vampire/shared';
+import { clearedAreaIntersects, terrainHeight, rampPaint, type TerrainStair } from '@vampire/shared';
 // Cena three.js: terreno do mapa por seed, entidades, ciclo dia/noite
 
 import * as THREE from 'three';
@@ -52,7 +53,7 @@ function decorHash(x: number, z: number): number {
  */
 const VAMPIRE_OWNER_ID = MAX_HUMANS;
 const UNIT_VISION: Record<string, number> = { worker: 16, vampire: 24 };
-const BUILDING_VISION: Record<string, number> = { wall: 8, tower: 19, bank: 14, taverna: 14, keep: 18 };
+const BUILDING_VISION: Record<string, number> = { wall: 8, tower: 19, bank: 14, taverna: 14 };
 const VISION_SCALE = 1.8;
 
 interface VisionProfile {
@@ -326,7 +327,6 @@ export class GameScene {
   private buildGrid: THREE.Mesh | null = null;
   private buildGridTexture: THREE.DataTexture | null = null;
   private buildGridData: Uint8Array | null = null;
-  private readonly buildGridStaticByKind = new Map<BuildKind, Uint8Array>();
   private buildGridKind: BuildKind | null = null;
   private buildGridMaterial: THREE.ShaderMaterial | null = null;
   private buildGridRes = 0;
@@ -416,7 +416,7 @@ export class GameScene {
     this.scene.add(this.sun.target);
     this.scene.add(new THREE.AmbientLight(0x404060, 0.22));
 
-    this.groundPaintTexture = createPaintTexture(WORLD.tiles, getMapOverlay(this.model.id)?.paint ?? this.model.paint ?? null);
+    this.groundPaintTexture = createPaintTexture(WORLD.tiles, rampPaint(getMapOverlay(this.model.id)?.paint ?? this.model.paint ?? null, this.model.stairs ?? getMapOverlay(this.model.id)?.stairs ?? []));
     this.buildTerrain();
     const existingObjects = new Set(this.scene.children);
     this.buildFixedMap();
@@ -864,11 +864,7 @@ export class GameScene {
     for (const prop of singles) {
       const holder = new THREE.Group();
       holder.userData.overlayProp = true;
-      if (prop.kind.startsWith('cliff:')) {
-        const module = assetRegistry.cliffModule(prop.kind.slice('cliff:'.length) as 'straight' | 'outerCorner' | 'innerCorner' | 'stairs');
-        if (!module) continue;
-        holder.add(module);
-      } else if (prop.kind.startsWith('building:')) {
+      if (prop.kind.startsWith('building:')) {
         holder.add(createBuildingModel(prop.kind.slice('building:'.length) as BuildingKind,0,true));
       } else {
         continue;
@@ -916,6 +912,8 @@ export class GameScene {
   }
 
   refreshTerrainRelief(stairs: TerrainStair[]): void {
+    this.map.ramps=stairs.map(r=>({...r}));
+    invalidateOccupancyGrid(this.map);
     const n = this.map.tiles, geo = this.terrain.geometry;
     const pos = geo.attributes.position as THREE.BufferAttribute;
     for (let z = 0; z <= n; z++) for (let x = 0; x <= n; x++) {
@@ -935,7 +933,6 @@ export class GameScene {
     }
     this.clearTerrainRelief();
     this.buildTerrainRelief(stairs);
-    this.buildGridStaticByKind.clear();
   }
 
   private buildTerrainRelief(stairs = this.model.stairs ?? getMapOverlay(this.model.id)?.stairs ?? []): Set<number> {
@@ -1125,39 +1122,6 @@ export class GameScene {
       color:0x696960, roughness:1, vertexColors:true, transparent:true, depthWrite:false,
     });
     addBatch(skin,skinMaterial,lining.length ? [new THREE.Matrix4()] : []);
-    const steps: THREE.Matrix4[] = [];
-    for (const stair of stairs) {
-      const count=Math.max(1,Math.ceil(stair.length/0.65));
-      const depth=stair.length/count, rise=(stair.high-stair.low)*14/count;
-      const halfTread=Math.max(INTERACTION.vampireUnitRadius+0.65,stair.width/2-0.9);
-      // Individual stone slabs, with shallow joints and buried risers.
-      for (let i=stair.compact ? 0 : -1;i<(stair.compact ? count : count+1);i++) {
-        const distance=(i+0.5)*depth;
-        const y=stair.low*14+Math.max(0,Math.min(count,i+0.5))*rise;
-        for(let slab=0;slab<3;slab++) {
-          const side=(slab-1)*halfTread*2/3;
-          dummy.position.set(stair.x+stair.dx*distance-stair.dz*side,y-0.025,stair.z+stair.dz*distance+stair.dx*side);
-          dummy.rotation.set(0,Math.atan2(stair.dx,stair.dz),0);
-          dummy.scale.set(halfTread*2/3-0.025,i<0||i===count ? 0.1 : rise+0.06,depth+(stair.compact ? 0 : 0.01));
-          dummy.updateMatrix(); steps.push(dummy.matrix.clone());
-        }
-      }
-      // Low stone edging runs into both landings; clear width includes the
-      // vampire radius, and trim stays outside that walking corridor.
-      const trims=Math.ceil(stair.length/0.85);
-      for(let i=stair.compact ? 0 : -1;i<=(stair.compact ? trims : trims+1);i++) for(const sign of [-1,1]) {
-        const inset=stair.compact ? 0.45 : -0.55;
-        const distance=Math.max(inset,Math.min(stair.length-inset,i*stair.length/trims));
-        const side=sign*(halfTread+(stair.compact ? 0.42 : 0.5));
-        const x=stair.x+stair.dx*distance-stair.dz*side,z=stair.z+stair.dz*distance+stair.dx*side;
-        const noise=decorHash(x*7,z*7);
-        const y=stair.low*14+Math.max(0,Math.min(1,distance/stair.length))*(stair.high-stair.low)*14;
-        rock(x,y+0.12,z,0.78+noise*0.06,noise,y+0.45,Math.atan2(stair.dx,stair.dz));
-      }
-    }
-    const treadMaterial=source.material.clone() as THREE.MeshStandardMaterial;
-    treadMaterial.color.setHex(0xb5ac91); treadMaterial.roughness=1;
-    addBatch(new THREE.BoxGeometry(1,1,1),treadMaterial,steps);
     for(const variant of variants) addBatch(variant.geometry,variant.material.clone(),variant.matrices);
     return covered;
   }
@@ -1815,7 +1779,7 @@ export class GameScene {
         uHalf: { value: this.buildGridHalf },
         uWorldSize: { value: this.buildGridHalf * 2 },
         uTileSize: { value: BUILD_TILE_SIZE },
-        uEditor: { value: this.editorMode ? 1 : 0 },
+        uTerrainGrid: { value: 0 },
         uPending: { value: 0 },
         // Pegada da construção sob o cursor (minX, minZ, maxX, maxZ) e estado:
         // 0 = sem pegada, 1 = válida, 2 = inválida.
@@ -1837,10 +1801,10 @@ export class GameScene {
         uniform float uHalf;
         uniform float uWorldSize;
         uniform float uTileSize;
-        uniform float uEditor;
         uniform float uPending;
         uniform vec4 uFootprint;
         uniform float uFootprintState;
+        uniform float uTerrainGrid;
         varying vec2 vWorld;
         void main() {
           vec2 uv = (vWorld + uHalf) / uWorldSize;
@@ -1853,14 +1817,14 @@ export class GameScene {
           // responde se cabe ali (verde) ou não (vermelho).
           if (uFootprintState > 0.5 && vWorld.x >= uFootprint.x && vWorld.x <= uFootprint.z
               && vWorld.y >= uFootprint.y && vWorld.y <= uFootprint.w) {
-            color = uFootprintState > 1.5 ? vec3(1.0, 0.22, 0.24) : vec3(0.34, 0.94, 0.42);
+            color = uFootprintState > 1.5 || blocked > 0.5 ? vec3(1.0, 0.22, 0.24) : vec3(0.34, 0.94, 0.42);
             alpha = 0.5;
           }
           // Linhas nas coordenadas inteiras: o quadrado fecha certinho no prédio.
-          vec2 tiles = vWorld / uTileSize;
+          vec2 tiles = (vWorld + uHalf) / uTileSize;
           vec2 g = abs(fract(tiles + 0.5) - 0.5) / fwidth(tiles);
           float line = 1.0 - min(min(g.x, g.y), 1.0);
-          if (uEditor > 0.5) {
+          {
             // Keep individual tiles readable nearby, without distant shimmer.
             line *= 1.0-smoothstep(0.5,2.0,max(fwidth(tiles.x),fwidth(tiles.y)));
             vec2 major = abs(fract(tiles / 5.0 + 0.5)-0.5) / fwidth(tiles / 5.0);
@@ -1881,87 +1845,17 @@ export class GameScene {
   }
 
   /** Encosta íngreme demais (mesma regra do posicionamento autoritativo). */
-  private tooSteepAt(x: number, z: number): boolean {
-    const map = this.map, n = map.tiles, half = WORLD.half, ts = WORLD.tileSize;
-    const ground = (px: number, pz: number) => terrainHeight(map, px, pz);
-    const step = ts;
-    const h0 = ground(x, z);
-    return Math.max(
-      Math.abs(ground(x + step, z) - h0),
-      Math.abs(ground(x - step, z) - h0),
-      Math.abs(ground(x, z + step) - h0),
-      Math.abs(ground(x, z - step) - h0),
-    ) / step > TERRAIN_MAX_SLOPE;
-  }
-
-  /**
-   * Camada estática exata para a construção: cada célula é avaliada pelo próprio
-   * `canPlaceBuilding` na posição de encaixe (centro da célula). Com todos os
-   * tamanhos ímpares, o encaixe cai sempre no centro, então não há deslocamento.
-   */
-  private staticPlacementGrid(kind: BuildKind): Uint8Array {
-    const cached = this.buildGridStaticByKind.get(kind);
-    if (cached) return cached;
-    const res = this.buildGridRes, worldHalf = this.buildGridHalf;
-    const empty = { buildings: [], nodes: [], units: [] };
-    const grid = new Uint8Array(res * res);
-    for (let iz = 0; iz < res; iz++) {
-      const cz = (iz+0.5)*BUILD_TILE_SIZE - worldHalf;
-      const sz = snapBuildingCoordinate(cz,kind);
-      for (let ix = 0; ix < res; ix++) {
-        const cx = (ix+0.5)*BUILD_TILE_SIZE - worldHalf;
-        const sx = snapBuildingCoordinate(cx,kind);
-        grid[iz * res + ix] = canPlaceBuilding(this.map, empty, kind, sx, sz) ? 1 : 0;
-      }
+  /** Same global cell occupancy as the editor; footprint suitability is separate. */
+  private refreshBuildGrid(snap:Snapshot|null,_kind:BuildKind|null) {
+    const data=this.buildGridData,texture=this.buildGridTexture;
+    if(!data || !texture)return;
+    const n=this.map.tiles;
+    for(let i=0;i<n*n;i++) {
+      const free=gridCellFree(this.map,i%n,Math.floor(i/n))?255:0,pixel=i*4;
+      data[pixel]=data[pixel+1]=data[pixel+2]=free;data[pixel+3]=255;
     }
-    this.buildGridStaticByKind.set(kind, grid);
-    return grid;
-  }
-
-  /** Recalcula os quadrados para a construção selecionada (terreno + entidades). */
-  private refreshBuildGrid(snap: Snapshot | null, kind: BuildKind | null) {
-    const data = this.buildGridData;
-    const texture = this.buildGridTexture;
-    if (!data || !texture) return;
-    const res = this.buildGridRes, worldHalf = this.buildGridHalf;
-    const grid = kind ? this.staticPlacementGrid(kind) : null;
-    for (let i = 0; i < res * res; i++) {
-      const free = grid && grid[i] ? 255 : 0;
-      const o = i * 4;
-      data[o] = free; data[o + 1] = free; data[o + 2] = free; data[o + 3] = 255;
-    }
-    if (kind && snap) {
-      const half = BUILDING_SIZE[kind] / 2;
-      // Célula que representa o encaixe: par = canto (x-0.5), ímpar = centro.
-      const shift = buildingTiles(kind) % 2 === 0 ? BUILD_TILE_SIZE/2 : 0;
-      const mark = (minX: number, maxX: number, minZ: number, maxZ: number) => {
-        const ix0 = Math.max(0, Math.floor((minX + worldHalf - BUILD_TILE_SIZE/2 - shift)/BUILD_TILE_SIZE) + 1);
-        const ix1 = Math.min(res - 1, Math.ceil((maxX + worldHalf - BUILD_TILE_SIZE/2 - shift)/BUILD_TILE_SIZE) - 1);
-        const iz0 = Math.max(0, Math.floor((minZ + worldHalf - BUILD_TILE_SIZE/2 - shift)/BUILD_TILE_SIZE) + 1);
-        const iz1 = Math.min(res - 1, Math.ceil((maxZ + worldHalf - BUILD_TILE_SIZE/2 - shift)/BUILD_TILE_SIZE) - 1);
-        for (let iz = iz0; iz <= iz1; iz++) {
-          for (let ix = ix0; ix <= ix1; ix++) {
-            const o = (iz * res + ix) * 4;
-            data[o] = 0; data[o + 1] = 0; data[o + 2] = 0;
-          }
-        }
-      };
-      const clearance = INTERACTION.resourceBuildClearance;
-      for (const b of snap.buildings) {
-        const e = BUILDING_SIZE[b.kind] / 2 + half;
-        mark(b.x - e, b.x + e, b.z - e, b.z + e);
-      }
-      for (const node of snap.nodes) {
-        if (node.amount <= 0) continue;
-        const e = half + clearance;
-        mark(node.x - e, node.x + e, node.z - e, node.z + e);
-      }
-      for (const u of snap.units) {
-        const unitRange = half + unitRadius(u.kind);
-        mark(u.x - unitRange, u.x + unitRange, u.z - unitRange, u.z + unitRange);
-      }
-    }
-    texture.needsUpdate = true;
+    markGridOccupants(this.map,data,snap??this.editorPlacementState());
+    texture.needsUpdate=true;
   }
 
   /** Liga/desliga a grade de posicionamento (modo de construção). */
@@ -1976,10 +1870,7 @@ export class GameScene {
     const data = this.buildGridData, texture = this.buildGridTexture;
     if (!data || !texture || !this.editorMode) return false;
     const state = this.editorPlacementState();
-    // Tree coloring represents occupied cells, not the larger area where the
-    // reference building would overlap a tree. Placement still checks both.
-    const terrainMap = { ...this.map, treeObstacles: [] };
-    const treeCells = new Set((this.map.treeObstacles ?? []).flatMap(tree => treeFootprint(tree.x, tree.z).cells));
+    invalidateOccupancyGrid(this.map);
     const res = this.buildGridRes;
     const output = new Uint8Array(data.length);
     this.buildGridMaterial!.uniforms.uPending!.value = 1;
@@ -1991,12 +1882,12 @@ export class GameScene {
         budgetStart = performance.now();
       }
       const x=(i%res+0.5)*BUILD_TILE_SIZE-this.buildGridHalf, z=(Math.floor(i/res)+0.5)*BUILD_TILE_SIZE-this.buildGridHalf;
-      const occupiedByTree = treeCells.has(`${Math.floor(x/BUILD_TILE_SIZE)},${Math.floor(z/BUILD_TILE_SIZE)}`);
-      const free=!occupiedByTree && canPlaceBuilding(terrainMap,state,kind,snapBuildingCoordinate(x,kind),snapBuildingCoordinate(z,kind)) ? 255 : 0;
+      const free=gridCellFree(this.map,Math.floor((x+WORLD.half)/WORLD.tileSize),Math.floor((z+WORLD.half)/WORLD.tileSize)) ? 255 : 0;
       const pixel=i*4;
       output[pixel]=free; output[pixel+1]=free; output[pixel+2]=free; output[pixel+3]=255;
     }
     if (generation !== this.editorGridGeneration) return false;
+    markGridOccupants(this.map,output,state);
     data.set(output); texture.needsUpdate = true;
     this.buildGridMaterial!.uniforms.uPending!.value = 0;
     return true;
@@ -2013,12 +1904,19 @@ export class GameScene {
     return state;
   }
 
-  editorCanBuild(kind: BuildKind, x: number, z: number): boolean {
-    return canPlaceBuilding(this.map,this.editorPlacementState(),kind,x,z);
+  editorCanBuild(kind: BuildKind, x: number, z: number, map=this.map): boolean {
+    return canPlaceBuilding(map,this.editorPlacementState(),kind,x,z);
   }
 
   setEditorGridVisible(visible: boolean): void {
     if (this.buildGrid) this.buildGrid.visible = visible;
+  }
+
+  setEditorTerrainGrid(active:boolean):void {
+    if(!this.buildGridMaterial) return;
+    this.buildGridMaterial.uniforms.uTerrainGrid!.value=active?1:0;
+    this.buildGridMaterial.uniforms.uTileSize!.value=WORLD.tileSize;
+    if(active) this.setBuildFootprint(null,null,false);
   }
 
   setBuildGridVisible(visible: boolean, kind?: BuildKind) {
@@ -2085,7 +1983,6 @@ export class GameScene {
       case 'wall': return 4.6;
       case 'tower': return 9.2;
       case 'bank': return 7.8;
-      case 'keep': return 10.2;
       case 'taverna': return 8.2;
       case 'crypt': return 11.5;
       default: return 8;
@@ -2722,7 +2619,7 @@ export class GameScene {
    * desse dono vencer qualquer outra dentro da tolerância — usado no clique para
    * o inimigo colado no alvo não roubar a seleção da unidade própria.
    */
-  unitUnderCursor(nx: number, ny: number, maxPx = 18, preferOwner = -1): number | undefined {
+  unitUnderCursor(nx: number, ny: number, maxPx = 18, preferOwner = -1, selection = false): number | undefined {
     const rect = this.renderer.domElement.getBoundingClientRect();
     let nearest = maxPx;
     let found: number | undefined;
@@ -2732,7 +2629,15 @@ export class GameScene {
       if (!g.visible) continue;
       const p = this.unitScreenPosition(id);
       if (!p || p.z < -1 || p.z > 1) continue;
-      const d = Math.hypot((p.x - nx) * rect.width / 2, (p.y - ny) * rect.height / 2);
+      let d = Math.hypot((p.x - nx) * rect.width / 2, (p.y - ny) * rect.height / 2);
+      if(selection) {
+        const foot=g.position.clone().project(this.camera);
+        const head=g.position.clone().add(new THREE.Vector3(0,3.2*g.scale.y,0)).project(this.camera);
+        const ax=(foot.x-nx)*rect.width/2,ay=(foot.y-ny)*rect.height/2;
+        const dx=(head.x-foot.x)*rect.width/2,dy=(head.y-foot.y)*rect.height/2;
+        const t=THREE.MathUtils.clamp(-(ax*dx+ay*dy)/Math.max(dx*dx+dy*dy,1e-6),0,1);
+        d=Math.hypot(ax+dx*t,ay+dy*t);
+      }
       if (preferOwner >= 0 && g.userData.owner === preferOwner) {
         if (d < ownNearest) { ownNearest = d; ownFound = id; }
       } else if (d < nearest) {
@@ -2903,7 +2808,7 @@ export class GameScene {
     return this.raycaster.intersectObjects([this.terrain, ...this.bridgeDecks], false)[0]?.point ?? null;
   }
 
-  pickAt(nx: number, ny: number): { unitId?: number; nodeId?: number; buildingId?: number } {
+  pickAt(nx: number, ny: number, selection = true): { unitId?: number; nodeId?: number; buildingId?: number } {
     this.camera.updateMatrixWorld(true);
     this.scene.updateMatrixWorld(true);
     this.raycaster.setFromCamera(new THREE.Vector2(nx, ny), this.camera);
@@ -2945,10 +2850,14 @@ export class GameScene {
     // uma copa, clicar na edificação não deve virar coleta de madeira.
     const groundPoint = hits.find((h) => h.object === this.terrain)?.point;
     const buildingId = hitPick?.buildingId
-      ?? this.buildingAtScreen(nx, ny, rect)
-      ?? (groundPoint ? this.buildingAtWorld(groundPoint.x, groundPoint.z) : undefined);
+      ?? (selection ? this.buildingAtScreen(nx, ny, rect) : undefined)
+      ?? (selection && groundPoint ? this.buildingAtWorld(groundPoint.x, groundPoint.z) : undefined);
 
     if (unitPick?.unitId !== undefined) return unitPick;
+    if(selection) {
+      const id=this.unitUnderCursor(nx,ny,20,this.localOwner,true);
+      if(id!==undefined)return {unitId:id};
+    }
     // Construção antes da proximidade de unidade: um Vampiro atacando o prédio
     // (que fica colado nele) não pode impedir a seleção da edificação, porque o
     // clique na construção não acerta a geometria do atacante.

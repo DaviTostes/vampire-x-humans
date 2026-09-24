@@ -3,11 +3,11 @@ import { test } from 'node:test';
 import { WORLD } from '../../shared/src/constants.js';
 import { getMapModel, normalizeOverlay, setMapOverlay, type GameMap } from '../../shared/src/mapgen.js';
 import { FLAT_GROUND_HEIGHT, clearedAreaIntersects } from '../../shared/src/map-clearance.js';
-import { carveTerrainStair, RELIEF_STEP } from '../../shared/src/terrain.js';
+import { carveTerrainStair, RELIEF_STEP, planReliefLower, planReliefRaise, terrainCellWalkable, clearRampObstacles, rampPaint } from '../../shared/src/terrain.js';
 import { Navigation } from '../../shared/src/navigation.js';
 import { createGameState } from '../../shared/src/state.js';
 
-test('compact stairs: four directions, brush sizes, traversal and atomic rejection', () => {
+test('grass ramps: fixed width, four directions, traversal and atomic rejection', () => {
   const n=WORLD.tiles, ts=WORLD.tileSize;
   const state=createGameState([],1,[]); state.buildings=[]; state.nodes=[];
   const makeMap=(dx:number,dz:number,rise=RELIEF_STEP):GameMap => {
@@ -17,14 +17,18 @@ test('compact stairs: four directions, brush sizes, traversal and atomic rejecti
   };
   for(const [dx,dz] of [[1,0],[-1,0],[0,1],[0,-1]] as const)for(const brush of [1,2,8]) {
     const map=makeMap(dx,dz), stair=carveTerrainStair(map,0,0,brush);
-    assert.ok(stair); assert.ok(stair.length<=4*ts && stair.width<=4*ts);
+    assert.ok(stair); assert.equal(stair.width,4*ts);
     const nav=new Navigation(state,map);
     for(const kind of ['worker','vampire'] as const)for(let distance=-2;distance<=stair.length+2;distance+=0.25)
       assert.ok(nav.canStand({kind},stair.x+stair.dx*distance,stair.z+stair.dz*distance),`${kind} ${dx},${dz} at ${distance}`);
   }
-  const tall=makeMap(1,0,0.8), before=tall.height.slice();
-  assert.equal(carveTerrainStair(tall,0,0,8),null); assert.deepEqual(tall.height,before);
-  const blocked=makeMap(1,0); blocked.obstacles.push({x:-4,z:0,width:2,depth:2,height:3});
+  const tall=makeMap(1,0,0.8);
+  const tallRamp=carveTerrainStair(tall,0,0,8)!; assert.ok(tallRamp.length>4*ts);
+  const tallNav=new Navigation(state,tall);
+  for(const kind of ['human','worker','vampire'] as const)for(let d=-2;d<=tallRamp.length+2;d+=0.5)
+    for(const side of [-2,0,2]) assert.ok(tallNav.canStand({kind},tallRamp.x+d, tallRamp.z+side));
+  const paint=rampPaint(null,[tallRamp]);assert.equal(paint[Math.floor((tallRamp.z+WORLD.half)/ts)*n+Math.floor((tallRamp.x+1+WORLD.half)/ts)],2);
+  const blocked=makeMap(1,0); blocked.water[Math.floor(n/2)*n+Math.floor(n/2)-2]=1;
   const blockedBefore=blocked.height.slice();
   assert.equal(carveTerrainStair(blocked,0,0,2),null); assert.deepEqual(blocked.height,blockedBefore);
 });
@@ -61,4 +65,27 @@ test('clearing survives serialization, removes resource/collision and preserves 
     const untouched=original.height.findIndex((_,i)=>!clearedAreaIntersects(cells,(i%WORLD.tiles)*WORLD.tileSize-WORLD.half,Math.floor(i/WORLD.tiles)*WORLD.tileSize-WORLD.half,8));
     assert.equal(map.height[untouched],original.height[untouched]);
   } finally { setMapOverlay(id,null); }
+});
+
+
+test('lowering a raised NxN stamp restores uniform walkable ground and repeated strokes lower again',()=>{
+  const map=getMapModel('flat').generateMap(),c=WORLD.half/WORLD.tileSize;
+  const occupied=new Set<number>(),base=map.height[c*map.tiles+c]!;
+  const raise=planReliefRaise(map,occupied,c,c,3)!;
+  for(const i of raise.vertices){map.height[i]=raise.height;occupied.add(i);}
+  const lower=planReliefLower(map,c,c,3)!;
+  assert.ok(lower);assert.equal(lower.vertices.length,16);assert.ok(Math.abs(lower.height-base)<1e-6);
+  for(const i of lower.vertices)map.height[i]=lower.height;
+  for(let z=lower.z;z<lower.z+3;z++)for(let x=lower.x;x<lower.x+3;x++)assert.ok(terrainCellWalkable(map,x,z));
+  assert.ok(planReliefLower(map,c,c,3)!.height<=lower.height);
+  assert.equal(planReliefLower(map,c,c,3,null,()=>false),null);
+});
+
+test('ramp opening clips wall collision to exactly four tiles',()=>{
+  const map=getMapModel('flat').generateMap();
+  map.obstacles=[{x:0,z:0,width:2,depth:20,height:3}];
+  clearRampObstacles(map,[{x:-8,z:0,dx:1,dz:0,length:8,width:8,low:0,high:0.25}]);
+  assert.equal(map.obstacles.length,2);
+  for(const o of map.obstacles)assert.ok(Math.abs(o.z)-o.depth/2>=4);
+  assert.equal(map.obstacles.reduce((sum,o)=>sum+o.depth,0),12);
 });

@@ -6,20 +6,15 @@ export function brushPolicy(kind: string) {
   return { surface, building, randomize: kind === 'tree' || kind === 'rock',
     scale: !surface && !building, rotation: !surface,
     rotationStep: building ? 90 : 1,
-    step: surface ? WORLD.tileSize : BUILD_TILE_SIZE / 2 };
+    step: WORLD.tileSize };
 }
 
 export function brushAnchor(kind: string, x: number, z: number) {
-  if (kind === 'tree') return treeFootprint(x,z);
+  const cell=treeFootprint(x,z);
+  x=cell.x;z=cell.z;
   if (kind.startsWith('building:')) {
     const building = kind.slice(9) as BuildingKind;
     x=snapBuildingCoordinate(x,building); z=snapBuildingCoordinate(z,building);
-  } else if (brushPolicy(kind).surface) {
-    x=(Math.floor((x+WORLD.half)/WORLD.tileSize)+0.5)*WORLD.tileSize-WORLD.half;
-    z=(Math.floor((z+WORLD.half)/WORLD.tileSize)+0.5)*WORLD.tileSize-WORLD.half;
-  } else {
-    const step=brushPolicy(kind).step;
-    x=Math.round(x/step)*step; z=Math.round(z/step)*step;
   }
   return {x,z,key:`${kind}:${x},${z}`};
 }
@@ -38,15 +33,17 @@ export function brushSegment(kind: string, a: {x:number;z:number}, b: {x:number;
 
 export interface PropFootprint { x:number; z:number; width:number; depth:number; rotation:number }
 
-/** Native modular spacing in the module's rotated axes, without stretching it to tree tiles. */
-export function moduleAnchor(x:number,z:number,footprint:PropFootprint) {
-  const c=Math.cos(footprint.rotation),s=Math.sin(footprint.rotation);
-  const ix=Math.round((x*c-z*s)/footprint.width),iz=Math.round((x*s+z*c)/footprint.depth);
-  const localX=ix*footprint.width,localZ=iz*footprint.depth;
-  return {x:localX*c+localZ*s-footprint.x,z:-localX*s+localZ*c-footprint.z,key:`module:${ix},${iz}`};
+/** Rasterize the real footprint onto whole cells of the global terrain grid. */
+export function footprintCells(p:PropFootprint):Array<{x:number;z:number}> {
+  const ts=WORLD.tileSize,half=WORLD.half,c=Math.abs(Math.cos(p.rotation)),s=Math.abs(Math.sin(p.rotation));
+  const hx=(p.width*c+p.depth*s)/2,hz=(p.width*s+p.depth*c)/2,result:Array<{x:number;z:number}>=[];
+  for(let z=Math.floor((p.z-hz+half+1e-7)/ts);z<=Math.floor((p.z+hz+half-1e-7)/ts);z++)
+    for(let x=Math.floor((p.x-hx+half+1e-7)/ts);x<=Math.floor((p.x+hx+half-1e-7)/ts);x++)
+      if(footprintsOverlap(p,{x:(x+0.5)*ts-half,z:(z+0.5)*ts-half,width:ts,depth:ts,rotation:0}))result.push({x,z});
+  return result;
 }
 
-/** Oriented rectangles: rotation changes rocks/cliffs, never the tree's fixed 2x2 area. */
+/** Oriented rectangles: rotation changes rocks/cliffs, never the tree's fixed 1x1 area. */
 export function footprintsOverlap(a:PropFootprint,b:PropFootprint):boolean {
   const axes=(r:number)=>[{x:Math.cos(r),z:-Math.sin(r)},{x:Math.sin(r),z:Math.cos(r)}];
   const aa=axes(a.rotation),bb=axes(b.rotation);

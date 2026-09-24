@@ -5,7 +5,7 @@
  * As mesmas configurações são usadas pelo servidor e pelo navegador.
  * Depois de editar, inicie uma nova sala. Em produção, gere um novo build.
  */
-export type BuildKind = 'bank' | 'taverna' | 'wall' | 'tower' | 'keep' | 'goldMine' | 'market';
+export type BuildKind = 'bank' | 'taverna' | 'wall' | 'tower' | 'goldMine' | 'market';
 export type WorkerRole = 'lumberjack' | 'miner' | 'repairer';
 export type VampireItemId = 'damage' | 'health' | 'attackSpeed';
 export type VampireSkillId = 'powerStrike';
@@ -223,7 +223,7 @@ export const MAP_PRESETS: Record<MapPresetId, MapPresetConfig> = {
 export const DEFAULT_MAP_ID: MapPresetId = 'labyrinth';
 
 export const GAME_CONFIG = {
-  construction: { tileSize: 1.5 },
+  construction: { get tileSize(): number { return GAME_CONFIG.map.tileSize; } },
   match: {
     // Um único dia curto (construção) e uma única noite longa (sobrevivência).
     // Os humanos vencem ao ver o amanhecer depois da noite.
@@ -279,22 +279,22 @@ export const GAME_CONFIG = {
   // Progressões (níveis, custos de upgrade e pré-requisitos) ficam em `spec`.
   buildings: {
     bank: {
-      hp: 500, size: 6,
+      hp: 500, get size(): number { return GAME_CONFIG.map.tileSize * 4; },
       cost: { wood: 0, gold: 0, time: 5 }, // nível 1 é gratuito (seção 4)
       // Ciclo de produção CONSTANTE (não muda com o nível). Cada ciclo entrega
       // `spec.bankLevels[nível].production` de ouro, que dobra a cada upgrade.
       cycleSeconds: 1,
     },
     taverna: {
-      hp: 500, size: 6,
+      hp: 500, get size(): number { return GAME_CONFIG.map.tileSize * 4; },
       cost: { wood: 0, gold: 128, time: 5 },
       recruit: { wood: 0, gold: 50, time: 2 },
     },
     wall: {
-      hp: 30, size: 3, cost: { wood: 0, gold: 4, time: 2 },
+      hp: 30, get size(): number { return GAME_CONFIG.map.tileSize * 2; }, cost: { wood: 0, gold: 4, time: 2 },
     },
     tower: {
-      hp: 300, size: 3,
+      hp: 300, get size(): number { return GAME_CONFIG.map.tileSize * 2; },
       cost: { wood: 0, gold: 4, time: 2 },
       // TODO(A CONFIRMAR): vida, alcance, Attack Speed, projétil e seleção de
       // alvo não definidos; valores atuais preservados.
@@ -304,7 +304,7 @@ export const GAME_CONFIG = {
     // TODO(A CONFIRMAR): a spec não define custos/vida/níveis do Mercado;
     // valores provisórios. Nível 2 é pré-requisito do Banco nível 6.
     market: {
-      hp: 500, size: 6,
+      hp: 500, get size(): number { return GAME_CONFIG.map.tileSize * 4; },
       cost: { wood: 0, gold: 64, time: 4 },
       maxLevel: 3,
       // Chave = nível ATUAL: 1 é o custo de ir do nível 1 para o 2.
@@ -313,9 +313,7 @@ export const GAME_CONFIG = {
     },
     // Mina de Ouro: construída pelo Minerador e fonte de ouro (seção 10).
     // TODO(A CONFIRMAR): vida e tempo de obra não definidos; valor provisório.
-    goldMine: { hp: 400, size: 6, cost: { wood: 8, gold: 0, time: 3 } },
-    // Estruturas especiais; keep não aparece no painel por padrão.
-    keep: { hp: 1200, size: 6, cost: { wood: 150, gold: 60, time: 12 } },
+    goldMine: { hp: 400, get size(): number { return GAME_CONFIG.map.tileSize * 4; }, cost: { wood: 8, gold: 0, time: 3 } },
 
     // ---- Base do Vampiro ----
     // Estrutura neutra e indestrutível. A cripta é a base e vende itens e skills.
@@ -350,7 +348,15 @@ export const GAME_CONFIG = {
     minZoom: 0.3, maxZoom: 0.6,
     wheelSensitivity: 0.0004,
     elevation: 0.75, depth: 0.62,
-    panSpeed: 60,
+    edgeSize: 25,
+    speedMin: 6, speedMax: 60,
+    middleDragSpeed: 1.5,
+    maxDeltaTime: 0.1,
+    boundsSearchStep: 10,
+    boundsIterations: 20,
+    viewportSafety: 1.02,
+    zoomFitFactor: 0.9,
+    wheelLinePixels: 16,
     smoothing: 6,
     heightSmoothing: 8,     // Suaviza a altura do alvo ao passar por platôs degraus
     fov: 50,
@@ -365,7 +371,7 @@ export const GAME_CONFIG = {
     repairRate: 20,
     woodGatherRange: 2.2, goldGatherRange: 3.5,
     formationSpacing: 1.8,
-    // Footprints use the construction grid, independently of terrain cells.
+    // Unit footprints use the global terrain grid.
     get unitRadius(): number { return GAME_CONFIG.construction.tileSize / 2; },
     get vampireUnitRadius(): number { return GAME_CONFIG.construction.tileSize; },
     get unitSeparation(): number { return GAME_CONFIG.construction.tileSize; },

@@ -1,22 +1,23 @@
-import { terrainHeight } from './terrain.js';
-import { BUILDING_SIZE, BUILD_TILE_SIZE, WORLD, INTERACTION, TICK_RATE, TERRAIN_MAX_SLOPE } from './constants.js';
+import { gridFootprintFree } from './occupancy-grid.js';
+import { unitFootprintSize, BUILDING_SIZE, BUILD_TILE_SIZE, WORLD, INTERACTION, TICK_RATE } from './constants.js';
 import type { GameMap } from './mapgen.js';
 import type { GameState, Unit } from './types.js';
 import { insidePlayableBoundary } from './map-boundary.js';
+import { rockIntersectsUnit, type RockCollider } from './rock-collision.js';
 
-export const UNIT_RADIUS = INTERACTION.unitRadius;
+export const UNIT_RADIUS = unitFootprintSize('worker')/2;
 
 /**
  * Raio de ocupação por tipo (FT5): humano 1×1 tile, vampiro 2×2 tiles.
  * Usado na colisão contínua e na validação de construção.
  */
 export function unitRadius(kind: string): number {
-  return kind === 'vampire' ? INTERACTION.vampireUnitRadius : UNIT_RADIUS;
+  return unitFootprintSize(kind)/2;
 }
 type Point = { x: number; z: number };
 type Goal = Point & { range: number; half: number };
-type Route = { key: string; order: Unit['order']; points: Point[]; retryAt: number; search?: Generator<void, Point[], void> };
-type Collider = Point & { halfX: number; halfZ: number; radius?: number; kind?: string };
+type Route = { key: string; order: Unit['order']; points: Point[]; retryAt: number; resolved?:Point; search?: Generator<void, Point[], void> };
+type Collider = Point & { halfX: number; halfZ: number; radius?: number; kind?: string; rock?:RockCollider };
 
 // Buffers reaproveitados entre buscas de uma mesma sala. Sem isso, cada A*
 // aloca e preenche ~630 KB (Float32 + Int32 de SIZE²), pressionando o GC.
@@ -46,7 +47,7 @@ const PATH_MS_PER_TICK = 12;
 // Teto de expansões de uma busca. Um destino inalcançável (fora do labirinto,
 // por exemplo) não pode drenar o orçamento do tick para sempre; ao estourar, a
 // unidade segue até a célula alcançável mais próxima do destino.
-const PATH_MAX_EXPANSIONS = 80000;
+const PATH_MAX_EXPANSIONS = SIZE * SIZE;
 
 /** Distância até a borda de um prédio, ou até um ponto. */
 export function distanceToTarget(p: Point, target: Point, half = 0): number {
@@ -72,7 +73,6 @@ export class Navigation {
   private separationBuckets = new Map<number, number[]>();
   private pathPool: PathBuffers[] = [];
   private pathGen = 0;
-  private readonly invTile = 1 / WORLD.tileSize;
 
   constructor(private state: GameState, private map: GameMap) {}
 
@@ -149,6 +149,10 @@ export class Navigation {
     for (const wall of [...this.map.obstacles, ...(this.map.treeObstacles ?? [])]) {
       add({ x: wall.x, z: wall.z, halfX: wall.width / 2, halfZ: wall.depth / 2 });
     }
+    for (const rock of this.map.rockObstacles ?? []) {
+      const c=Math.abs(Math.cos(rock.rotation)),s=Math.abs(Math.sin(rock.rotation));
+      add({x:rock.x,z:rock.z,halfX:(rock.width*c+rock.depth*s)/2,halfZ:(rock.width*s+rock.depth*c)/2,rock});
+    }
     for (const n of this.state.nodes) {
       if (n.amount <= 0) continue;
       const radius = n.kind === 'wood' ? INTERACTION.woodCollisionRadius : INTERACTION.goldCollisionRadius;
@@ -167,6 +171,7 @@ export class Navigation {
       const next = route.search.next();
       if (next.done) {
         route.points = next.value;
+        route.resolved=next.value.at(-1);
         route.search = undefined;
         route.retryAt = this.state.tick + Math.ceil(INTERACTION.pathRetrySeconds * TICK_RATE);
       } else {
@@ -176,56 +181,21 @@ export class Navigation {
     }
   }
 
-  /** Altura do terreno (unidades de mapa) por interpolação bilinear. */
-  private groundHeight(x: number, z: number): number {
-    return terrainHeight(this.map, x, z);
-  }
-
-  /** Só a falésia (inclinação acima do limite) bloqueia; o platô é andável. */
-  private tooSteep(x: number, z: number): boolean {
-    const step = WORLD.tileSize;
-    const h0 = this.groundHeight(x, z);
-    const slope = Math.max(
-      Math.abs(this.groundHeight(x + step, z) - h0),
-      Math.abs(this.groundHeight(x - step, z) - h0),
-      Math.abs(this.groundHeight(x, z + step) - h0),
-      Math.abs(this.groundHeight(x, z - step) - h0),
-    ) / step;
-    return slope > TERRAIN_MAX_SLOPE;
-  }
-
   canStand(u: Pick<Unit, 'kind'>, x: number, z: number): boolean {
     const r = unitRadius(u.kind);
     const half = WORLD.half;
     if (!insidePlayableBoundary(this.map,x,z,r)) return false;
-    // Água em 9 amostras, sem chamar função nem redividir por tile a cada uma.
-    const map = this.map, n = map.tiles, water = map.water, bridge = map.bridge, inv = this.invTile;
-    const bx = (x + half) * inv, bz = (z + half) * inv, ro = r * inv;
-    for (let i = -1; i <= 1; i++) {
-      const tx = Math.floor(bx + i * ro);
-      if (tx < 0 || tx >= n) return false;
-      for (let j = -1; j <= 1; j++) {
-        const tz = Math.floor(bz + j * ro);
-        if (tz < 0 || tz >= n) return false;
-        const idx = tz * n + tx;
-        if (water[idx] === 1 && bridge[idx] !== 1) return false;
-      }
-    }
-    if (this.tooSteep(x, z)) return false;
+    if (!gridFootprintFree(this.map,x,z,r)) return false;
     if (!this.indexed) this.rebuildColliders();
     const key = Math.floor((z + half) / BUCKET_SIZE) * BUCKET_COUNT + Math.floor((x + half) / BUCKET_SIZE);
     const bucket = this.colliders[key];
     if (bucket) for (const c of bucket) {
       // O Vampiro pode entrar na Cripta (sua base); os demais respeitam o bloco.
       if (c.kind === 'crypt' && u.kind === 'vampire') continue;
-      // FT5: o Muro é uma barreira de 1 tile. O Humano/trabalhador continua
-      // atravessando o portão do refúgio (senão ficaria preso ao murar a saída),
-      // mas todo o resto colide normalmente.
-      if (c.kind === 'wall' && u.kind === 'worker') continue;
       const dx = x - c.x, dz = z - c.z;
-      const hit = c.radius !== undefined
+      const hit = c.rock ? rockIntersectsUnit(c.rock,x,z,r) : c.radius !== undefined
         ? dx * dx + dz * dz < (c.radius + r) * (c.radius + r)
-        : Math.abs(dx) < c.halfX + r && Math.abs(dz) < c.halfZ + r;
+        : Math.abs(dx) < c.halfX + r - 1e-7 && Math.abs(dz) < c.halfZ + r - 1e-7;
       if (hit) return false;
     }
     return true;
@@ -245,20 +215,36 @@ export class Navigation {
   }
 
   /** Resolve spawn/construção sobre unidade antes de calcular caminhos. */
-  recover(u: Unit) {
-    if (this.canStand(u, u.x, u.z)) return;
-    for (let r = 0.5; r <= 24; r += 0.5) {
-      for (let a = 0; a < 32; a++) {
-        const x = u.x + Math.cos(a * Math.PI / 16) * r;
-        const z = u.z + Math.sin(a * Math.PI / 16) * r;
-        if (this.canStand(u, x, z)) {
-          u.x = x;
-          u.z = z;
-          this.cancelRoute(u.id);
-          return;
+  placeSpawn(u:Unit, placed:readonly Unit[]):boolean {
+    const free=(x:number,z:number)=>this.canStand(u,x,z) && placed.every(other=>
+      Math.hypot(x-other.x,z-other.z)>=unitRadius(u.kind)+unitRadius(other.kind));
+    if(free(u.x,u.z)) return true;
+    const sx=Math.round(u.x/PATH_STEP),sz=Math.round(u.z/PATH_STEP);
+    const max=Math.ceil((WORLD.half+Math.max(Math.abs(u.x),Math.abs(u.z)))/PATH_STEP)+1;
+    for(let ring=1;ring<=max;ring++) {
+      for(let offset=-ring;offset<=ring;offset++) {
+        const candidates=[[sx+offset,sz-ring],[sx+offset,sz+ring]];
+        if(Math.abs(offset)<ring) candidates.push([sx-ring,sz+offset],[sx+ring,sz+offset]);
+        for(const [gx,gz] of candidates) {
+          const x=gx!*PATH_STEP,z=gz!*PATH_STEP;
+          if(free(x,z)) { u.x=x;u.z=z;return true; }
         }
       }
     }
+    return false;
+  }
+
+  recover(u: Unit) {
+    if (this.canStand(u, u.x, u.z)) return;
+    // Sample the navigation lattice: angular probes almost never hit the
+    // exact centerline of a one-tile corridor.
+    let best:Point|undefined,distance=Infinity;
+    const sx=pathCell(u.x),sz=pathCell(u.z);
+    for(let dz=-24;dz<=24;dz++)for(let dx=-24;dx<=24;dx++) {
+      const x=pathWorld(sx+dx),z=pathWorld(sz+dz),d=Math.hypot(x-u.x,z-u.z);
+      if(d<distance && this.canStand(u,x,z)){best={x,z};distance=d;}
+    }
+    if(best){u.x=best.x;u.z=best.z;this.cancelRoute(u.id);}
   }
 
   private *findPath(u: Unit, goal: Goal): Generator<void, Point[], void> {
@@ -279,21 +265,44 @@ export class Navigation {
         }
         return grid![index] === 1;
       };
-      const sx = pathCell(u.x), sz = pathCell(u.z);
-      const start = sz * SIZE + sx;
-      // Um clique no meio de um lago/prédio não deve explorar o mapa inteiro.
-      let reachableGoal = false;
-      const reach = goal.half + goal.range;
-      for (let z = Math.max(0, Math.ceil((goal.z-reach+PATH_HALF)/PATH_STEP)); z < SIZE && pathWorld(z) <= goal.z+reach; z++) {
-        for (let x = Math.max(0, Math.ceil((goal.x-reach+PATH_HALF)/PATH_STEP)); x < SIZE && pathWorld(x) <= goal.x+reach; x++) {
-          const id = z * SIZE + x;
-          const px = pathWorld(x), pz = pathWorld(z);
-          const ddx = Math.max(0, Math.abs(px - goal.x) - goal.half);
-          const ddz = Math.max(0, Math.abs(pz - goal.z) - goal.half);
-          if (Math.sqrt(ddx * ddx + ddz * ddz) <= goal.range + 0.001 && walkable(id)) reachableGoal = true;
+      if(u.order?.t==='move' && !this.canStand(u,goal.x,goal.z)) {
+        goal={...goal,x:Math.max(-WORLD.half,Math.min(WORLD.half,goal.x)),z:Math.max(-WORLD.half,Math.min(WORLD.half,goal.z))};
+        const gx=Math.max(0,Math.min(SIZE-1,pathCell(goal.x))),gz=Math.max(0,Math.min(SIZE-1,pathCell(goal.z)));
+        let best:Point|undefined,bestDistance=Infinity;
+        for(let ring=0;ring<SIZE;ring++) {
+          const perimeter:Array<[number,number]>=[];
+          if(ring===0)perimeter.push([0,0]);
+          else for(let offset=-ring;offset<=ring;offset++) {
+            perimeter.push([offset,-ring],[offset,ring]);
+            if(Math.abs(offset)<ring)perimeter.push([-ring,offset],[ring,offset]);
+          }
+          for(const [dx,dz] of perimeter) {
+            const x=gx+dx,z=gz+dz;if(x<0||z<0||x>=SIZE||z>=SIZE)continue;
+            yield;
+            if(!walkable(z*SIZE+x))continue;
+            const px=pathWorld(x),pz=pathWorld(z),distance=Math.hypot(px-goal.x,pz-goal.z);
+            if(distance<bestDistance){best={x:px,z:pz};bestDistance=distance;}
+          }
+          if(best && ring*PATH_STEP>bestDistance+PATH_STEP)break;
+        }
+        // Keep the clicked position as the reference. Equally close cells on
+        // different sides of an obstacle are alternative goals, not a single
+        // arbitrary cell that may belong to a disconnected region.
+        if(best)goal={...goal,range:bestDistance+1e-6};
+      }
+      // Connect the actual position to a valid navigation sample, rather than
+      // seeding a blocked rounded coordinate beside a one-tile corridor.
+      let sx=pathCell(u.x),sz=pathCell(u.z),startDistance=Infinity;
+      for(let dz=-1;dz<=1;dz++)for(let dx=-1;dx<=1;dx++) {
+        const x=pathCell(u.x)+dx,z=pathCell(u.z)+dz;
+        if(x<0||z<0||x>=SIZE||z>=SIZE||!walkable(z*SIZE+x))continue;
+        const distance=Math.hypot(pathWorld(x)-u.x,pathWorld(z)-u.z);
+        if(distance<startDistance && this.clearSegmentXZ(u,u.x,u.z,pathWorld(x),pathWorld(z))) {
+          sx=x;sz=z;startDistance=distance;
         }
       }
-      if (!reachableGoal) return [];
+      if(!Number.isFinite(startDistance))return [];
+      const start=sz*SIZE+sx;
       const { costs, parent, closed, stamp, heap } = buffers;
       // Min-heap para manter a busca limitada mesmo em mapas com rios e muros longos.
       const push = (id: number, score: number) => {
@@ -334,7 +343,10 @@ export class Navigation {
         for (let id = endId; id !== start; id = parent[id]!) {
           path.push({ x: pathWorld(id % SIZE), z: pathWorld((id / SIZE) | 0) });
         }
+        path.push({x:pathWorld(sx),z:pathWorld(sz)});
         path.reverse();
+        const end=path.at(-1)!;
+        if(u.order?.t==='move' && this.canStand(u,goal.x,goal.z) && this.clearSegmentXZ(u,end.x,end.z,goal.x,goal.z))path.push({x:goal.x,z:goal.z});
         return path;
       };
       stamp[start] = gen;
@@ -349,18 +361,23 @@ export class Navigation {
       let expansions = 0;
       push(start, heuristic(start));
       while (heap.length) {
-        if (expansions++ >= PATH_MAX_EXPANSIONS) break;
         yield;
         const current = pop();
         if (stamp[current] === gen && closed[current]) continue;
+        if (expansions++ >= PATH_MAX_EXPANSIONS) break;
         stamp[current] = gen;
         closed[current] = 1;
         const h = heuristic(current);
         if (h < bestH) { bestH = h; bestId = current; }
         if (h <= 0.001 && walkable(current)) return buildPath(current);
         const cx = current % SIZE, cz = (current / SIZE) | 0;
-        const cwx = current === start ? u.x : pathWorld(cx);
-        const cwz = current === start ? u.z : pathWorld(cz);
+        const cwx = pathWorld(cx);
+        const cwz = pathWorld(cz);
+        // A fractional click is not a lattice node. Connect the final short
+        // segment explicitly instead of exhausting the entire map looking
+        // for an integer coordinate within 0.01 of that click.
+        if(u.order?.t==='move' && !goal.half && h<=PATH_STEP*Math.SQRT2 &&
+          this.canStand(u,goal.x,goal.z) && this.clearSegmentXZ(u,cwx,cwz,goal.x,goal.z))return buildPath(current);
         for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
           if (!dx && !dz) continue;
           const x = cx + dx, z = cz + dz;
@@ -372,7 +389,7 @@ export class Navigation {
           // única amostra que falta é o meio do passo — bem mais barato que o
           // clearSegment completo por vizinho. O movimento contínuo em `move()`
           // continua validando o trajeto real antes de andar.
-          if (!this.canStand(u,(cwx+pathWorld(x))/2,(cwz+pathWorld(z))/2)) continue;
+          if (!this.clearSegmentXZ(u,cwx,cwz,pathWorld(x),pathWorld(z))) continue;
           const cost = costs[current]! + (dx && dz ? Math.SQRT2 : 1)*PATH_STEP;
           if (stamp[next] === gen && cost >= costs[next]!) continue;
           stamp[next] = gen;
@@ -383,17 +400,21 @@ export class Navigation {
         }
       }
       // Sem caminho exato: aproxima o máximo possível do destino.
-      return bestId === start ? [] : buildPath(bestId);
+      return buildPath(bestId);
     } finally {
       this.releasePathBuffers(buffers);
     }
   }
 
   move(u: Unit, x: number, z: number, speed: number, dt: number, range = INTERACTION.moveArrivalRange, half = 0): boolean {
+    const movement=u.order?.t==='move';
+    if(movement)range=0.01;
     const goal = { x, z, range, half };
-    if (distanceToTarget(u, goal, half) <= range) { this.cancelRoute(u.id); return true; }
+    if (distanceToTarget(u, goal, half) <= range && (!movement || this.canStand(u,x,z))) { this.cancelRoute(u.id); return true; }
     const key = `${x.toFixed(2)},${z.toFixed(2)},${range},${half}`;
     let route = this.routes.get(u.id);
+    if(movement && route?.order===u.order && route.key===key && !route.search && route.resolved && !route.points.length &&
+      Math.hypot(u.x-route.resolved.x,u.z-route.resolved.z)<=0.01) {this.cancelRoute(u.id);return true;}
     // Perseguição: deixe a busca terminar e avance antes de recalcular para um
     // alvo móvel. Cancelar a cada posição recebida impediria o vampiro de andar.
     const pursuing = route && route.order === u.order && u.order?.t === 'attack' &&
@@ -411,6 +432,9 @@ export class Navigation {
         this.searches.push(route);
         this.advanceSearches();
       }
+    }
+    if(movement && !route.search && route.resolved && Math.hypot(u.x-route.resolved.x,u.z-route.resolved.z)<=0.01) {
+      this.cancelRoute(u.id);return true;
     }
     u.activity = route.points.length ? 'moving' : 'blocked';
     let budget = speed * dt;

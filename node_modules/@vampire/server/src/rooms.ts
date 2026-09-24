@@ -167,7 +167,12 @@ export function startRoom(room: Room, requesterId: string): boolean {
     playerIds.push(0);
     names[0] = 'Humano (treino)';
   }
-  room.session = createSession(names, room.seed, playerIds, room.daySeconds, room.nightSeconds, room.mapId);
+  try {
+    room.session = createSession(names, room.seed, playerIds, room.daySeconds, room.nightSeconds, room.mapId);
+  } catch(error) {
+    console.warn('[room] Não foi possível posicionar as unidades:',error);
+    return false;
+  }
   room.session.state.practice = solo;
   room.nodeAmounts.clear();
   for (const node of room.session.state.nodes) room.nodeAmounts.set(node.id, node.amount);

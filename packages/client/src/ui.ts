@@ -74,11 +74,10 @@ function unitDisplayName(u: { kind: string; hero?: boolean; workerRole?: WorkerR
   return t('Humano');
 }
 const BUILDING_NAME_SOURCES: Record<BuildingKind, string> = {
-  keep: 'Sede da vila', bank: 'Banco', taverna: 'Taverna', wall: 'Muro', tower: 'Torre',
+  bank: 'Banco', taverna: 'Taverna', wall: 'Muro', tower: 'Torre',
   goldMine: 'Mina de Ouro', market: 'Mercado', crypt: 'Cripta do Vampiro',
 };
 const BUILDING_HELP_SOURCES: Record<BuildingKind, string> = {
-  keep: 'Base principal da vila.',
   bank: 'Gera ouro a cada ciclo; o valor dobra a cada melhoria (1 → 2 → 4…).',
   taverna: 'Recruta Peões auxiliares para coletar e construir.',
   wall: 'Humanos atravessam; o vampiro precisa destruí-lo.', tower: 'Ataca o vampiro automaticamente quando ele entra no alcance.',
@@ -1126,6 +1125,7 @@ export class Hud {
     if (this.net.lobby?.code) rememberRejoin(this.net.lobby.code);
     const div = document.createElement('div');
     div.className = 'vxh-result';
+    div.dataset.blockMapControls='true';
     div.innerHTML = `
       <div style="color: ${winner === 'vampire' ? '#ff5a5a' : '#6ad66a'}">
         ${won ? t('VITÓRIA') : t('DERROTA')}
